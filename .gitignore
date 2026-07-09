@@ -9,6 +9,9 @@
 # CLI spec (make gen-docs / the release pipeline); never committed.
 /packaging/
 
+# Local scratchpad for research/design notes — never committed.
+/scratchpad/
+
 # Env & secrets (repo-wide; never commit real values)
 .env
 .env.*
