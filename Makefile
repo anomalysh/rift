@@ -1,4 +1,9 @@
-# rift operator Makefile. Run `make` (or `make help`) for the target list.
+# rift operator Makefile — deploy/provision/backup/release workflows.
+#
+# Dev and test workflows live in mise, not here: `mise run ci` (lint, type-check,
+# build, test, scan), `mise run e2e` (+ e2e:recovery / e2e:provision / e2e:setup /
+# e2e:hostcheck), and `mise //projects/<p>:<task>` for a single project. Run
+# `make` (or `make help`) for the operator target list.
 SHELL := bash
 .DEFAULT_GOAL := help
 
@@ -10,23 +15,15 @@ COMPOSE_PROD := docker compose -f deploy/docker-compose.yml -f deploy/docker-com
 # is a single line so it can prefix a recipe command; a missing .env is fine.
 LOAD_ENV := set -a; [ -f .env ] && . ./.env; set +a;
 
-.PHONY: help build-server build-cli test e2e lint up down logs migrate deploy provision-key mint-token build-caddy release release-docker gen-docs \
-	setup ship verify check-dns provision harden hostcheck backup restore e2e-recovery e2e-hostcheck e2e-provision e2e-setup publish-images docs
+.PHONY: help build-cli build-caddy release release-docker gen-docs lint up down logs migrate \
+	deploy provision-key mint-token setup ship verify check-dns provision harden backup restore publish-images
 
 help: ## Show this help
-	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z0-9_-]+:.*##/{printf "  \033[36m%-14s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z0-9_-]+:.*##/{printf "  \033[36m%-15s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
 
-build-server: ## Build the riftd server binary (projects/server/riftd)
-	cd projects/server && CGO_ENABLED=0 go build -o riftd ./cmd/riftd
-
+# --- build & release ---------------------------------------------------------
 build-cli: ## Build the CLI single-binary image (deploy/Dockerfile.cli)
 	docker build -f deploy/Dockerfile.cli -t rift-cli:local .
-
-test: ## Run server tests
-	cd projects/server && go test ./...
-
-e2e: ## Full black-box e2e in Docker: real Caddy, real TLS, real CLI (ARGS=--mode internal)
-	bash tools/e2e.sh $(ARGS)
 
 build-caddy: ## Build Caddy with the DNS-01 plugins from .env (ARGS=--validate --push)
 	bash tools/build-caddy.sh $(ARGS)
@@ -48,6 +45,7 @@ lint: ## Vet Go, syntax-check shell scripts, validate compose
 	@command -v shellcheck >/dev/null 2>&1 && shellcheck tools/*.sh tools/lib/*.sh || echo "shellcheck not installed; skipped"
 	$(COMPOSE) config -q
 
+# --- local dev stack ---------------------------------------------------------
 up: ## Start the local dev stack (add `--profile redis` for the redis backend)
 	$(COMPOSE) up -d --build
 
@@ -61,6 +59,7 @@ migrate: ## Apply DB migrations (riftd runs them on start; ensures pg is up, rec
 	$(COMPOSE) up -d postgres
 	$(COMPOSE) up -d --force-recreate riftd
 
+# --- deploy ------------------------------------------------------------------
 deploy: ## Build & deploy the stack to the VPS (ARGS=--dry-run to preview)
 	@$(LOAD_ENV) bash tools/remote-deploy.sh $(ARGS)
 
@@ -90,9 +89,6 @@ provision: ## Create a VPS and wait for SSH (ARGS=--dry-run)
 harden: ## Host-harden a rift VPS in place (ARGS=--check for a CI gate)
 	bash tools/harden.sh $(ARGS)
 
-hostcheck: ## Prove tools/harden.sh in a throwaway Debian container (ARGS=--keep)
-	bash tools/e2e-hostcheck.sh $(ARGS)
-
 # --- backup & recovery -------------------------------------------------------
 backup: ## Back up Postgres + caddy_data (ARGS=--retain 14)
 	bash tools/backup.sh $(ARGS)
@@ -103,17 +99,3 @@ restore: ## Restore a backup: make restore FROM=/opt/rift/backups/rift-<ts> (ARG
 # --- container images --------------------------------------------------------
 publish-images: ## Build (ARGS=--push to publish) the ghcr container images
 	bash tools/publish-images.sh $(ARGS)
-
-# --- docs --------------------------------------------------------------------
-docs: ## Build the documentation site (projects/manual/)
-	cd projects/manual && bun install && bun run build
-
-# --- isolated test harnesses (Docker, hermetic) -----------------------------
-e2e-recovery: ## Prove backup/restore in a throwaway Docker stack (ARGS=--keep)
-	bash tools/e2e-recovery.sh $(ARGS)
-
-e2e-provision: ## Provisioning e2e: mock cloud API + sshd, no real cloud (ARGS=--keep)
-	bash tools/e2e-provision.sh $(ARGS)
-
-e2e-setup: ## Test the setup wizard against the real config validator
-	bash tools/e2e-setup.sh $(ARGS)

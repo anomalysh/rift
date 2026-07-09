@@ -103,9 +103,9 @@ HTTPS — validating the certificate chain with no `-k` anywhere. It is hermetic
 nothing reaches the internet.
 
 ```sh
-make e2e                       # default: the internal and self TLS modes
-make e2e ARGS="--mode internal"
-make e2e ARGS=--keep           # leave the stack up afterwards to poke at it
+mise run e2e                   # default: the internal and self TLS modes
+mise run e2e -- --mode internal
+mise run e2e -- --keep         # leave the stack up afterwards to poke at it
 ```
 
 It uses `curl --resolve`, so nothing is written to `/etc/hosts` and it needs no

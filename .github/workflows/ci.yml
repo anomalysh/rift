@@ -127,7 +127,7 @@ jobs:
 
       - name: Run e2e
         # --verbose streams container logs on failure into the captured log.
-        run: make e2e ARGS=--verbose 2>&1 | tee e2e.log
+        run: mise run e2e -- --verbose 2>&1 | tee e2e.log
 
       - name: Upload harness logs
         if: failure()

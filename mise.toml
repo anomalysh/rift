@@ -49,10 +49,6 @@ depends = [
 description = "Regenerate the man page and shell completions"
 run = "make gen-docs"
 
-[tasks.e2e]
-description = "Full black-box e2e in Docker"
-run = "make e2e"
-
 # .git/hooks is not tracked, so each clone installs the hook once with
 # `mise run install-hooks` (or `mise generate git-pre-commit --write`).
 [tasks.install-hooks]

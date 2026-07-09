@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Full black-box e2e in Docker: real Caddy, real TLS, real CLI (ARGS via mise run e2e -- ...)"
+set -euo pipefail
+exec bash "${MISE_PROJECT_ROOT:?}/tools/e2e.sh" "$@"

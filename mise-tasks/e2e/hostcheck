@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Prove tools/harden.sh in a throwaway Debian container (-- --keep)"
+set -euo pipefail
+exec bash "${MISE_PROJECT_ROOT:?}/tools/e2e-hostcheck.sh" "$@"

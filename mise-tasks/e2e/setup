@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Test the setup wizard against the real config validator"
+set -euo pipefail
+exec bash "${MISE_PROJECT_ROOT:?}/tools/e2e-setup.sh" "$@"

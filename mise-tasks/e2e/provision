@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Provisioning e2e: mock cloud API + sshd, no real cloud (-- --keep)"
+set -euo pipefail
+exec bash "${MISE_PROJECT_ROOT:?}/tools/e2e-provision.sh" "$@"

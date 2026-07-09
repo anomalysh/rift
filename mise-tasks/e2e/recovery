@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Prove backup/restore in a throwaway Docker stack (-- --keep)"
+set -euo pipefail
+exec bash "${MISE_PROJECT_ROOT:?}/tools/e2e-recovery.sh" "$@"
