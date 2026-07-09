@@ -28,6 +28,7 @@ type Config struct {
 	Admin    Admin
 	Postgres Postgres
 	Redis    Redis
+	Cluster  Cluster
 	Tunnel   Tunnel
 
 	// SubdomainRules is derived from Tunnel settings and validated at boot.
@@ -90,6 +91,12 @@ type Redis struct {
 	Password string
 	DB       int
 	Prefix   string
+}
+
+// Cluster covers node-to-node concerns. Only meaningful when Redis is enabled.
+type Cluster struct {
+	// PeerSecret authenticates the internal proxy route between nodes.
+	PeerSecret string
 }
 
 // Tunnel holds the behavioural knobs of the tunnelling layer.
@@ -157,6 +164,9 @@ func Load() (*Config, error) {
 			Password: l.str(KeyRedisPass, ""),
 			DB:       l.integer(KeyRedisDB, DefaultRedisDB),
 			Prefix:   l.str(KeyRedisPrefix, DefaultRedisPrefix),
+		},
+		Cluster: Cluster{
+			PeerSecret: l.str(KeyPeerSecret, ""),
 		},
 		Tunnel: Tunnel{
 			BaseDomain:   l.requiredStr(KeyBaseDomain),
@@ -305,6 +315,13 @@ func (c *Config) validate(l *loader) {
 		}
 		if c.Redis.Addr == "" {
 			l.fail(KeyRedisAddr, fmt.Errorf("is required when %s is true", KeyRedisEnabled))
+		}
+		// Without a shared secret the internal proxy route would let anyone
+		// who can reach the ingress port impersonate a peer node and reach
+		// any tunnel by name.
+		const minPeerSecretLen = 32
+		if len(c.Cluster.PeerSecret) < minPeerSecretLen {
+			l.fail(KeyPeerSecret, fmt.Errorf("is required when %s is true and must be at least %d characters", KeyRedisEnabled, minPeerSecretLen))
 		}
 	}
 

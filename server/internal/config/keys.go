@@ -46,6 +46,11 @@ const (
 	KeyRedisDB      = EnvPrefix + "REDIS_DB"
 	KeyRedisPrefix  = EnvPrefix + "REDIS_PREFIX"
 
+	// KeyPeerSecret authenticates node-to-node request forwarding. Required
+	// when Redis is enabled, because the internal proxy route would otherwise
+	// let anyone who can reach the ingress port impersonate a peer node.
+	KeyPeerSecret = EnvPrefix + "PEER_SECRET"
+
 	// Tunnel behaviour.
 	KeyBaseDomain          = EnvPrefix + "BASE_DOMAIN"
 	KeyPublicScheme        = EnvPrefix + "PUBLIC_SCHEME"
