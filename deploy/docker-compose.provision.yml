@@ -1,0 +1,30 @@
+# Provisioning end-to-end stack. Driven by tools/e2e-provision.sh -- do NOT
+# `docker compose up` this by hand; the script knows which ports to poll and how
+# to drive the mock's control endpoints.
+#
+# Nothing here touches a real cloud. The `mock` service stands in for
+# api.linode.com; the `sshd` service exists only so the provisioner's "wait for
+# SSH" loop has a real TCP:22 to connect to. Own project name and network. Host
+# ports bind to 127.0.0.1 only.
+name: rift-provision-e2e
+
+services:
+  mock:
+    build:
+      context: ../tools/provision-mock
+      dockerfile: Dockerfile
+    environment:
+      RIFT_MOCK_PORT: "8080"
+      RIFT_MOCK_PROVISIONING_POLLS: "${RIFT_MOCK_PROVISIONING_POLLS:-2}"
+      RIFT_MOCK_IPV4: "${RIFT_MOCK_IPV4:-127.0.0.1}"
+      RIFT_MOCK_IPV6: "${RIFT_MOCK_IPV6:-2001:db8::1/128}"
+      RIFT_MOCK_START_ID: "${RIFT_MOCK_START_ID:-1000}"
+    ports:
+      - "127.0.0.1:${RIFT_PROVISION_MOCK_PORT:-18091}:8080"
+
+  sshd:
+    build:
+      context: ../tools/provision-mock
+      dockerfile: Dockerfile.sshd
+    ports:
+      - "127.0.0.1:${RIFT_PROVISION_SSHD_PORT:-18092}:22"

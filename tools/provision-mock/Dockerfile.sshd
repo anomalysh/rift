@@ -1,0 +1,10 @@
+# A throwaway SSH endpoint whose ONLY job is to accept a TCP connection on port
+# 22, so tools/provision.sh has something real to poll in its "wait for SSH"
+# loop. No account or key is usable and none needs to be: the provisioner only
+# checks that the port answers. Driven by tools/e2e-provision.sh; not for manual
+# use.
+FROM alpine:3.20
+RUN apk add --no-cache openssh-server \
+	&& ssh-keygen -A
+EXPOSE 22
+CMD ["/usr/sbin/sshd", "-D", "-e"]
