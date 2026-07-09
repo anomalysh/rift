@@ -8,6 +8,19 @@ import (
 	"strings"
 )
 
+// Subdomain generation strategies.
+const (
+	// GeneratorWords produces adjective-noun-number, e.g. "swift-otter-42".
+	GeneratorWords = "words"
+	// GeneratorRandom produces a random string over GeneratedAlphabet.
+	GeneratorRandom = "random"
+)
+
+// generatedNumberCeiling bounds the numeric suffix of a word-based subdomain.
+// Two to four digits keeps the label readable while adding enough spread that
+// a first-try collision on adjective+noun is rare.
+const generatedNumberCeiling = 10000
+
 // SubdomainRules constrain which labels an agent may claim. The concrete
 // values come from configuration; core only enforces them.
 type SubdomainRules struct {
@@ -17,15 +30,22 @@ type SubdomainRules struct {
 	Pattern *regexp.Regexp
 	// Blocked is the set of labels no token may claim (lowercased).
 	Blocked map[string]struct{}
-	// GeneratedLength is the label length used by GenerateSubdomain.
+	// Generator selects the shape of a generated subdomain.
+	Generator string
+	// GeneratedLength is the label length used by the random generator.
 	GeneratedLength int
-	// GeneratedAlphabet is the character set used by GenerateSubdomain.
+	// GeneratedAlphabet is the character set used by the random generator.
 	GeneratedAlphabet string
 }
 
 // NewSubdomainRules validates the rule set itself, so a misconfigured server
 // fails at boot rather than at the first handshake.
-func NewSubdomainRules(minLen, maxLen int, pattern string, blocked []string, genLen int, genAlphabet string) (*SubdomainRules, error) {
+func NewSubdomainRules(minLen, maxLen int, pattern string, blocked []string, generator string, genLen int, genAlphabet string) (*SubdomainRules, error) {
+	switch generator {
+	case GeneratorWords, GeneratorRandom:
+	default:
+		return nil, fmt.Errorf("core: subdomain generator must be %q or %q, got %q", GeneratorWords, GeneratorRandom, generator)
+	}
 	if minLen < 1 {
 		return nil, fmt.Errorf("core: subdomain min length must be >= 1, got %d", minLen)
 	}
@@ -61,15 +81,20 @@ func NewSubdomainRules(minLen, maxLen int, pattern string, blocked []string, gen
 		MaxLength:         maxLen,
 		Pattern:           re,
 		Blocked:           set,
+		Generator:         generator,
 		GeneratedLength:   genLen,
 		GeneratedAlphabet: genAlphabet,
 	}
 
 	// A generated subdomain must itself be claimable, otherwise the server
-	// would hand out labels it then rejects.
-	probe := strings.Repeat(string(genAlphabet[0]), genLen)
-	if !re.MatchString(probe) {
-		return nil, fmt.Errorf("core: generated subdomain %q does not satisfy pattern %q", probe, pattern)
+	// would hand out labels it then rejects. Probe whichever strategy is in
+	// use against the real validator.
+	probe, err := rules.GenerateSubdomain()
+	if err != nil {
+		return nil, fmt.Errorf("core: generator produced no valid subdomain: %w", err)
+	}
+	if err := rules.Validate(probe); err != nil {
+		return nil, fmt.Errorf("core: generated subdomain %q does not satisfy the rules: %w", probe, err)
 	}
 	return rules, nil
 }
@@ -100,9 +125,36 @@ func (r *SubdomainRules) Validate(s string) error {
 	return nil
 }
 
-// GenerateSubdomain returns a cryptographically random label. The caller
-// retries on collision; the store's unique index is the real arbiter.
+// generateAttempts bounds retries so a rule set the generator cannot satisfy
+// (a word pair too long for MaxLength, say) fails loudly instead of spinning.
+const generateAttempts = 20
+
+// GenerateSubdomain returns a fresh label using the configured strategy. The
+// caller still retries on a store collision; the store's unique index is the
+// real arbiter. Generation only guarantees the label satisfies the rules.
 func (r *SubdomainRules) GenerateSubdomain() (string, error) {
+	for attempt := 0; attempt < generateAttempts; attempt++ {
+		var (
+			s   string
+			err error
+		)
+		if r.Generator == GeneratorWords {
+			s, err = r.generateWords()
+		} else {
+			s, err = r.generateRandom()
+		}
+		if err != nil {
+			return "", err
+		}
+		if len(s) >= r.MinLength && len(s) <= r.MaxLength && r.Pattern.MatchString(s) && !r.IsBlocked(s) {
+			return s, nil
+		}
+	}
+	return "", fmt.Errorf("core: could not generate a valid subdomain in %d attempts (generator %q vs length [%d,%d])",
+		generateAttempts, r.Generator, r.MinLength, r.MaxLength)
+}
+
+func (r *SubdomainRules) generateRandom() (string, error) {
 	n := big.NewInt(int64(len(r.GeneratedAlphabet)))
 	out := make([]byte, r.GeneratedLength)
 	for i := range out {
@@ -112,12 +164,31 @@ func (r *SubdomainRules) GenerateSubdomain() (string, error) {
 		}
 		out[i] = r.GeneratedAlphabet[idx.Int64()]
 	}
-	s := string(out)
-	// Extremely unlikely, but never hand back a blocked label.
-	if r.IsBlocked(s) {
-		return r.GenerateSubdomain()
+	return string(out), nil
+}
+
+func (r *SubdomainRules) generateWords() (string, error) {
+	adj, err := pick(adjectives)
+	if err != nil {
+		return "", err
 	}
-	return s, nil
+	noun, err := pick(nouns)
+	if err != nil {
+		return "", err
+	}
+	num, err := rand.Int(rand.Reader, big.NewInt(generatedNumberCeiling))
+	if err != nil {
+		return "", fmt.Errorf("core: generate subdomain number: %w", err)
+	}
+	return fmt.Sprintf("%s-%s-%d", adj, noun, num.Int64()), nil
+}
+
+func pick(words []string) (string, error) {
+	idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(words))))
+	if err != nil {
+		return "", fmt.Errorf("core: pick word: %w", err)
+	}
+	return words[idx.Int64()], nil
 }
 
 // Hostname joins a label with the configured base domain.

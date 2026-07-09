@@ -161,7 +161,7 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
-	rules, err := core.NewSubdomainRules(3, 20, `^[a-z0-9-]+$`, []string{"admin", "www"}, 8, "abcdefghijklmnopqrstuvwxyz")
+	rules, err := core.NewSubdomainRules(3, 20, `^[a-z0-9-]+$`, []string{"admin", "www"}, core.GeneratorRandom, 8, "abcdefghijklmnopqrstuvwxyz")
 	if err != nil {
 		t.Fatalf("build subdomain rules: %v", err)
 	}

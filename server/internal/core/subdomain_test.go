@@ -2,13 +2,14 @@ package core
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
 func testRules(t *testing.T) *SubdomainRules {
 	t.Helper()
 	r, err := NewSubdomainRules(3, 63, `^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`,
-		[]string{"www", "API"}, 10, "abcdefghjkmnpqrstuvwxyz23456789")
+		[]string{"www", "API"}, GeneratorRandom, 10, "abcdefghjkmnpqrstuvwxyz23456789")
 	if err != nil {
 		t.Fatalf("NewSubdomainRules: %v", err)
 	}
@@ -46,7 +47,7 @@ func TestSubdomainValidate(t *testing.T) {
 }
 
 func TestSubdomainMaxLengthGuardsDNSLabelLimit(t *testing.T) {
-	if _, err := NewSubdomainRules(3, 64, `^[a-z]+$`, nil, 10, "abc"); err == nil {
+	if _, err := NewSubdomainRules(3, 64, `^[a-z]+$`, nil, GeneratorRandom, 10, "abc"); err == nil {
 		t.Fatal("expected 64-octet max length to be rejected as an illegal DNS label")
 	}
 }
@@ -54,7 +55,7 @@ func TestSubdomainMaxLengthGuardsDNSLabelLimit(t *testing.T) {
 // A rule set whose generated labels fail its own validator would hand clients
 // subdomains the server then refuses.
 func TestNewSubdomainRulesRejectsUngeneratableAlphabet(t *testing.T) {
-	if _, err := NewSubdomainRules(3, 20, `^[a-z]+$`, nil, 10, "0123456789"); err == nil {
+	if _, err := NewSubdomainRules(3, 20, `^[a-z]+$`, nil, GeneratorRandom, 10, "0123456789"); err == nil {
 		t.Fatal("expected digit-only alphabet to be rejected against a letters-only pattern")
 	}
 }
@@ -107,3 +108,47 @@ func TestHostname(t *testing.T) {
 		t.Fatalf("Hostname = %q", got)
 	}
 }
+
+func TestGenerateWordsSubdomain(t *testing.T) {
+	r, err := NewSubdomainRules(3, 63, `^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`,
+		DefaultBlockNothing, GeneratorWords, 10, "abcdefghjkmnpqrstuvwxyz23456789")
+	if err != nil {
+		t.Fatalf("NewSubdomainRules: %v", err)
+	}
+
+	seen := make(map[string]struct{})
+	for i := 0; i < 200; i++ {
+		s, err := r.GenerateSubdomain()
+		if err != nil {
+			t.Fatalf("GenerateSubdomain: %v", err)
+		}
+		if err := r.Validate(s); err != nil {
+			t.Fatalf("generated %q fails the rules: %v", s, err)
+		}
+		// adjective-noun-number
+		parts := strings.Split(s, "-")
+		if len(parts) != 3 {
+			t.Fatalf("expected adjective-noun-number, got %q", s)
+		}
+		seen[s] = struct{}{}
+	}
+	if len(seen) < 180 {
+		t.Fatalf("only %d/200 unique word subdomains; entropy looks weak", len(seen))
+	}
+}
+
+// A word pair can exceed a small MaxLength, and the rule set must refuse at
+// construction rather than hand out labels it cannot generate.
+func TestWordsGeneratorRejectsTooShortMaxLength(t *testing.T) {
+	if _, err := NewSubdomainRules(3, 8, `^[a-z0-9-]+$`, nil, GeneratorWords, 6, "abcdef"); err == nil {
+		t.Fatal("expected construction to fail when MaxLength cannot fit a word subdomain")
+	}
+}
+
+func TestRejectsUnknownGenerator(t *testing.T) {
+	if _, err := NewSubdomainRules(3, 63, `^[a-z0-9-]+$`, nil, "haiku", 10, "abcdef"); err == nil {
+		t.Fatal("expected an unknown generator to be rejected")
+	}
+}
+
+var DefaultBlockNothing []string

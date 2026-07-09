@@ -74,7 +74,7 @@ func newStack(t *testing.T, tune func(*config.Config)) *stack {
 	t.Helper()
 
 	rules, err := core.NewSubdomainRules(3, 63, `^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`,
-		config.DefaultSubdomainBlocklist, 10, config.DefaultSubdomainGenAlphabet)
+		config.DefaultSubdomainBlocklist, config.DefaultSubdomainGenerator, 10, config.DefaultSubdomainGenAlphabet)
 	if err != nil {
 		t.Fatalf("subdomain rules: %v", err)
 	}

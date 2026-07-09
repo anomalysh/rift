@@ -53,7 +53,12 @@ const (
 	DefaultSubdomainMinLength = 3
 	DefaultSubdomainMaxLength = 63
 	// Lowercase alphanumeric with internal hyphens; no leading/trailing hyphen.
-	DefaultSubdomainPattern   = `^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`
+	DefaultSubdomainPattern = `^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`
+	// DefaultSubdomainGenerator is "words": friendly adjective-noun-number
+	// labels (swift-otter-42), like Heroku and Docker. "random" gives the
+	// compact alphanumeric form below. The literal mirrors core.GeneratorWords,
+	// which this package must not import (defaults hold no cross-package refs).
+	DefaultSubdomainGenerator = "words"
 	DefaultSubdomainGenLength = 10
 	// Ambiguous glyphs (0/o, 1/l/i) are omitted so a subdomain can be read
 	// aloud or copied off a terminal without transcription errors.

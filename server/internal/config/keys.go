@@ -85,6 +85,7 @@ const (
 	KeySubdomainMaxLength   = EnvPrefix + "SUBDOMAIN_MAX_LENGTH"
 	KeySubdomainPattern     = EnvPrefix + "SUBDOMAIN_PATTERN"
 	KeySubdomainBlocklist   = EnvPrefix + "SUBDOMAIN_BLOCKLIST"
+	KeySubdomainGenerator   = EnvPrefix + "SUBDOMAIN_GENERATOR"
 	KeySubdomainGenLength   = EnvPrefix + "SUBDOMAIN_GENERATED_LENGTH"
 	KeySubdomainGenAlphabet = EnvPrefix + "SUBDOMAIN_GENERATED_ALPHABET"
 )
