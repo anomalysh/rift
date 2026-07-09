@@ -16,6 +16,78 @@ bun run build        # compile a standalone binary to ./dist/rift
 `bun run build` produces a single self-contained executable (`dist/rift`) with
 an embedded source map. You can also run from source with `bun run src/index.ts`.
 
+## Install a release build
+
+Prebuilt binaries are published for Linux (glibc and musl, x64/arm64), macOS
+(x64/arm64), and Windows (x64) on the GitHub releases page.
+
+### `curl | sh` (recommended)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/anomaly-sh/rift/main/tools/install.sh | sh
+```
+
+The installer detects your OS, architecture, and (on Linux) glibc vs musl,
+downloads the matching binary from the latest release, **verifies its SHA256
+against the published `SHA256SUMS` and refuses to install on any mismatch**, then
+installs to `/usr/local/bin` (or `~/.local/bin` if that is not writable). It
+never runs `sudo` for you; if a chosen directory needs elevated rights it prints
+the exact command to run.
+
+Override its behaviour with environment variables:
+
+| Variable                | Default                | Purpose                          |
+| ----------------------- | ---------------------- | -------------------------------- |
+| `RIFT_INSTALL_VERSION`  | latest release         | install a specific version       |
+| `RIFT_INSTALL_DIR`      | `/usr/local/bin` etc.  | install into a specific directory|
+| `RIFT_INSTALL_REPO`     | `anomaly-sh/rift`      | source GitHub `owner/repo`       |
+| `RIFT_INSTALL_BASE_URL` | GitHub releases URL    | mirror / custom download base    |
+
+Run `sh install.sh --help`, or add `--version <v>`, `--dir <path>`, or
+`--dry-run`.
+
+### Manual download with checksum verification
+
+Every release ships a `SHA256SUMS` file. Always verify before running the binary.
+
+```sh
+VERSION=0.1.0
+BASE="https://github.com/anomaly-sh/rift/releases/download/v${VERSION}"
+# Pick the artifact for your platform, e.g. rift-linux-x64, rift-linux-x64-musl,
+# rift-darwin-arm64, rift-windows-x64.exe
+ARTIFACT=rift-linux-x64
+
+curl -fsSLO "${BASE}/${ARTIFACT}"
+curl -fsSLO "${BASE}/SHA256SUMS"
+
+# GNU coreutils: verify only the file you downloaded.
+sha256sum --ignore-missing -c SHA256SUMS
+# macOS: compare manually —
+#   grep " ${ARTIFACT}\$" SHA256SUMS | awk '{print $1}'
+#   shasum -a 256 "${ARTIFACT}" | awk '{print $1}'
+
+chmod +x "${ARTIFACT}"
+sudo install -m 0755 "${ARTIFACT}" /usr/local/bin/rift
+```
+
+### Man page and shell completions
+
+The `.tar.gz` / `.zip` archives bundle the binary, the man page, and shell
+completions:
+
+```sh
+tar -xzf rift-linux-x64.tar.gz
+cd rift-linux-x64
+
+sudo install -m 0755 rift    /usr/local/bin/rift
+sudo install -m 0644 rift.1  /usr/local/share/man/man1/rift.1   # man rift
+
+# Completions (adjust paths to your shell's convention):
+install -Dm 0644 completions/rift.bash ~/.local/share/bash-completion/completions/rift
+install -Dm 0644 completions/rift.fish ~/.config/fish/completions/rift.fish
+install -Dm 0644 completions/rift.zsh  ~/.local/share/zsh/site-functions/_rift  # ensure on $fpath
+```
+
 ## Usage
 
 ```

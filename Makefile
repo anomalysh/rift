@@ -10,7 +10,7 @@ COMPOSE_PROD := docker compose -f deploy/docker-compose.yml -f deploy/docker-com
 # is a single line so it can prefix a recipe command; a missing .env is fine.
 LOAD_ENV := set -a; [ -f .env ] && . ./.env; set +a;
 
-.PHONY: help build-server build-cli test lint up down logs migrate deploy provision-key mint-token
+.PHONY: help build-server build-cli test e2e lint up down logs migrate deploy provision-key mint-token build-caddy release
 
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z0-9_-]+:.*##/{printf "  \033[36m%-14s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
@@ -23,6 +23,15 @@ build-cli: ## Build the CLI single-binary image (deploy/Dockerfile.cli)
 
 test: ## Run server tests
 	cd server && go test ./...
+
+e2e: ## Full black-box e2e in Docker: real Caddy, real TLS, real CLI (ARGS=--mode internal)
+	bash tools/e2e.sh $(ARGS)
+
+build-caddy: ## Build Caddy with the DNS-01 plugins from .env (ARGS=--validate --push)
+	bash tools/build-caddy.sh $(ARGS)
+
+release: ## Cross-compile rift release artifacts into dist/release/<version> (ARGS=--clean)
+	bash tools/release.sh $(ARGS)
 
 lint: ## Vet Go, syntax-check shell scripts, validate compose
 	cd server && go vet ./...
