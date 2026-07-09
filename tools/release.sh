@@ -105,8 +105,14 @@ main() {
 		log_info "compiling $artifact ($target)"
 		# Match the repo build flags (minify + sourcemap) for parity with
 		# `bun run build`. A failed/unsupported target is skipped, not fatal.
+		#
+		# Trust the artifact, not just the exit code: under disk pressure or an
+		# interrupted write bun can exit 0 without leaving a complete binary, and
+		# the packaging step would then abort the whole release on a missing cp
+		# source. Require a non-empty output before counting the target as built.
 		if (cd "$CLI_DIR" && bun build --compile --minify --sourcemap \
-			--target="$target" "$ENTRY" --outfile "$out/$artifact") >/dev/null 2>"$out/.build.log"; then
+			--target="$target" "$ENTRY" --outfile "$out/$artifact") >/dev/null 2>"$out/.build.log" &&
+			[ -s "$out/$artifact" ]; then
 			chmod +x "$out/$artifact" 2>/dev/null || true
 			built+=("$artifact")
 		else
@@ -143,6 +149,11 @@ package_artifacts() {
 	shift
 	local artifact base stage binname
 	for artifact in "$@"; do
+		# Defence in depth: never abort the whole release on a missing source.
+		if [ ! -f "$out/$artifact" ]; then
+			log_warn "no binary for $artifact; skipping its archive"
+			continue
+		fi
 		if [ "${artifact%.exe}" != "$artifact" ]; then
 			base="${artifact%.exe}"
 			binname="rift.exe"

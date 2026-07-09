@@ -1,0 +1,16 @@
+# Keep the build context small and reproducible. Image builds COPY only the
+# sources they need; everything below is either huge, machine-specific, or a
+# secret, and must never be sent to the daemon.
+.git
+.github
+.claude
+dist
+node_modules
+**/node_modules
+cli/node_modules
+docs-site/node_modules
+.env
+**/.env
+*.log
+tools/.ssh
+server/riftd

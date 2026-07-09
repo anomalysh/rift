@@ -1,0 +1,37 @@
+# syntax=docker/dockerfile:1
+
+# Reproducible multi-arch CLI release build. Pinning the Bun toolchain makes the
+# artifacts independent of whatever Bun a host happens to have, and runs the
+# same tools/release.sh used locally and in CI. Extract with tools/release-docker.sh
+# (a classic `docker build` + `docker cp`, so it needs no BuildKit).
+#
+#   bash tools/release-docker.sh        -> ./dist/release/<version>/
+
+ARG BUN_VERSION=1.3.12
+FROM oven/bun:${BUN_VERSION} AS build
+
+# release.sh packages the Windows target as a .zip; the bun image is
+# debian-based and already ships bash, tar, coreutils (sha256sum) and findutils.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends zip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+# Only what the release needs: the CLI sources, the packaged extras (man page +
+# completions), and the release tooling. Copying a narrow context keeps the
+# build cache stable across unrelated repo changes.
+COPY cli/ ./cli/
+COPY packaging/ ./packaging/
+COPY tools/ ./tools/
+
+RUN cd cli && bun install
+
+# Build every target into /src/dist/release/<version>/. --clean makes the layer
+# deterministic regardless of any stale output copied in.
+RUN bash tools/release.sh --clean
+
+# --- artifacts --------------------------------------------------------------
+# A files-only stage so `buildx --target artifacts --output type=local,dest=…`
+# extracts just the release tree (dist/release/<version>/…) to the host.
+FROM scratch AS artifacts
+COPY --from=build /src/dist/release/ /
