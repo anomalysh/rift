@@ -1,0 +1,99 @@
+# rift end-to-end test stack.
+#
+# Self-contained and hermetic: a throwaway Postgres, riftd, and a real Caddy in
+# front, exercising the same Caddyfile and the same TLS-mode snippets that
+# production uses. Nothing here reaches the internet, so it runs offline and in
+# CI.
+#
+# The base domain is rift.localtest, which resolves nowhere. Tests reach it with
+# `curl --resolve`, so no /etc/hosts entry and no root privileges are needed.
+#
+# Driven by tools/e2e.sh. Do not `docker compose up` this by hand; the script
+# generates certificates for the `self` mode and knows which ports to poll.
+name: rift-e2e
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: rift
+      POSTGRES_PASSWORD: rift
+      POSTGRES_DB: rift
+    # Data never outlives the run: a stale volume between runs would let a test
+    # pass on a previous run's rows.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rift -d rift"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  riftd:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      RIFT_ENV: development
+      RIFT_LOG_LEVEL: ${RIFT_E2E_LOG_LEVEL:-info}
+      RIFT_LOG_FORMAT: json
+
+      RIFT_POSTGRES_DSN: postgres://rift:rift@postgres:5432/rift?sslmode=disable
+      RIFT_BASE_DOMAIN: ${RIFT_E2E_BASE_DOMAIN:-rift.localtest}
+      RIFT_GATEWAY_HOSTNAME: gateway.${RIFT_E2E_BASE_DOMAIN:-rift.localtest}
+      RIFT_PUBLIC_SCHEME: https
+      RIFT_TLS_MODE: ${RIFT_TLS_MODE:-internal}
+      RIFT_TLS_CERT_FILE: ${RIFT_TLS_CERT_FILE:-}
+      RIFT_TLS_KEY_FILE: ${RIFT_TLS_KEY_FILE:-}
+
+      RIFT_ADMIN_ENABLED: "true"
+      RIFT_ADMIN_TOKEN: ${RIFT_E2E_ADMIN_TOKEN:?e2e admin token must be set by tools/e2e.sh}
+
+      # Caddy is the only client of the ingress.
+      RIFT_INGRESS_TRUSTED_PROXY_IPS: 172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
+
+      # Fast enough that a test can observe a reap or a revocation without
+      # sleeping for half a minute.
+      RIFT_HEARTBEAT_INTERVAL: 1s
+      RIFT_HEARTBEAT_TIMEOUT: 4s
+      RIFT_REAPER_INTERVAL: 2s
+      RIFT_TOKEN_REVALIDATE_INTERVAL: 1s
+      RIFT_REQUEST_TIMEOUT: 15s
+    ports:
+      # The agent dials the gateway directly rather than through Caddy: a Bun
+      # client on the host cannot resolve rift.localtest, and curl's --resolve
+      # has no WebSocket equivalent. Caddy's TLS in front of the gateway is
+      # asserted separately, with curl, against gateway.rift.localtest.
+      - "127.0.0.1:${RIFT_E2E_GATEWAY_PORT:-18081}:8081"
+      - "127.0.0.1:${RIFT_E2E_ADMIN_PORT:-18082}:8082"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  caddy:
+    image: ${RIFT_CADDY_IMAGE:-caddy:2-alpine}
+    environment:
+      RIFT_BASE_DOMAIN: ${RIFT_E2E_BASE_DOMAIN:-rift.localtest}
+      RIFT_GATEWAY_HOSTNAME: gateway.${RIFT_E2E_BASE_DOMAIN:-rift.localtest}
+      RIFT_ACME_EMAIL: e2e@example.test
+      RIFT_ACME_CA_PROFILE: ${RIFT_ACME_CA_PROFILE:-public}
+      RIFT_TLS_MODE: ${RIFT_TLS_MODE:-internal}
+      RIFT_TLS_CERT_FILE: ${RIFT_TLS_CERT_FILE:-}
+      RIFT_TLS_KEY_FILE: ${RIFT_TLS_KEY_FILE:-}
+      RIFT_UPSTREAM_HOST: riftd
+      RIFT_INGRESS_PORT: "8080"
+      RIFT_GATEWAY_PORT: "8081"
+    volumes:
+      # The whole directory, so the mode and provider snippets resolve.
+      - ./caddy:/etc/caddy:ro
+      # Certificates the `self` mode serves; tools/e2e.sh generates them.
+      - ${RIFT_E2E_CERT_DIR:-./caddy}:/certs:ro
+      - caddy_data:/data
+    ports:
+      - "127.0.0.1:${RIFT_E2E_HTTP_PORT:-18080}:80"
+      - "127.0.0.1:${RIFT_E2E_HTTPS_PORT:-18443}:443"
+    depends_on:
+      - riftd
+
+volumes:
+  caddy_data:

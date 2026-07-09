@@ -55,9 +55,24 @@ rift_ssh_key_path() { printf '%s/.ssh/id_ed25519' "$RIFT_TOOLS_DIR"; }
 #   deploy session from being dropped by an idle NAT.
 # Consumed by the scripts that source this file, hence "unused" here.
 # shellcheck disable=SC2034
+# Multiplex over one connection. A deploy makes a dozen ssh calls in a few
+# seconds, and sshd's MaxStartups drops the later ones with
+# "kex_exchange_identification: Connection reset by peer" -- which looks like a
+# network fault and is really rate limiting. One master connection avoids it,
+# and makes every subsequent call near-instant.
+#
+# The socket path must stay under the ~104-byte sun_path limit, so it lives in
+# the user's home rather than beside the repo.
+RIFT_SSH_CONTROL_DIR="${RIFT_SSH_CONTROL_DIR:-$HOME/.ssh/rift-cm}"
+mkdir -p "$RIFT_SSH_CONTROL_DIR" 2>/dev/null || true
+chmod 700 "$RIFT_SSH_CONTROL_DIR" 2>/dev/null || true
+
 RIFT_SSH_OPTS=(
 	-o ConnectTimeout=15
 	-o StrictHostKeyChecking=accept-new
 	-o ServerAliveInterval=30
 	-o ServerAliveCountMax=3
+	-o ControlMaster=auto
+	-o "ControlPath=$RIFT_SSH_CONTROL_DIR/%r@%h:%p"
+	-o ControlPersist=5m
 )
