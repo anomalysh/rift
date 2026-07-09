@@ -33,6 +33,10 @@ var (
 	ErrTunnelLimit        = errors.New("core: tunnel limit reached for token")
 	ErrConflict           = errors.New("core: conflicting write")
 	ErrUnsupportedProto   = errors.New("core: unsupported protocol")
+
+	// ErrTunnelUnavailable means the agent connection died with a request in
+	// flight. The ingress turns this into a 502.
+	ErrTunnelUnavailable = errors.New("core: tunnel unavailable")
 )
 
 // Token is an API credential. The plaintext secret is never persisted; only
