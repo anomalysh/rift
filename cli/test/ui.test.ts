@@ -3,6 +3,8 @@ import { describe, expect, test } from "bun:test";
 import {
   clampWidth,
   createStyle,
+  Dashboard,
+  type DashboardDeps,
   formatDuration,
   formatEvent,
   formatPlainBanner,
@@ -246,5 +248,82 @@ describe("formatPlainBanner", () => {
     expect(banner).toContain(SESSION.forwardTo);
     expect(banner).toContain(SESSION.gateway);
     expect(banner).toContain(SESSION.tunnelId);
+  });
+});
+
+describe("Dashboard redraw (scroll-safe cursor discipline)", () => {
+  interface Harness {
+    chunks: string[];
+    tick: () => void;
+    deps: DashboardDeps;
+  }
+  function harness(columns = 80): Harness {
+    const chunks: string[] = [];
+    let tickFn: (() => void) | null = null;
+    return {
+      chunks,
+      tick: () => tickFn?.(),
+      deps: {
+        write: (c) => chunks.push(c),
+        columns: () => columns,
+        style: createStyle(false),
+        now: () => 0,
+        setInterval: (fn) => {
+          tickFn = fn;
+          return { cancel: () => {} };
+        },
+        onExit: () => {},
+        offExit: () => {},
+      },
+    };
+  }
+
+  test("the panel is written without a trailing newline", () => {
+    const h = harness();
+    const d = new Dashboard(h.deps);
+    d.start();
+    const out = h.chunks.join("");
+    expect(out).toContain("└"); // bottom border drawn
+    // Cursor must stay on the last panel line, so no trailing newline.
+    expect(out.endsWith("\n")).toBe(false);
+  });
+
+  test("a redraw clears by moving up N-1 lines, never a fixed CSI-nF", () => {
+    const h = harness();
+    const d = new Dashboard(h.deps);
+    d.start();
+    h.chunks.length = 0;
+    d.setStatus("online"); // forces a redraw
+    const out = h.chunks.join("");
+    // Scroll-safe clear: carriage return, cursor-up (A), erase-to-end (0J).
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting the literal ANSI escape the redraw emits.
+    expect(out).toMatch(/\r\x1b\[\d+A\x1b\[0J/);
+    // The old, scroll-fragile fixed move must not reappear.
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting the old ANSI escape is gone.
+    expect(out).not.toMatch(/\x1b\[\d+F/);
+    expect(out.endsWith("\n")).toBe(false);
+  });
+
+  test("an event prints above a freshly repainted panel", () => {
+    const h = harness();
+    const d = new Dashboard(h.deps);
+    d.start();
+    h.chunks.length = 0;
+    d.event("something happened");
+    const out = h.chunks.join("");
+    const at = out.indexOf("something happened");
+    expect(at).toBeGreaterThanOrEqual(0);
+    // The panel is redrawn after the event line, so its top border follows it.
+    expect(out.slice(at)).toContain("┌");
+  });
+
+  test("close restores the cursor and ends on a fresh line", () => {
+    const h = harness();
+    const d = new Dashboard(h.deps);
+    d.start();
+    d.close("offline");
+    const out = h.chunks.join("");
+    expect(out).toContain("\x1b[?25h"); // cursor shown again
+    expect(out).toContain("\n\x1b[?25h"); // newline before the restore, prompt below
   });
 });

@@ -298,7 +298,7 @@ export function renderManPage(spec: CliSpec = CLI_SPEC): string {
   out.push(".SH SEE ALSO");
   out.push(g(spec.seeAlso));
 
-  return out.join("\n") + "\n";
+  return `${out.join("\n")}\n`;
 }
 
 // ---------------------------------------------------------------------------
@@ -460,7 +460,7 @@ export function renderZshCompletion(spec: CliSpec = CLI_SPEC): string {
   lines.push("}");
   lines.push("");
   lines.push(`_${spec.name} "$@"`);
-  return lines.join("\n") + "\n";
+  return `${lines.join("\n")}\n`;
 }
 
 /** Escape a description for a fish single-quoted string. */
@@ -508,7 +508,7 @@ export function renderFishCompletion(spec: CliSpec = CLI_SPEC): string {
         `-a '${fishDesc(proto.name)}' -d '${fishDesc(proto.blurb)}'`,
     );
   }
-  return lines.join("\n") + "\n";
+  return `${lines.join("\n")}\n`;
 }
 
 /** Render the completion script for a given shell. */

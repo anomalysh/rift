@@ -277,9 +277,10 @@ const FRAME_PADDING = 4;
  *
  * The panel is kept strictly narrower than the terminal: a line that fills the
  * final column phantom-wraps on many terminals, which makes the redraw's
- * logical line count smaller than the rows actually on screen. `moveUpAndClear`
- * then scrolls up too few rows and the next event is drawn on top of the panel.
- * Reserving one trailing column avoids that entirely. */
+ * logical line count smaller than the rows actually on screen, so the clear
+ * scrolls up too few rows and the next event lands on the panel. Reserving one
+ * trailing column avoids that; the redraw's no-trailing-newline discipline
+ * handles the separate bottom-of-screen scroll case. */
 export function clampWidth(columns: number): number {
   return Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, columns - 1));
 }
@@ -451,10 +452,6 @@ export function formatPlainBanner(info: SessionInfo): string {
 /** Cursor and screen control the Dashboard emits (never measured as content). */
 const HIDE_CURSOR = "\x1b[?25l";
 const SHOW_CURSOR = "\x1b[?25h";
-/** CSI n F: move up n lines to column 0; CSI 0 J: clear to end of screen. */
-function moveUpAndClear(n: number): string {
-  return `\x1b[${n}F\x1b[0J`;
-}
 
 /** Spinner cadence; signature-gated redraws keep idle states near 1 Hz. */
 const TICK_INTERVAL_MS = 120;
@@ -534,12 +531,15 @@ export class Dashboard {
 
   /** Print a scrollback line above the panel, then repaint the panel below it. */
   event(line: string): void {
+    const text = line.endsWith("\n") ? line : `${line}\n`;
     if (this.stopped) {
-      this.deps.write(line.endsWith("\n") ? line : `${line}\n`);
+      this.deps.write(text);
       return;
     }
-    this.tearDown();
-    this.deps.write(line.endsWith("\n") ? line : `${line}\n`);
+    // Erase the panel, print the event where its top was (it scrolls into the
+    // scrollback), then repaint the panel below the event.
+    this.deps.write(this.clearSequence() + text);
+    this.renderedLines = 0;
     this.draw(true);
   }
 
@@ -559,6 +559,9 @@ export class Dashboard {
       this.detail = detail;
     }
     this.draw(true);
+    // The panel is written without a trailing newline; add one so the shell
+    // prompt resumes below the frozen panel rather than on its last line.
+    this.deps.write("\n");
     this.restoreCursor();
     this.deps.offExit(this.restoreCursor);
   }
@@ -586,20 +589,26 @@ export class Dashboard {
     }
     this.lastSignature = sig;
     const lines = renderPanel(state, this.deps.style, width);
-    let out = this.renderedLines > 0 ? moveUpAndClear(this.renderedLines) : "";
-    for (const line of lines) {
-      out += `${line}\n`;
-    }
-    this.deps.write(out);
+    // No trailing newline after the last line: the cursor stays ON the panel's
+    // last line rather than the line below it. That is what makes redraws
+    // scroll-safe -- once the panel reaches the bottom of the viewport, a
+    // trailing newline would scroll the screen and desync the cursor math,
+    // which is what let events paint over the panel.
+    this.deps.write(this.clearSequence() + lines.join("\n"));
     this.renderedLines = lines.length;
   }
 
-  private tearDown(): void {
-    if (this.renderedLines > 0) {
-      this.deps.write(moveUpAndClear(this.renderedLines));
-      this.renderedLines = 0;
+  /** Escape sequence that erases the current panel in place. The cursor is on
+   * the panel's last line, so move to column 0, up to the first line, and erase
+   * to the end of the screen. Contiguous panel lines mean the first line is
+   * always renderedLines-1 rows up, whether or not drawing the panel scrolled
+   * the viewport -- so this survives scrolling where a fixed CSI-nF did not. */
+  private clearSequence(): string {
+    if (this.renderedLines === 0) {
+      return "";
     }
-    this.lastSignature = "";
+    const up = this.renderedLines > 1 ? `\x1b[${this.renderedLines - 1}A` : "";
+    return `\r${up}\x1b[0J`;
   }
 }
 
