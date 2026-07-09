@@ -22,8 +22,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Least privilege. packages: write publishes to ghcr; id-token + attestations
-# are consumed only by actions/attest-build-provenance below. Nothing else.
+# Least privilege. packages: write publishes to ghcr. id-token + attestations
+# are consumed only by the opt-in GitHub attestation step below (gated on
+# RIFT_ENABLE_GH_ATTESTATION); declaring them is harmless while it is disabled,
+# and it lets the feature be turned on with just a repo variable, no YAML edit.
 permissions:
   contents: read
   packages: write
@@ -149,10 +151,17 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
 
       # GitHub-native build provenance, verifiable with `gh attestation verify`.
-      # Complements the buildx attestation above; requires the pushed digest, so
-      # it is skipped on PRs where nothing was pushed.
+      # OPT-IN: GitHub's Artifact Attestations API needs a paid/Enterprise plan
+      # (it is unavailable on the free plan whether the repo is public or
+      # private), so this step is off by default and would otherwise fail the
+      # job with "Feature not available for this organization". Enable it with a
+      # single repository variable once the plan supports it:
+      #     gh variable set RIFT_ENABLE_GH_ATTESTATION --body true
+      # The registry-native provenance and SBOM (buildx, above) are always
+      # produced regardless, and are inspectable with `docker buildx imagetools
+      # inspect`, so images are traceable even with this step disabled.
       - name: Attest build provenance
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && vars.RIFT_ENABLE_GH_ATTESTATION == 'true'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
         with:
           subject-name: ghcr.io/anomalysh/${{ matrix.image }}
