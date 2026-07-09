@@ -23,7 +23,7 @@ from Conventional Commit messages. You do not tag by hand.
 4. That tag fires the existing workflows:
    - **release.yml** cross-compiles the CLI for every target and uploads the
      binaries + `SHA256SUMS` to the release,
-   - **publish.yml** builds and pushes the container images tagged `X.Y.Z`,
+   - the **publish job in ci.yml** builds and pushes the container images tagged `X.Y.Z`,
      `X.Y`, and `latest` to `ghcr.io/anomalysh`.
 
 The version in `projects/cli/package.json` stays the single source of truth —
@@ -49,7 +49,7 @@ downstream builds. After merging the release PR, run them by hand:
 
 ```sh
 gh workflow run release.yml --ref vX.Y.Z
-gh workflow run publish.yml --ref vX.Y.Z
+gh workflow run ci.yml --ref vX.Y.Z
 ```
 
 ## Cutting the first release

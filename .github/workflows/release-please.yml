@@ -6,7 +6,7 @@ name: release-please
 # updates a "release PR" that bumps the version and writes CHANGELOG.md. Merging
 # that PR creates the vX.Y.Z tag and GitHub release.
 #
-# That tag is what fires release.yml (binaries) and publish.yml (images) -- BUT
+# That tag is what fires release.yml (binaries) and the publish job in ci.yml (images) -- BUT
 # a tag pushed by the default GITHUB_TOKEN does not start other workflows (a
 # GitHub anti-recursion rule). So for the downstream builds to run, provide a
 # token that can:

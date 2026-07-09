@@ -2,7 +2,7 @@
 # tools/publish-images.sh — build (and optionally push) the three rift container
 # images without CI, for someone who has a laptop and a registry but no Actions.
 #
-# This mirrors what .github/workflows/publish.yml does: same images, same OCI
+# This mirrors what the publish job in .github/workflows/ci.yml does: same images, same OCI
 # labels, same Caddy plugin set. It deliberately does NOT run `docker login` for
 # you — authenticate yourself first (e.g. `docker login ghcr.io`) — and it
 # refuses to push unless you pass --push explicitly, so a stray run can never
