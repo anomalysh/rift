@@ -33,6 +33,17 @@ const (
 	DefaultRedisDB      = 0
 	DefaultRedisPrefix  = "rift:"
 
+	DefaultTCPEnabled    = false
+	DefaultTCPListenHost = "0.0.0.0"
+	// A 101-port default range; the operator must open it on the host firewall.
+	DefaultTCPPortMin = 20000
+	DefaultTCPPortMax = 20100
+
+	DefaultTLSTunnelEnabled = false
+	// A dedicated port so passthrough TLS does not collide with the reverse
+	// proxy on 443; the operator must open it on the host firewall.
+	DefaultTLSTunnelListenAddr = ":8443"
+
 	DefaultPublicScheme = SchemeHTTPS
 
 	DefaultHeartbeatInterval = 15 * time.Second

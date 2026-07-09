@@ -135,6 +135,16 @@ func run() error {
 	rp := reaper.New(cfg, logger, db.Tunnels())
 	go rp.Run(ctx)
 
+	// The TLS passthrough listener is a raw TCP acceptor, not an http.Server, so
+	// it runs on its own goroutine and stops when ctx is cancelled.
+	if cfg.TLSTunnel.Enabled {
+		go func() {
+			if err := gw.ServeTLSTunnels(ctx); err != nil {
+				logger.Error("tls tunnel listener stopped", slog.Any("error", err))
+			}
+		}()
+	}
+
 	errCh := make(chan error, len(servers))
 	var wg sync.WaitGroup
 	for _, ns := range servers {
@@ -155,7 +165,9 @@ func run() error {
 		slog.String("tls_mode", cfg.TLS.Mode),
 		slog.Bool("tls_publicly_trusted", cfg.TLS.PubliclyTrusted()),
 		slog.Bool("redis", cfg.Redis.Enabled),
-		slog.Bool("admin", cfg.Admin.Enabled))
+		slog.Bool("admin", cfg.Admin.Enabled),
+		slog.Bool("tcp", cfg.TCP.Enabled),
+		slog.Bool("tls_tunnel", cfg.TLSTunnel.Enabled))
 
 	select {
 	case err := <-errCh:

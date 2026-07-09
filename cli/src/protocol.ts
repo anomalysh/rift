@@ -152,6 +152,8 @@ export interface HelloOk {
   hostname: string;
   url: string;
   heartbeat_interval_ms: number;
+  /** Public host:port for a raw tunnel (tcp/tls); absent for http. */
+  bind_addr?: string;
 }
 
 export interface HelloError {
@@ -175,6 +177,10 @@ export interface RequestHead {
   scheme: string;
   remote_addr: string;
   has_body: boolean;
+  /** A connection-upgrade request (WebSocket etc.); see server tunnelproto. */
+  upgrade: boolean;
+  /** A raw byte-pipe stream (tcp/tls tunnel) with no HTTP semantics. */
+  raw: boolean;
 }
 
 export interface ResponseHead {
@@ -273,13 +279,17 @@ export function asHelloOk(v: unknown): HelloOk | null {
     typeof v["url"] === "string" &&
     typeof v["heartbeat_interval_ms"] === "number"
   ) {
-    return {
+    const ok: HelloOk = {
       tunnel_id: v["tunnel_id"],
       subdomain: v["subdomain"],
       hostname: v["hostname"],
       url: v["url"],
       heartbeat_interval_ms: v["heartbeat_interval_ms"],
     };
+    if (typeof v["bind_addr"] === "string" && v["bind_addr"] !== "") {
+      ok.bind_addr = v["bind_addr"];
+    }
+    return ok;
   }
   return null;
 }
@@ -327,6 +337,9 @@ export function asRequestHead(v: unknown): RequestHead | null {
       scheme: v["scheme"],
       remote_addr: v["remote_addr"],
       has_body: v["has_body"],
+      // `upgrade` and `raw` are omitempty on the wire; absent means false.
+      upgrade: v["upgrade"] === true,
+      raw: v["raw"] === true,
     };
   }
   return null;

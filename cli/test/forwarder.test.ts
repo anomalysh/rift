@@ -1,8 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 import { FrameType } from "../src/constants.ts";
 import { RequestStream, type FrameSink } from "../src/forwarder.ts";
 import type { RequestHead, ResponseHead } from "../src/protocol.ts";
+
+/** A body long enough that gzip is meaningfully smaller than the plaintext. */
+const GZIP_PLAINTEXT = "the quick brown fox ".repeat(500);
+const GZIP_BODY = gzipSync(Buffer.from(GZIP_PLAINTEXT));
 
 /** What the local service saw, so a test can assert on the framing it received. */
 interface Seen {
@@ -15,6 +20,9 @@ interface Seen {
 
 const seen: Seen[] = [];
 
+/** accept-encoding the upstream saw on the last /gzip request, for assertions. */
+let lastGzipAcceptEncoding: string | null = null;
+
 const upstream = Bun.serve({
   port: 0,
   async fetch(req) {
@@ -26,6 +34,18 @@ const upstream = Bun.serve({
       transferEncoding: req.headers.get("transfer-encoding"),
       body: await req.text(),
     });
+    // A pre-gzipped response, like a static-site dev server serving compressed
+    // assets. The agent must pass these bytes through untouched.
+    if (url.pathname === "/gzip") {
+      lastGzipAcceptEncoding = req.headers.get("accept-encoding");
+      return new Response(GZIP_BODY, {
+        headers: {
+          "content-encoding": "gzip",
+          "content-type": "text/plain",
+          "content-length": String(GZIP_BODY.length),
+        },
+      });
+    }
     return new Response("upstream-ok", { headers: { "x-upstream": "yes" } });
   },
 });
@@ -102,6 +122,8 @@ function head(overrides: Partial<RequestHead> = {}): RequestHead {
     scheme: "https",
     remote_addr: "203.0.113.9",
     has_body: false,
+    upgrade: false,
+    raw: false,
     ...overrides,
   };
 }
@@ -188,6 +210,45 @@ describe("forwarder request framing", () => {
     expect(sink.heads[0]?.headers["x-upstream"]).toEqual(["yes"]);
     expect(new TextDecoder().decode(new Uint8Array(sink.body))).toBe("upstream-ok");
     expect(sink.ended).toBe(true);
+  });
+
+  // Regression: a Content-Encoding: gzip response must reach the gateway still
+  // compressed, with Content-Encoding intact and Content-Length matching the
+  // compressed size. Bun's fetch would otherwise gunzip the body but keep the
+  // stale headers, and the browser fails with ERR_CONTENT_DECODING_FAILED.
+  test("a gzip response passes through compressed with headers intact", async () => {
+    const { sink, done } = makeStream(
+      head({ path: "/gzip", headers: { "accept-encoding": ["gzip, br"] } }),
+    );
+    await done;
+
+    expect(sink.heads).toHaveLength(1);
+    const h = sink.heads[0];
+    expect(h?.headers["content-encoding"]).toEqual(["gzip"]);
+    expect(h?.headers["content-length"]).toEqual([String(GZIP_BODY.length)]);
+
+    const forwarded = new Uint8Array(sink.body);
+    // Untouched: exact byte length, gzip magic, and a clean gunzip round-trip.
+    expect(forwarded.length).toBe(GZIP_BODY.length);
+    expect(forwarded[0]).toBe(0x1f);
+    expect(forwarded[1]).toBe(0x8b);
+    expect(gunzipSync(Buffer.from(forwarded)).toString()).toBe(GZIP_PLAINTEXT);
+  });
+
+  // Transparency: the upstream must see only the client's own accept-encoding,
+  // never one Bun injected, or it would compress a response the client can't
+  // decode.
+  test("the client's accept-encoding is forwarded verbatim, none injected", async () => {
+    const { done } = makeStream(
+      head({ path: "/gzip", headers: { "accept-encoding": ["gzip"] } }),
+    );
+    await done;
+    expect(lastGzipAcceptEncoding).toBe("gzip");
+
+    const { done: done2 } = makeStream(head({ path: "/gzip", headers: {} }));
+    await done2;
+    // No accept-encoding from the client -> none reaches the upstream.
+    expect(lastGzipAcceptEncoding).toBeNull();
   });
 
   // A refused local service must become a RESET, not a hang.

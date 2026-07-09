@@ -9,6 +9,7 @@ import {
   configFilePath,
   loadConfigFile,
   resolveConfig,
+  writeConfigValues,
   type ResolvedConfig,
 } from "./config.ts";
 import { EXIT, VERSION } from "./constants.ts";
@@ -50,6 +51,20 @@ async function main(): Promise<void> {
     case "error":
       fail(`rift: ${parsed.message}\nRun 'rift --help' for usage.`, EXIT.USAGE);
       break;
+    case "set-config": {
+      try {
+        const { path, keys } = writeConfigValues(process.env, parsed.updates);
+        // Never echo the values themselves; the token is a secret.
+        process.stdout.write(`rift: saved ${keys.join(", ")} to ${path}\n`);
+        process.exit(EXIT.OK);
+      } catch (err) {
+        if (err instanceof ConfigError) {
+          fail(err.message, EXIT.ERROR);
+        }
+        throw err;
+      }
+      break;
+    }
     case "run":
       break;
   }
@@ -70,9 +85,11 @@ async function main(): Promise<void> {
   const onSignal = (name: string, code: number): void => {
     if (signalExit !== null) {
       // A second signal forces an immediate exit.
+      logger.close?.();
       process.exit(code);
     }
     signalExit = code;
+    logger.status?.("closing");
     logger.info(`received ${name}, shutting down`);
     client.stop();
   };
@@ -81,9 +98,12 @@ async function main(): Promise<void> {
 
   try {
     await client.run();
+    // Restore the terminal (show cursor, freeze the final panel) before exit.
+    logger.close?.();
     process.exit(signalExit ?? EXIT.OK);
   } catch (err) {
     logger.error(err instanceof Error ? err.message : String(err));
+    logger.close?.();
     process.exit(EXIT.ERROR);
   }
 }

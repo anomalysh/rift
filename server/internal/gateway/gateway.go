@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -32,6 +34,10 @@ type Gateway struct {
 	tunnels      core.TunnelStore
 	registry     core.Registry
 
+	// tcp accepts public TCP connections for tcp tunnels. Nil when tcp tunnels
+	// are disabled.
+	tcp *tcpForwarder
+
 	mu       sync.Mutex
 	sessions map[*session]struct{}
 }
@@ -52,6 +58,7 @@ func New(
 		reservations: reservations,
 		tunnels:      tunnels,
 		registry:     reg,
+		tcp:          newTCPForwarder(cfg, logger),
 		sessions:     make(map[*session]struct{}),
 	}
 }
@@ -126,12 +133,46 @@ func (g *Gateway) serve(r *http.Request, conn *websocket.Conn) {
 	g.track(sess)
 	defer g.untrack(sess)
 
+	// A raw tunnel (tcp/tls) is reached at a host:port, not the http URL. Work
+	// it out now, while we can still cleanly reject the handshake on failure.
+	bindAddr := ""
+	switch tunnel.Protocol {
+	case core.ProtocolTCP:
+		if g.tcp == nil {
+			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeUnsupportedProtocol,
+				"tcp tunnels are not enabled on this server")
+			return
+		}
+		addr, err := g.tcp.bind(sess)
+		if err != nil {
+			g.logger.Error("could not allocate tcp port", slog.Any("error", err))
+			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeInternal,
+				"could not allocate a public tcp port")
+			return
+		}
+		bindAddr = addr
+		defer g.tcp.release(sess)
+
+	case core.ProtocolTLS:
+		if !g.cfg.TLSTunnel.Enabled {
+			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeUnsupportedProtocol,
+				"tls tunnels are not enabled on this server")
+			return
+		}
+		// A tls tunnel needs no per-tunnel listener: the shared SNI-routed
+		// listener multiplexes them. It is reached at its subdomain host.
+		bindAddr = net.JoinHostPort(
+			core.Hostname(tunnel.Subdomain, g.cfg.Tunnel.BaseDomain),
+			strconv.Itoa(g.cfg.TLSTunnel.Port()))
+	}
+
 	ok := tunnelproto.HelloOK{
 		TunnelID:            tunnel.ID,
 		Subdomain:           tunnel.Subdomain,
 		Hostname:            core.Hostname(tunnel.Subdomain, g.cfg.Tunnel.BaseDomain),
 		URL:                 g.cfg.Tunnel.PublicURL(tunnel.Subdomain),
 		HeartbeatIntervalMS: g.cfg.Tunnel.HeartbeatInterval.Milliseconds(),
+		BindAddr:            bindAddr,
 	}
 	frame, err := tunnelproto.EncodeControl(tunnelproto.ControlHelloOK, ok)
 	if err != nil {
@@ -224,6 +265,14 @@ type handshakeError struct {
 }
 
 func (e *handshakeError) Error() string { return string(e.code) + ": " + e.message }
+
+// rejectAfterRegister tears down a session that was registered but cannot be
+// served (e.g. its protocol is disabled or no port is free), then rejects the
+// handshake so the agent learns why.
+func (g *Gateway) rejectAfterRegister(hsCtx, runCtx context.Context, conn *websocket.Conn, sess *session, code tunnelproto.ErrorCode, message string) {
+	g.cleanupSession(runCtx, sess)
+	g.rejectHandshake(hsCtx, conn, &handshakeError{code: code, message: message})
+}
 
 func (g *Gateway) rejectHandshake(ctx context.Context, conn *websocket.Conn, herr *handshakeError) {
 	frame, err := tunnelproto.EncodeControl(tunnelproto.ControlHelloError,

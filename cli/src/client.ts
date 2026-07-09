@@ -1,5 +1,5 @@
 // WebSocket tunnel agent: hello handshake, application heartbeat, stream
-// demultiplexing, and reconnection with exponential backoff + full jitter.
+// demultiplexing, and reconnection with decorrelated-jitter backoff.
 //
 // Reconnect policy:
 //   - transport loss (socket close/error)         -> reconnect
@@ -19,8 +19,11 @@ import {
   SUBPROTOCOL,
   VERSION,
 } from "./constants.ts";
+import { Backoff } from "./backoff.ts";
 import type { ResolvedConfig } from "./config.ts";
-import { RequestStream, type FrameSink } from "./forwarder.ts";
+import { RequestStream, type FrameSink, type Stream } from "./forwarder.ts";
+import { UpgradeStream } from "./upgrade.ts";
+import { formatRetryDelay, type SessionInfo } from "./ui.ts";
 import type { Logger } from "./logger.ts";
 import {
   asHelloError,
@@ -64,10 +67,18 @@ export class TunnelClient {
   private subdomain: string | undefined;
 
   private ws: WebSocket | null = null;
-  private readonly streams = new Map<bigint, RequestStream>();
+  private readonly streams = new Map<bigint, Stream>();
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
+  private readonly backoff = new Backoff({
+    baseMs: RECONNECT.BASE_MS,
+    capMs: RECONNECT.CAP_MS,
+  });
+  /** True once the first hello_ok lands, so reconnects don't reprint the banner. */
+  private established = false;
+  /** Total requests proxied since start; surfaced to the live request counter. */
+  private totalRequests = 0;
 
   private stopped = false;
   private fatal: Error | null = null;
@@ -91,6 +102,13 @@ export class TunnelClient {
       bufferedAmount: () => this.ws?.bufferedAmount ?? 0,
       isOpen: () => this.ws !== null && this.ws.readyState === WebSocket.OPEN,
     };
+    // Expose live request tallies to the dashboard without the forwarder or the
+    // stream map needing to know a UI exists: total is a plain counter, open is
+    // the current in-flight stream count.
+    this.logger.metrics?.(() => ({
+      total: this.totalRequests,
+      open: this.streams.size,
+    }));
   }
 
   /** Run until a graceful stop (resolves) or a fatal error (rejects). */
@@ -127,6 +145,11 @@ export class TunnelClient {
     const options: Bun.WebSocketOptions = { protocols: [SUBPROTOCOL] };
     if (this.config.insecure) {
       options.tls = { rejectUnauthorized: false };
+    }
+    // The first attempt shows "connecting"; a retry keeps the "reconnecting"
+    // state set by scheduleReconnect so the spinner reads correctly.
+    if (!this.established && this.reconnectAttempts === 0) {
+      this.logger.status?.("connecting");
     }
     this.logger.info(`connecting to ${this.config.server}`);
 
@@ -253,15 +276,40 @@ export class TunnelClient {
       return;
     }
     this.reconnectAttempts = 0;
+    this.backoff.reset();
     // Keep the assigned subdomain so reconnects reclaim the same URL.
     this.subdomain = ok.subdomain;
-    this.logger.info(
-      `tunnel established: ${ok.url} (tunnel ${ok.tunnel_id})`,
-    );
-    this.logger.banner(
-      `\n  rift  ${ok.url}\n    ->  http://${this.config.host}:${this.port}\n`,
-    );
+    // A raw tunnel (tcp/tls) is reached at a host:port, not the http URL.
+    const publicAddr =
+      ok.bind_addr !== undefined ? `${this.protocol}://${ok.bind_addr}` : ok.url;
+    const localAddr =
+      this.protocol === "http"
+        ? `http://${this.config.host}:${this.port}`
+        : `${this.config.host}:${this.port}`;
+    if (!this.established) {
+      this.established = true;
+      const session: SessionInfo = {
+        version: VERSION,
+        url: publicAddr,
+        forwardTo: localAddr,
+        gateway: this.gatewayHost(),
+        tunnelId: ok.tunnel_id,
+      };
+      this.logger.session?.(session);
+    } else {
+      this.logger.info(`reconnected: ${publicAddr}`);
+    }
+    this.logger.status?.("online");
     this.startHeartbeat(ok.heartbeat_interval_ms);
+  }
+
+  /** Human-facing gateway host derived from the server URL (best effort). */
+  private gatewayHost(): string {
+    try {
+      return new URL(this.config.server).host;
+    } catch {
+      return this.config.server;
+    }
   }
 
   private handleHelloError(payload: unknown): void {
@@ -312,15 +360,28 @@ export class TunnelClient {
       existing.reset(ResetCode.INTERNAL);
       this.streams.delete(streamId);
     }
-    this.logger.debug(`REQ_HEAD ${head.method} ${head.path} stream ${streamId}`);
-    const stream = new RequestStream(streamId, head, {
+    this.totalRequests++;
+    const deps = {
       target: { host: this.config.host, port: this.port },
       sink: this.sink,
       logger: this.logger,
-      onDone: (id) => {
+      onDone: (id: bigint) => {
         this.streams.delete(id);
       },
-    });
+    };
+    let stream: Stream;
+    if (head.raw) {
+      this.logger.debug(`REQ_HEAD raw stream ${streamId}`);
+      stream = new UpgradeStream(streamId, head, deps);
+    } else if (head.upgrade) {
+      this.logger.debug(
+        `REQ_HEAD upgrade ${head.method} ${head.path} stream ${streamId}`,
+      );
+      stream = new UpgradeStream(streamId, head, deps);
+    } else {
+      this.logger.debug(`REQ_HEAD ${head.method} ${head.path} stream ${streamId}`);
+      stream = new RequestStream(streamId, head, deps);
+    }
     this.streams.set(streamId, stream);
   }
 
@@ -377,25 +438,18 @@ export class TunnelClient {
   }
 
   private scheduleReconnect(code: number, reason: string): void {
-    const delay = this.nextDelay();
+    const delay = this.backoff.next();
     this.reconnectAttempts++;
     const why = reason !== "" ? ` ${reason}` : "";
+    this.logger.status?.("reconnecting", `retry in ${formatRetryDelay(delay)}`);
     this.logger.warn(
-      `connection closed (code ${code}${why}); reconnecting in ${delay}ms`,
+      `connection closed (code ${code}${why}); reconnecting in ${delay}ms ` +
+        `(attempt ${this.reconnectAttempts})`,
     );
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
     }, delay);
-  }
-
-  /** Full-jitter backoff: uniform in [0, min(cap, base * 2^attempt)). */
-  private nextDelay(): number {
-    const ceiling = Math.min(
-      RECONNECT.CAP_MS,
-      RECONNECT.BASE_MS * 2 ** this.reconnectAttempts,
-    );
-    return Math.floor(Math.random() * ceiling);
   }
 
   private resetAllStreams(): void {

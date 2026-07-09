@@ -78,16 +78,16 @@ func (i *Ingress) doPeerForward(r *http.Request, nodeURL, sub string) (*http.Res
 	// Carry the original request verbatim; the peer reconstructs it from these.
 	// The forwarding request is addressed to RouteInternalProxy, so the peer
 	// cannot recover the original path from its own URL -- it comes over in a
-	// header instead.
+	// header instead. The X-Forwarded-* / X-Real-IP headers describing the
+	// public client were already stamped at the edge (handlePublic ->
+	// annotateForwarded) and ride along in this clone, so the receiving node
+	// must not re-derive them from this internal hop.
 	outbound.Header = r.Header.Clone()
 	outbound.Host = r.Host
 	outbound.ContentLength = r.ContentLength
 	outbound.Header.Set(config.HeaderRiftSubdomain, sub)
 	outbound.Header.Set(config.HeaderRiftForwardedURI, r.URL.RequestURI())
 	outbound.Header.Set(config.HeaderRiftPeerToken, i.cfg.Cluster.PeerSecret)
-	outbound.Header.Set(config.HeaderForwardedHost, r.Host)
-	outbound.Header.Set(config.HeaderForwardedProto, i.cfg.Tunnel.PublicScheme)
-	outbound.Header.Set(config.HeaderRealIP, i.clientIP(r))
 
 	return i.peers.Do(outbound)
 }

@@ -94,11 +94,21 @@ describe("bad port", () => {
 });
 
 describe("bad protocol", () => {
-  test("rejects tcp and names what is supported", () => {
-    const parsed = parseArgs(["tcp", "3000"]);
+  test("rejects an unsupported protocol and names what is supported", () => {
+    const parsed = parseArgs(["udp", "3000"]);
     expect(parsed.kind).toBe("error");
     if (parsed.kind === "error") {
       expect(parsed.message).toContain("http");
+    }
+  });
+
+  test("accepts tcp and tls", () => {
+    for (const proto of ["tcp", "tls"] as const) {
+      const parsed = parseArgs([proto, "3000"]);
+      expect(parsed.kind).toBe("run");
+      if (parsed.kind === "run") {
+        expect(parsed.protocol).toBe(proto);
+      }
     }
   });
 });
@@ -113,6 +123,51 @@ describe("help and version", () => {
   test("--version and -v", () => {
     expect(parseArgs(["--version"]).kind).toBe("version");
     expect(parseArgs(["-v"]).kind).toBe("version");
+  });
+});
+
+describe("--set-* config persistence", () => {
+  test("--set-token yields set-config with the token update", () => {
+    const parsed = parseArgs(["--set-token", "rift_abc"]);
+    expect(parsed.kind).toBe("set-config");
+    if (parsed.kind === "set-config") {
+      expect(parsed.updates).toEqual({ token: "rift_abc" });
+    }
+  });
+
+  test("--set-*=value form and multiple keys merge", () => {
+    const parsed = parseArgs([
+      "--set-token=rift_abc",
+      "--set-server",
+      "wss://gw",
+      "--set-log-level=debug",
+    ]);
+    expect(parsed.kind).toBe("set-config");
+    if (parsed.kind === "set-config") {
+      expect(parsed.updates).toEqual({
+        token: "rift_abc",
+        server: "wss://gw",
+        logLevel: "debug",
+      });
+    }
+  });
+
+  test("empty --set-token value is an error", () => {
+    const parsed = parseArgs(["--set-token", ""]);
+    expect(parsed.kind).toBe("error");
+  });
+
+  test("invalid --set-log-level is an error", () => {
+    const parsed = parseArgs(["--set-log-level", "loud"]);
+    expect(parsed.kind).toBe("error");
+    if (parsed.kind === "error") {
+      expect(parsed.message).toContain("set-log-level");
+    }
+  });
+
+  test("cannot combine --set-* with a tunnel command", () => {
+    const parsed = parseArgs(["http", "3000", "--set-token", "rift_abc"]);
+    expect(parsed.kind).toBe("error");
   });
 });
 

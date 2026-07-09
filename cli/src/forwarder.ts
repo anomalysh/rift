@@ -35,6 +35,21 @@ export interface ForwardTarget {
   readonly port: number;
 }
 
+/**
+ * The agent-side handler for one gateway stream. Both an ordinary HTTP exchange
+ * (RequestStream) and an upgraded connection (UpgradeStream) implement it, so
+ * the client demultiplexes REQ_BODY / REQ_END / RESET frames without caring
+ * which kind a given stream is.
+ */
+export interface Stream {
+  /** REQ_BODY: bytes from the public client. */
+  pushBody(chunk: Uint8Array): void;
+  /** REQ_END: the public client will send no more bytes. */
+  endBody(): void;
+  /** RESET (or local transport loss): abort the exchange with a reason code. */
+  reset(code: string): void;
+}
+
 export interface RequestStreamDeps {
   readonly target: ForwardTarget;
   readonly sink: FrameSink;
@@ -44,9 +59,11 @@ export interface RequestStreamDeps {
 }
 
 // The Fetch standard requires `duplex: "half"` when the request body is a
-// stream; the ambient RequestInit type does not declare it.
+// stream; the ambient RequestInit type does not declare it. `decompress` is a
+// Bun extension (see run() for why it is forced off).
 interface FetchInit extends RequestInit {
   duplex?: "half";
+  decompress?: boolean;
 }
 
 function isHopByHop(name: string): boolean {
@@ -110,7 +127,7 @@ function responseHeaderMap(headers: Headers): HeaderMap {
  * A single proxied request/response exchange on one stream_id. Construction
  * immediately begins the upstream fetch; body frames are fed in as they arrive.
  */
-export class RequestStream {
+export class RequestStream implements Stream {
   private readonly controller = new AbortController();
   private bodyController: ReadableStreamDefaultController<Uint8Array> | null =
     null;
@@ -170,6 +187,15 @@ export class RequestStream {
       headers,
       redirect: "manual",
       signal: this.controller.signal,
+      // Forward the upstream body byte-for-byte. Left to itself, Bun's fetch
+      // transparently gunzips a `Content-Encoding: gzip`/`br` response but keeps
+      // the Content-Encoding and Content-Length headers, which now describe the
+      // *compressed* bytes the caller never receives. The browser then tries to
+      // decode already-decoded data and fails with ERR_CONTENT_DECODING_FAILED.
+      // Disabling decompression also stops Bun from injecting its own
+      // Accept-Encoding upstream, so the local service compresses only when the
+      // real client asked it to -- exactly what a transparent proxy must do.
+      decompress: false,
     };
     if (this.bodyStream !== null) {
       init.body = this.bodyStream;

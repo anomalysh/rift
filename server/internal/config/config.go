@@ -10,7 +10,9 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,15 +24,17 @@ type Config struct {
 	Env    string
 	NodeID string
 
-	Log      Log
-	Ingress  Ingress
-	Gateway  Gateway
-	Admin    Admin
-	Postgres Postgres
-	Redis    Redis
-	Cluster  Cluster
-	TLS      TLS
-	Tunnel   Tunnel
+	Log       Log
+	Ingress   Ingress
+	Gateway   Gateway
+	Admin     Admin
+	Postgres  Postgres
+	Redis     Redis
+	Cluster   Cluster
+	TLS       TLS
+	TCP       TCP
+	TLSTunnel TLSTunnel
+	Tunnel    Tunnel
 
 	// SubdomainRules is derived from Tunnel settings and validated at boot.
 	SubdomainRules *core.SubdomainRules
@@ -137,6 +141,54 @@ func (t TLS) CoversUnknownSubdomains() bool {
 	return t.Mode != TLSModeHTTP01
 }
 
+// TCP configures raw TCP tunnels. When enabled the gateway allocates a public
+// port from [PortMin, PortMax] for each tcp tunnel, listens on ListenHost, and
+// tells the agent to advertise AdvertiseHost:port (AdvertiseHost defaults to
+// the base domain). The port range must be opened on the host firewall.
+type TCP struct {
+	Enabled       bool
+	ListenHost    string
+	AdvertiseHost string
+	PortMin       int
+	PortMax       int
+}
+
+// Advertise returns the public host clients dial for a tcp tunnel, falling back
+// to the base domain when no explicit advertise host is set.
+func (t TCP) Advertise(baseDomain string) string {
+	if t.AdvertiseHost != "" {
+		return t.AdvertiseHost
+	}
+	return baseDomain
+}
+
+// TLSTunnel configures raw TLS passthrough tunnels. When enabled the gateway
+// listens on ListenAddr, reads each connection's ClientHello SNI to find the
+// tls tunnel on that subdomain, and pipes the still-encrypted bytes through to
+// the agent, whose local service terminates TLS. The listen port must be opened
+// on the host firewall.
+type TLSTunnel struct {
+	Enabled    bool
+	ListenAddr string
+	// AdvertisePort is the public port clients dial (sub.<base>:port). Defaults
+	// to the port in ListenAddr when zero.
+	AdvertisePort int
+}
+
+// Port returns the public port a tls tunnel is advertised on, falling back to
+// the port in ListenAddr.
+func (t TLSTunnel) Port() int {
+	if t.AdvertisePort > 0 {
+		return t.AdvertisePort
+	}
+	if _, p, err := net.SplitHostPort(t.ListenAddr); err == nil {
+		if n, err := strconv.Atoi(p); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
 // Tunnel holds the behavioural knobs of the tunnelling layer.
 type Tunnel struct {
 	BaseDomain   string
@@ -209,6 +261,18 @@ func Load() (*Config, error) {
 		},
 		Cluster: Cluster{
 			PeerSecret: l.str(KeyPeerSecret, ""),
+		},
+		TCP: TCP{
+			Enabled:       l.boolean(KeyTCPEnabled, DefaultTCPEnabled),
+			ListenHost:    l.str(KeyTCPListenHost, DefaultTCPListenHost),
+			AdvertiseHost: l.str(KeyTCPAdvertiseHost, ""),
+			PortMin:       l.integer(KeyTCPPortMin, DefaultTCPPortMin),
+			PortMax:       l.integer(KeyTCPPortMax, DefaultTCPPortMax),
+		},
+		TLSTunnel: TLSTunnel{
+			Enabled:       l.boolean(KeyTLSTunnelEnabled, DefaultTLSTunnelEnabled),
+			ListenAddr:    l.str(KeyTLSTunnelListenAddr, DefaultTLSTunnelListenAddr),
+			AdvertisePort: l.integer(KeyTLSTunnelAdvertisePort, 0),
 		},
 		TLS: TLS{
 			// Deliberately no default here: development gets one below,
@@ -410,6 +474,23 @@ func (c *Config) validate(l *loader) {
 
 	if c.Tunnel.MaxRequestBodyBytes < 0 {
 		l.fail(KeyMaxRequestBodyBytes, fmt.Errorf("must be >= 0 (0 means unlimited), got %d", c.Tunnel.MaxRequestBodyBytes))
+	}
+
+	if c.TCP.Enabled {
+		if c.TCP.PortMin < 1 || c.TCP.PortMax > 65535 {
+			l.fail(KeyTCPPortMin, fmt.Errorf("port range %d-%d must fall within 1-65535", c.TCP.PortMin, c.TCP.PortMax))
+		} else if c.TCP.PortMin > c.TCP.PortMax {
+			l.fail(KeyTCPPortMin, fmt.Errorf("must not exceed %s: got %d > %d", KeyTCPPortMax, c.TCP.PortMin, c.TCP.PortMax))
+		}
+	}
+
+	if c.TLSTunnel.Enabled {
+		if _, _, err := net.SplitHostPort(c.TLSTunnel.ListenAddr); err != nil {
+			l.fail(KeyTLSTunnelListenAddr, fmt.Errorf("expected host:port such as :8443, got %q", c.TLSTunnel.ListenAddr))
+		}
+		if p := c.TLSTunnel.Port(); p < 1 || p > 65535 {
+			l.fail(KeyTLSTunnelListenAddr, fmt.Errorf("could not determine a valid advertise port (set %s)", KeyTLSTunnelAdvertisePort))
+		}
 	}
 
 	if !strings.HasPrefix(c.Gateway.Path, "/") {

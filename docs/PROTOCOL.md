@@ -177,7 +177,60 @@ always arrays to preserve repeated headers.
 
 Hop-by-hop headers (`connection`, `keep-alive`, `transfer-encoding`,
 `upgrade`, `proxy-*`, `te`, `trailer`) are stripped by the gateway before
-forwarding, per RFC 7230 §6.1.
+forwarding, per RFC 7230 §6.1 — **except on an upgrade request** (see below),
+where `connection` and `upgrade` are the point of the request and are kept.
+
+An optional `"upgrade": true` field marks a connection-upgrade request
+(WebSocket and other `Upgrade`-based protocols). It is omitted (not `false`) on
+an ordinary request, so normal frames are byte-identical to earlier versions.
+
+## Connection upgrades (WebSocket)
+
+An upgrade reuses the ordinary frames rather than adding new types. When the
+gateway sees a public request carrying `Connection: upgrade` it:
+
+1. allocates `stream_id = n`
+2. sends `REQ_HEAD` with `"upgrade": true`, preserving the `connection` and
+   `upgrade` headers (and `sec-websocket-*`). It does **not** send `REQ_END`.
+
+The agent dials the local service over a raw socket, replays the request
+verbatim (rewriting `Host` to the local target), and reads the response head:
+
+* If the service returns **`101 Switching Protocols`**, the agent sends
+  `RES_HEAD` with status `101` and the handshake headers (again not stripped),
+  and the stream becomes a full-duplex byte pipe: `REQ_BODY` carries
+  client→service bytes, `RES_BODY` carries service→client bytes, `REQ_END` /
+  `RES_END` are half-closes, and `RESET` aborts. The gateway hijacks the public
+  connection, writes the `101`, and copies bytes both ways.
+* If the service returns **any other status**, the agent relays it as an
+  ordinary response (`RES_HEAD` / `RES_BODY*` / `RES_END`) and no pipe is
+  established; the gateway sends it back as a normal HTTP response.
+
+Upgrades are only carried for a tunnel attached to the node the client reached;
+a tunnel served by a peer node returns `502` for an upgrade request, because the
+node-to-node HTTP hop cannot carry a hijacked socket.
+
+## Raw tunnels (tcp / tls)
+
+A `tcp` or `tls` tunnel carries a raw byte stream with no HTTP semantics. The
+agent advertises the protocol in its `hello` and the gateway replies with
+`hello_ok.bind_addr`, the public `host:port` the tunnel is reached on:
+
+* **tcp** — the gateway allocates a public port from its configured range for
+  the tunnel (`rift.example.com:20034`). Each inbound TCP connection opens a new
+  stream to the agent.
+* **tls** — the gateway peeks the ClientHello **SNI** on a shared listener,
+  routes to the tls tunnel whose subdomain matches (`myapp.rift.example.com:8443`),
+  and passes the still-encrypted bytes through; the agent's local service
+  terminates TLS. The gateway never decrypts.
+
+For each inbound connection the gateway allocates `stream_id = n` and sends a
+`REQ_HEAD` with `"raw": true` and no other meaningful fields. There is no
+`RES_HEAD`: `REQ_BODY` carries client→service bytes, `RES_BODY` service→client,
+`REQ_END`/`RES_END` are half-closes, and `RESET` aborts. The agent dials its
+local port and pipes. A failed local dial arrives as `RESET`.
+
+Like upgrades, raw tunnels are served only by the node the connection reached.
 
 ### `ResponseHead`
 

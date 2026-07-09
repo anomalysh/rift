@@ -6,11 +6,19 @@ package e2e
 import (
 	"bufio"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -35,6 +43,7 @@ type stack struct {
 	cfg        *config.Config
 	store      *memory.Store
 	ingress    *ingress.Ingress
+	gw         *gateway.Gateway
 	tokens     *flakyTokens
 	gatewayWS  string
 	ingressURL string
@@ -146,6 +155,7 @@ func newStack(t *testing.T, tune func(*config.Config)) *stack {
 		cfg:        cfg,
 		store:      store,
 		ingress:    ing,
+		gw:         gw,
 		tokens:     tokens,
 		gatewayWS:  "ws" + strings.TrimPrefix(gwSrv.URL, "http") + cfg.Gateway.Path,
 		ingressURL: ingSrv.URL,
@@ -723,6 +733,311 @@ func TestInternalProxyIsClosedWithoutRedis(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404 when redis is disabled", resp.StatusCode)
 	}
+}
+
+// A WebSocket (or any Upgrade) request must switch protocols end to end and
+// then carry raw bytes both ways through the tunnel.
+func TestWebSocketUpgradeIsProxied(t *testing.T) {
+	s := newStack(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// The HTTP handler must never run for an upgrade; the agent echoes raw bytes.
+	a, err := dialAgent(t, ctx, s.gatewayWS, s.token, "wsapp", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Errorf("upgrade request must not reach the HTTP handler")
+	}))
+	if err != nil {
+		t.Fatalf("dial agent: %v", err)
+	}
+	defer a.close()
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(s.ingressURL, "http://"))
+	if err != nil {
+		t.Fatalf("dial ingress: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+
+	req := "GET /socket HTTP/1.1\r\n" +
+		"Host: " + core.Hostname("wsapp", testBaseDomain) + "\r\n" +
+		"Upgrade: websocket\r\n" +
+		"Connection: Upgrade\r\n" +
+		"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n" +
+		"Sec-WebSocket-Version: 13\r\n\r\n"
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatalf("write upgrade request: %v", err)
+	}
+
+	br := bufio.NewReader(conn)
+	statusLine, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read status line: %v", err)
+	}
+	if !strings.Contains(statusLine, "101") {
+		t.Fatalf("status line = %q, want 101 Switching Protocols", statusLine)
+	}
+
+	// The 101 must carry a valid handshake, then the header block ends.
+	sawAccept := false
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read header: %v", err)
+		}
+		if strings.HasPrefix(strings.ToLower(line), "sec-websocket-accept:") {
+			sawAccept = true
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	if !sawAccept {
+		t.Fatal("101 response missing Sec-WebSocket-Accept")
+	}
+
+	// The connection is now a raw pipe: send bytes, expect the echo.
+	for _, msg := range []string{"first-frame", "second-frame"} {
+		if _, err := conn.Write([]byte(msg)); err != nil {
+			t.Fatalf("write %q: %v", msg, err)
+		}
+		buf := make([]byte, len(msg))
+		if _, err := io.ReadFull(br, buf); err != nil {
+			t.Fatalf("read echo of %q: %v", msg, err)
+		}
+		if string(buf) != msg {
+			t.Fatalf("echo = %q, want %q", string(buf), msg)
+		}
+	}
+}
+
+// When the local service does not switch protocols, the gateway must relay its
+// ordinary response rather than hijack the connection into a broken upgrade.
+func TestDeclinedUpgradeRelaysNormalResponse(t *testing.T) {
+	s := newStack(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// This agent answers an upgrade request with a plain 426 + body, standing
+	// in for a service reached at a path that does not speak WebSocket.
+	a, err := dialAgent(t, ctx, s.gatewayWS, s.token, "declineapp", nil,
+		func(a *testAgent) { a.declineUpgrade = true })
+	if err != nil {
+		t.Fatalf("dial agent: %v", err)
+	}
+	defer a.close()
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(s.ingressURL, "http://"))
+	if err != nil {
+		t.Fatalf("dial ingress: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+
+	req := "GET /socket HTTP/1.1\r\n" +
+		"Host: " + core.Hostname("declineapp", testBaseDomain) + "\r\n" +
+		"Upgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUpgradeRequired {
+		t.Fatalf("status = %d, want 426", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "no websocket here" {
+		t.Fatalf("body = %q, want %q", body, "no websocket here")
+	}
+}
+
+// A tcp tunnel must be reachable on the gateway-allocated port and carry raw
+// bytes both ways.
+func TestTCPTunnelPipesBytes(t *testing.T) {
+	s := newStack(t, func(c *config.Config) {
+		c.TCP.Enabled = true
+		c.TCP.ListenHost = "127.0.0.1"
+		c.TCP.AdvertiseHost = "127.0.0.1"
+		c.TCP.PortMin = 21000
+		c.TCP.PortMax = 21050
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// A tcp tunnel needs no HTTP handler; the agent echoes the raw stream.
+	a, err := dialAgentProto(t, ctx, s.gatewayWS, s.token, "tcpapp", "tcp", nil)
+	if err != nil {
+		t.Fatalf("dial tcp agent: %v", err)
+	}
+	defer a.close()
+
+	if !strings.HasPrefix(a.hello.BindAddr, "127.0.0.1:") {
+		t.Fatalf("hello_ok bind_addr = %q, want 127.0.0.1:<port>", a.hello.BindAddr)
+	}
+
+	conn, err := net.Dial("tcp", a.hello.BindAddr)
+	if err != nil {
+		t.Fatalf("dial tcp tunnel at %s: %v", a.hello.BindAddr, err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+
+	for _, msg := range []string{"tcp-hello", "and-again"} {
+		if _, err := conn.Write([]byte(msg)); err != nil {
+			t.Fatalf("write %q: %v", msg, err)
+		}
+		buf := make([]byte, len(msg))
+		if _, err := io.ReadFull(conn, buf); err != nil {
+			t.Fatalf("read echo of %q: %v", msg, err)
+		}
+		if string(buf) != msg {
+			t.Fatalf("echo = %q, want %q", string(buf), msg)
+		}
+	}
+}
+
+// A tcp handshake must be refused when tcp tunnels are disabled.
+func TestTCPRejectedWhenDisabled(t *testing.T) {
+	s := newStack(t, nil) // TCP.Enabled defaults to false
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := dialAgentProto(t, ctx, s.gatewayWS, s.token, "tcpapp", "tcp", nil)
+	if err == nil {
+		t.Fatal("expected tcp handshake to be rejected when disabled")
+	}
+	var rej *handshakeRejection
+	if !asRejection(err, &rej) {
+		t.Fatalf("error = %v, want a handshake rejection", err)
+	}
+	if rej.code != tunnelproto.ErrCodeUnsupportedProtocol {
+		t.Fatalf("rejection code = %q, want %q", rej.code, tunnelproto.ErrCodeUnsupportedProtocol)
+	}
+}
+
+// A tls tunnel must route by ClientHello SNI and pass the encrypted bytes
+// through so a real TLS handshake completes against the agent's local service.
+func TestTLSPassthroughCompletesHandshake(t *testing.T) {
+	const host = "tlsapp." + testBaseDomain
+	cert := selfSignedCert(t, host)
+
+	// The agent's "local service": a TLS server that echoes plaintext.
+	backend, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatalf("tls backend listen: %v", err)
+	}
+	defer func() { _ = backend.Close() }()
+	go func() {
+		for {
+			c, err := backend.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) { defer func() { _ = c.Close() }(); _, _ = io.Copy(c, c) }(c)
+		}
+	}()
+
+	s := newStack(t, func(c *config.Config) {
+		c.TLSTunnel.Enabled = true
+		c.TLSTunnel.ListenAddr = "127.0.0.1:0"
+		c.TLSTunnel.AdvertisePort = 8443
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Serve passthrough on a listener we own, so we know its address.
+	passLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("passthrough listen: %v", err)
+	}
+	go func() { _ = s.gw.ServeTLSTunnelsListener(ctx, passLn) }()
+
+	// The agent proxies raw streams to the local TLS echo server.
+	a, err := dialAgentProto(t, ctx, s.gatewayWS, s.token, "tlsapp", "tls", nil,
+		func(a *testAgent) { a.rawBackend = backend.Addr().String() })
+	if err != nil {
+		t.Fatalf("dial tls agent: %v", err)
+	}
+	defer a.close()
+
+	if want := host + ":8443"; a.hello.BindAddr != want {
+		t.Fatalf("hello_ok bind_addr = %q, want %q", a.hello.BindAddr, want)
+	}
+
+	// A real TLS client dials the passthrough with the tunnel host as SNI.
+	pool := x509.NewCertPool()
+	pool.AddCert(cert.Leaf)
+	client, err := tls.Dial("tcp", passLn.Addr().String(), &tls.Config{
+		ServerName: host,
+		RootCAs:    pool,
+	})
+	if err != nil {
+		t.Fatalf("tls dial through passthrough: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+	_ = client.SetDeadline(time.Now().Add(10 * time.Second))
+
+	// The handshake already proved SNI routing reached the right agent and its
+	// certificate; now prove application bytes flow both ways, end to end.
+	if got := client.ConnectionState().PeerCertificates; len(got) == 0 || got[0].DNSNames[0] != host {
+		t.Fatalf("peer certificate did not match the tls tunnel service")
+	}
+	msg := []byte("secure-hello")
+	if _, err := client.Write(msg); err != nil {
+		t.Fatalf("write over tls: %v", err)
+	}
+	buf := make([]byte, len(msg))
+	if _, err := io.ReadFull(client, buf); err != nil {
+		t.Fatalf("read echo over tls: %v", err)
+	}
+	if string(buf) != string(msg) {
+		t.Fatalf("echo = %q, want %q", buf, msg)
+	}
+}
+
+func TestTLSTunnelRejectedWhenDisabled(t *testing.T) {
+	s := newStack(t, nil) // TLSTunnel.Enabled defaults to false
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := dialAgentProto(t, ctx, s.gatewayWS, s.token, "tlsapp", "tls", nil)
+	var rej *handshakeRejection
+	if !asRejection(err, &rej) {
+		t.Fatalf("error = %v, want a handshake rejection", err)
+	}
+	if rej.code != tunnelproto.ErrCodeUnsupportedProtocol {
+		t.Fatalf("rejection code = %q, want %q", rej.code, tunnelproto.ErrCodeUnsupportedProtocol)
+	}
+}
+
+// selfSignedCert mints an in-memory certificate valid for host.
+func selfSignedCert(t *testing.T, host string) tls.Certificate {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: host},
+		DNSNames:     []string{host},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse certificate: %v", err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: priv, Leaf: leaf}
 }
 
 func nopHandler() http.Handler {

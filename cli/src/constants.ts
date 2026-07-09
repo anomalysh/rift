@@ -97,8 +97,10 @@ export const ResetCode = {
 
 export type ResetCodeValue = (typeof ResetCode)[keyof typeof ResetCode];
 
-/** The only application protocol this build tunnels. */
-export const SUPPORTED_PROTOCOLS = ["http"] as const;
+/** Application protocols this build tunnels. `http` is routed by subdomain;
+ *  `tcp` is reached on a gateway-allocated port; `tls` is SNI-routed and passed
+ *  through to a local service that terminates TLS. */
+export const SUPPORTED_PROTOCOLS = ["http", "tcp", "tls"] as const;
 export type SupportedProtocol = (typeof SUPPORTED_PROTOCOLS)[number];
 
 /** Log levels, ordered from most to least verbose. */
@@ -113,6 +115,11 @@ export const ENV = {
   LOG_LEVEL: "RIFT_LOG_LEVEL",
   XDG_CONFIG_HOME: "XDG_CONFIG_HOME",
   HOME: "HOME",
+  // Colour opt-out for the interactive TUI. Either the cross-tool NO_COLOR
+  // convention (https://no-color.org) or the rift-specific override disables
+  // colour and cursor control, falling back to plain text.
+  NO_COLOR: "NO_COLOR",
+  RIFT_NO_COLOR: "RIFT_NO_COLOR",
 } as const;
 
 /**
@@ -157,7 +164,8 @@ export const HOP_BY_HOP_HEADERS: ReadonlySet<string> = new Set([
   "trailer",
 ]);
 
-/** Reconnection backoff: exponential base, ceiling, and full-jitter policy. */
+/** Reconnection backoff bounds. The policy is decorrelated jitter; see
+ *  backoff.ts. BASE_MS is the floor for every retry, CAP_MS the ceiling. */
 export const RECONNECT = {
   BASE_MS: 500,
   CAP_MS: 30_000,
@@ -172,3 +180,10 @@ export const BACKPRESSURE_THRESHOLD_BYTES = 4 * MAX_PAYLOAD_BYTES;
 
 /** How often to poll bufferedAmount while waiting for the socket to drain. */
 export const DRAIN_POLL_INTERVAL_MS = 5;
+
+/**
+ * Upper bound on the response header block the agent buffers while proxying a
+ * connection upgrade (WebSocket etc.) over a raw socket. A local service that
+ * never terminates its headers must not grow this without limit.
+ */
+export const MAX_UPGRADE_HEAD_BYTES = 64 * 1024;

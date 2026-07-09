@@ -77,6 +77,9 @@ type HelloOK struct {
 	Hostname            string `json:"hostname"`
 	URL                 string `json:"url"`
 	HeartbeatIntervalMS int64  `json:"heartbeat_interval_ms"`
+	// BindAddr is the public host:port a raw tunnel (tcp/tls) is reached on.
+	// Empty for http tunnels, which are reached by URL.
+	BindAddr string `json:"bind_addr,omitempty"`
 }
 
 // HelloError rejects the handshake; the connection closes after it is sent.
@@ -104,6 +107,17 @@ type RequestHead struct {
 	Scheme     string              `json:"scheme"`
 	RemoteAddr string              `json:"remote_addr"`
 	HasBody    bool                `json:"has_body"`
+	// Raw marks the stream as a raw byte pipe with no HTTP semantics, used by
+	// tcp/tls tunnels: the agent dials its local port and pipes bytes both ways
+	// (REQ_BODY in, RES_BODY out) without a RequestHead/ResponseHead exchange.
+	Raw bool `json:"raw,omitempty"`
+	// Upgrade marks a connection-upgrade request (WebSocket and other
+	// Upgrade-based protocols). The agent then dials the local service over a
+	// raw socket and, once it switches protocols, the stream becomes a
+	// full-duplex byte pipe: REQ_BODY carries client->service bytes, RES_BODY
+	// service->client, and REQ_END/RES_END a half-close. Omitted (false) for an
+	// ordinary HTTP request so existing frames are byte-identical.
+	Upgrade bool `json:"upgrade,omitempty"`
 }
 
 // ResponseHead is the head of the local service's response (agent -> gateway).

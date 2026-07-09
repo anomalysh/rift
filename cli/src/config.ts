@@ -9,8 +9,14 @@
 // `token` and `server` have no default: a missing one is a clear, actionable
 // error rather than a crash.
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 
 import {
   CONFIG_DIR_NAME,
@@ -187,4 +193,43 @@ export function loadConfigFile(
     return null;
   }
   return parseConfigFile(readFileSync(path, "utf8"), path);
+}
+
+/**
+ * Merge `updates` into the config file, preserving any keys already present
+ * (including ones this version does not know about), and return the path plus
+ * the keys written. The file holds a secret token, so the directory is created
+ * 0700 and the file forced to 0600 even if it already existed.
+ */
+export function writeConfigValues(
+  env: Record<string, string | undefined>,
+  updates: PartialConfig,
+): { path: string; keys: string[] } {
+  const path = configFilePath(env);
+
+  let current: Record<string, unknown> = {};
+  if (existsSync(path)) {
+    const text = readFileSync(path, "utf8");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (err) {
+      throw new ConfigError(
+        `invalid JSON in ${path}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (!isRecord(parsed)) {
+      throw new ConfigError(`invalid config in ${path}: expected a JSON object`);
+    }
+    current = parsed;
+  }
+
+  const merged = { ...current, ...updates };
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, JSON.stringify(merged, null, 2) + "\n", { mode: 0o600 });
+  // writeFileSync only applies mode on creation; enforce it for an existing
+  // file that may have been created with looser permissions.
+  chmodSync(path, 0o600);
+
+  return { path, keys: Object.keys(updates) };
 }

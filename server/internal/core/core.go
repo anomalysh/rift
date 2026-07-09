@@ -14,11 +14,31 @@ import (
 // Protocol is the tunnelled application protocol.
 type Protocol string
 
-// ProtocolHTTP is the only protocol supported today. TCP and TLS are reserved.
-const ProtocolHTTP Protocol = "http"
+const (
+	// ProtocolHTTP tunnels HTTP, routed by subdomain and served over the shared
+	// ingress (and TLS) listener.
+	ProtocolHTTP Protocol = "http"
+	// ProtocolTCP tunnels a raw TCP stream, reached on a public port the gateway
+	// allocates for the tunnel.
+	ProtocolTCP Protocol = "tcp"
+	// ProtocolTLS tunnels raw TLS, routed by the ClientHello SNI to a subdomain
+	// and passed through to the agent, which terminates TLS.
+	ProtocolTLS Protocol = "tls"
+)
 
 // Valid reports whether the protocol is one this build can serve.
-func (p Protocol) Valid() bool { return p == ProtocolHTTP }
+func (p Protocol) Valid() bool {
+	switch p {
+	case ProtocolHTTP, ProtocolTCP, ProtocolTLS:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsRaw reports whether the protocol is carried as a raw byte stream rather
+// than as HTTP request/response exchanges.
+func (p Protocol) IsRaw() bool { return p == ProtocolTCP || p == ProtocolTLS }
 
 // String implements fmt.Stringer.
 func (p Protocol) String() string { return string(p) }

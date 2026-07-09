@@ -1,11 +1,16 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type { FlagConfig } from "../src/args.ts";
 import {
   ConfigError,
   configFilePath,
+  loadConfigFile,
   parseConfigFile,
   resolveConfig,
+  writeConfigValues,
   type PartialConfig,
 } from "../src/config.ts";
 
@@ -167,5 +172,58 @@ describe("parseConfigFile", () => {
     expect(() => parseConfigFile(JSON.stringify({ logLevel: "loud" }), CONFIG_PATH)).toThrow(
       ConfigError,
     );
+  });
+});
+
+describe("writeConfigValues", () => {
+  let dir: string;
+  let env: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "rift-cfg-"));
+    env = { XDG_CONFIG_HOME: dir };
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("creates the file and round-trips through loadConfigFile", () => {
+    const { path, keys } = writeConfigValues(env, { token: "rift_abc" });
+    expect(keys).toEqual(["token"]);
+    expect(path).toBe(configFilePath(env));
+    expect(loadConfigFile(env)).toEqual({ token: "rift_abc" });
+  });
+
+  test("writes the config file 0600 (owner-only, holds a secret)", () => {
+    const { path } = writeConfigValues(env, { token: "rift_abc" });
+    // Low 9 permission bits.
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  test("merges onto existing keys instead of clobbering them", () => {
+    writeConfigValues(env, { server: "wss://gw", host: "10.0.0.1" });
+    writeConfigValues(env, { token: "rift_abc" });
+    expect(loadConfigFile(env)).toEqual({
+      server: "wss://gw",
+      host: "10.0.0.1",
+      token: "rift_abc",
+    });
+  });
+
+  test("tightens permissions on an already-loose file", () => {
+    const path = configFilePath(env);
+    // Simulate a pre-existing world-readable config.
+    mkdirSync(join(dir, "rift"), { recursive: true });
+    writeFileSync(path, JSON.stringify({ server: "wss://old" }), { mode: 0o644 });
+    writeConfigValues(env, { token: "rift_abc" });
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  test("rejects a corrupt existing config file", () => {
+    const path = configFilePath(env);
+    mkdirSync(join(dir, "rift"), { recursive: true });
+    writeFileSync(path, "{not json", "utf8");
+    expect(() => writeConfigValues(env, { token: "rift_abc" })).toThrow(ConfigError);
   });
 });

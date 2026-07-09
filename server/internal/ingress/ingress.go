@@ -221,9 +221,20 @@ func (i *Ingress) handlePublic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Annotate once, here at the public edge, so the local service behind the
+	// tunnel learns who actually connected. This must not happen again on the
+	// internal peer hop (handleInternalProxy), or a forwarding node's own
+	// address would overwrite the real client's.
+	i.annotateForwarded(r)
+	upgrade := isUpgradeRequest(r)
+
 	ctx := r.Context()
 	if sess, found := i.registry.Lookup(ctx, sub); found {
-		i.proxy(w, r, sess, sub)
+		if upgrade {
+			i.proxyUpgrade(w, r, sess, sub)
+		} else {
+			i.proxy(w, r, sess, sub)
+		}
 		return
 	}
 
@@ -231,6 +242,14 @@ func (i *Ingress) handlePublic(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		i.logger.Error("peer lookup failed", slog.String("subdomain", sub), slog.Any("error", err))
 	} else if remote {
+		if upgrade {
+			// A WebSocket needs a hijacked, full-duplex socket, which the
+			// node-to-node HTTP forward cannot carry. The agent must be attached
+			// to the node the client reached.
+			i.writeGatewayError(w, r, http.StatusBadGateway, "upgrade_not_local",
+				"This tunnel is served by another node; rift cannot yet carry a connection upgrade across nodes.")
+			return
+		}
 		i.forwardToPeer(w, r, nodeURL, sub)
 		return
 	}
@@ -281,6 +300,29 @@ func (i *Ingress) handleInternalProxy(w http.ResponseWriter, r *http.Request) {
 	r.Header.Del(config.HeaderRiftSubdomain)
 
 	i.proxy(w, r, sess, sub)
+}
+
+// annotateForwarded adds the standard reverse-proxy headers describing the
+// public client, so the local service sees the caller rather than the gateway.
+//
+// X-Forwarded-For is preserved when an upstream (Caddy) already built the
+// chain — its left-most entry is the real client — and only synthesised when
+// rift is itself the first proxy. X-Real-IP always carries the resolved client
+// address, which honours the trusted-proxy allowlist and so is the value to
+// trust. Proto and Host are filled only if absent, leaving an upstream's values
+// intact.
+func (i *Ingress) annotateForwarded(r *http.Request) {
+	clientIP := i.clientIP(r)
+	if r.Header.Get(config.HeaderForwardedFor) == "" {
+		r.Header.Set(config.HeaderForwardedFor, clientIP)
+	}
+	r.Header.Set(config.HeaderRealIP, clientIP)
+	if r.Header.Get(config.HeaderForwardedProto) == "" {
+		r.Header.Set(config.HeaderForwardedProto, i.cfg.Tunnel.PublicScheme)
+	}
+	if r.Header.Get(config.HeaderForwardedHost) == "" {
+		r.Header.Set(config.HeaderForwardedHost, r.Host)
+	}
 }
 
 // proxy ships one request through the tunnel and streams the response back.

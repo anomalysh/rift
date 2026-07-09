@@ -9,6 +9,7 @@ import {
   type LogLevel,
   type SupportedProtocol,
 } from "./constants.ts";
+import type { PartialConfig } from "./config.ts";
 import { isLogLevel } from "./logger.ts";
 
 /** Flag values that feed configuration resolution (see config.ts). */
@@ -28,12 +29,23 @@ export type ParsedArgs =
       subdomain?: string;
       flags: FlagConfig;
     }
+  | { kind: "set-config"; updates: PartialConfig }
   | { kind: "help" }
   | { kind: "version" }
   | { kind: "error"; message: string };
 
-/** Flags that take a value; the rest are booleans. */
+/** Run flags that take a value; the rest are booleans. */
 const VALUE_FLAGS = new Set(["--token", "--server", "--host", "--log-level"]);
+
+// `--set-*` flags do not open a tunnel: they persist a value to the config file
+// and exit. They mirror the run flags one-for-one so `rift --set-token <t>`
+// saves the same setting `--token <t>` would supply for a single run.
+const SET_FLAGS = new Set([
+  "--set-token",
+  "--set-server",
+  "--set-host",
+  "--set-log-level",
+]);
 
 function parsePort(raw: string): number | null {
   // Strict integer: reject "3000.5", "0x10", " 80", "abc", "" up front.
@@ -54,6 +66,8 @@ function isSupportedProtocol(v: string): v is SupportedProtocol {
 export function parseArgs(argv: readonly string[]): ParsedArgs {
   const positionals: string[] = [];
   const flags: FlagConfig = {};
+  const updates: PartialConfig = {};
+  let hasSet = false;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -76,7 +90,8 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       // Support both `--flag value` and `--flag=value`.
       const eq = arg.indexOf("=");
       const name = eq === -1 ? arg : arg.slice(0, eq);
-      if (!VALUE_FLAGS.has(name)) {
+      const isSet = SET_FLAGS.has(name);
+      if (!VALUE_FLAGS.has(name) && !isSet) {
         return { kind: "error", message: `unknown flag: ${name}` };
       }
       let value: string | undefined;
@@ -89,7 +104,13 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       if (value === undefined) {
         return { kind: "error", message: `flag ${name} requires a value` };
       }
-      const applied = applyValueFlag(flags, name, value);
+      let applied: string | null;
+      if (isSet) {
+        hasSet = true;
+        applied = applySetFlag(updates, name, value);
+      } else {
+        applied = applyValueFlag(flags, name, value);
+      }
       if (applied !== null) {
         return { kind: "error", message: applied };
       }
@@ -101,6 +122,18 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     }
 
     positionals.push(arg);
+  }
+
+  // A `--set-*` invocation persists config and exits; it does not open a
+  // tunnel, so it takes no positional arguments.
+  if (hasSet) {
+    if (positionals.length > 0) {
+      return {
+        kind: "error",
+        message: `--set-* saves configuration and cannot be combined with a tunnel command (got ${JSON.stringify(positionals[0])})`,
+      };
+    }
+    return { kind: "set-config", updates };
   }
 
   if (positionals.length === 0) {
@@ -161,6 +194,36 @@ function applyValueFlag(
   }
 }
 
+/** Apply a `--set-*` flag into the pending config updates. */
+function applySetFlag(
+  updates: PartialConfig,
+  name: string,
+  value: string,
+): string | null {
+  if (value === "") {
+    return `flag ${name} requires a non-empty value`;
+  }
+  switch (name) {
+    case "--set-token":
+      updates.token = value;
+      return null;
+    case "--set-server":
+      updates.server = value;
+      return null;
+    case "--set-host":
+      updates.host = value;
+      return null;
+    case "--set-log-level":
+      if (!isLogLevel(value)) {
+        return `invalid --set-log-level ${JSON.stringify(value)}: expected one of ${LOG_LEVELS.join(", ")}`;
+      }
+      updates.logLevel = value;
+      return null;
+    default:
+      return `unknown flag: ${name}`;
+  }
+}
+
 /** Usage text for `--help`. */
 export function usageText(): string {
   return `rift — expose a local port through the rift gateway
@@ -169,13 +232,20 @@ USAGE
   rift <protocol> <port> [subdomain] [flags]
 
 EXAMPLES
-  rift http 3000                 open a tunnel with a random subdomain
+  rift http 3000                 open an HTTP tunnel with a random subdomain
   rift http 3000 myapp           request the subdomain "myapp"
+  rift tcp 22                    expose local TCP port 22 on a gateway port
+  rift tls 8443 myapp            SNI-route myapp.<domain> to a local TLS service
+  rift --set-token rift_xxx      save the auth token to the config file
+  rift --set-server wss://...    save the gateway URL to the config file
 
 ARGUMENTS
-  <protocol>   application protocol to tunnel (supported: ${SUPPORTED_PROTOCOLS.join(", ")})
+  <protocol>   what to tunnel (supported: ${SUPPORTED_PROTOCOLS.join(", ")})
+                 http  routed by subdomain over the shared gateway
+                 tcp   raw TCP, reached on a public port the gateway allocates
+                 tls   raw TLS, SNI-routed; the local service terminates TLS
   <port>       local TCP port to forward to (1..65535)
-  [subdomain]  desired subdomain; the gateway picks one at random if omitted
+  [subdomain]  desired subdomain (http/tls); the gateway picks one if omitted
 
 FLAGS
   --token <t>        gateway auth token        (env ${"RIFT_TOKEN"})
@@ -185,6 +255,13 @@ FLAGS
   --insecure         skip TLS certificate verification (wss only)
   --version, -v      print version and exit
   --help, -h         print this help and exit
+
+PERSIST CONFIG
+  --set-token <t>       save the auth token, then exit
+  --set-server <url>    save the gateway URL, then exit
+  --set-host <host>     save the default local host, then exit
+  --set-log-level <lvl> save the default log level, then exit
+  Values are written to ~/.config/rift/config.json (created 0700, file 0600).
 
 CONFIG
   Precedence (highest first): flags > env vars > ~/.config/rift/config.json > defaults.
