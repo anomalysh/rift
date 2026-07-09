@@ -34,9 +34,9 @@ func (s *fakeTokenStore) FindByHash(_ context.Context, hash string) (*core.Token
 func (s *fakeTokenStore) FindByID(context.Context, string) (*core.Token, error) {
 	return nil, core.ErrNotFound
 }
-func (s *fakeTokenStore) Create(context.Context, *core.Token) error         { return nil }
-func (s *fakeTokenStore) List(context.Context) ([]core.Token, error)        { return nil, nil }
-func (s *fakeTokenStore) Revoke(context.Context, string, time.Time) error   { return nil }
+func (s *fakeTokenStore) Create(context.Context, *core.Token) error       { return nil }
+func (s *fakeTokenStore) List(context.Context) ([]core.Token, error)      { return nil, nil }
+func (s *fakeTokenStore) Revoke(context.Context, string, time.Time) error { return nil }
 func (s *fakeTokenStore) TouchLastUsed(context.Context, string, time.Time) error {
 	return nil
 }
@@ -133,17 +133,17 @@ func TestAuthenticate(t *testing.T) {
 
 func TestBearerFromHeader(t *testing.T) {
 	cases := []struct {
-		in       string
-		wantTok  string
-		wantOK   bool
+		in      string
+		wantTok string
+		wantOK  bool
 	}{
 		{"Bearer x", "x", true},
-		{"bearer x", "x", true},          // scheme is case-insensitive
+		{"bearer x", "x", true}, // scheme is case-insensitive
 		{"BEARER secret-token", "secret-token", true},
-		{"Bearer", "", false},            // no space, no credential
-		{"", "", false},                  // empty header
-		{"Basic x", "", false},           // wrong scheme
-		{"Bearer ", "", false},           // empty credential
+		{"Bearer", "", false},  // no space, no credential
+		{"", "", false},        // empty header
+		{"Basic x", "", false}, // wrong scheme
+		{"Bearer ", "", false}, // empty credential
 	}
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {

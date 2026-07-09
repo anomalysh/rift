@@ -135,8 +135,8 @@ type fakeTunnelStore struct {
 	active []core.Tunnel
 }
 
-func (s *fakeTunnelStore) Claim(context.Context, *core.Tunnel) error         { return nil }
-func (s *fakeTunnelStore) Release(context.Context, string) error             { return nil }
+func (s *fakeTunnelStore) Claim(context.Context, *core.Tunnel) error          { return nil }
+func (s *fakeTunnelStore) Release(context.Context, string) error              { return nil }
 func (s *fakeTunnelStore) Heartbeat(context.Context, string, time.Time) error { return nil }
 func (s *fakeTunnelStore) GetBySubdomain(context.Context, string) (*core.Tunnel, error) {
 	return nil, core.ErrNotFound

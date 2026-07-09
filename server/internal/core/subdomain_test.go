@@ -24,14 +24,14 @@ func TestSubdomainValidate(t *testing.T) {
 		{"demo", nil},
 		{"my-app-1", nil},
 		{"a1b", nil},
-		{"ab", ErrSubdomainInvalid},                       // too short
-		{"-lead", ErrSubdomainInvalid},                    // leading hyphen
-		{"trail-", ErrSubdomainInvalid},                   // trailing hyphen
-		{"Upper", ErrSubdomainInvalid},                    // caller must normalize first
-		{"has_underscore", ErrSubdomainInvalid},           // not a legal DNS label
-		{"a.b", ErrSubdomainInvalid},                      // dots would nest a zone
-		{"www", ErrSubdomainReserved},                     // blocklisted
-		{"api", ErrSubdomainReserved},                     // blocklist is case-folded
+		{"ab", ErrSubdomainInvalid},             // too short
+		{"-lead", ErrSubdomainInvalid},          // leading hyphen
+		{"trail-", ErrSubdomainInvalid},         // trailing hyphen
+		{"Upper", ErrSubdomainInvalid},          // caller must normalize first
+		{"has_underscore", ErrSubdomainInvalid}, // not a legal DNS label
+		{"a.b", ErrSubdomainInvalid},            // dots would nest a zone
+		{"www", ErrSubdomainReserved},           // blocklisted
+		{"api", ErrSubdomainReserved},           // blocklist is case-folded
 	}
 	for _, tc := range cases {
 		err := r.Validate(tc.in)

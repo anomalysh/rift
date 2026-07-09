@@ -97,11 +97,11 @@ const (
 
 // Errors returned by frame decoding.
 var (
-	ErrShortFrame     = errors.New("tunnelproto: frame shorter than header")
+	ErrShortFrame      = errors.New("tunnelproto: frame shorter than header")
 	ErrPayloadTooLarge = errors.New("tunnelproto: payload exceeds max frame size")
-	ErrLengthMismatch = errors.New("tunnelproto: declared length does not match payload")
-	ErrControlStream  = errors.New("tunnelproto: control frame must use stream 0")
-	ErrDataStream     = errors.New("tunnelproto: data frame must not use stream 0")
+	ErrLengthMismatch  = errors.New("tunnelproto: declared length does not match payload")
+	ErrControlStream   = errors.New("tunnelproto: control frame must use stream 0")
+	ErrDataStream      = errors.New("tunnelproto: data frame must not use stream 0")
 )
 
 // Frame is a decoded wire frame. Payload aliases the caller's buffer on

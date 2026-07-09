@@ -25,14 +25,14 @@ func (p Protocol) String() string { return string(p) }
 
 // Sentinel errors. Adapters wrap these; callers match with errors.Is.
 var (
-	ErrNotFound           = errors.New("core: not found")
-	ErrUnauthorized       = errors.New("core: unauthorized")
-	ErrSubdomainTaken     = errors.New("core: subdomain already in use")
-	ErrSubdomainReserved  = errors.New("core: subdomain is reserved")
-	ErrSubdomainInvalid   = errors.New("core: subdomain is invalid")
-	ErrTunnelLimit        = errors.New("core: tunnel limit reached for token")
-	ErrConflict           = errors.New("core: conflicting write")
-	ErrUnsupportedProto   = errors.New("core: unsupported protocol")
+	ErrNotFound          = errors.New("core: not found")
+	ErrUnauthorized      = errors.New("core: unauthorized")
+	ErrSubdomainTaken    = errors.New("core: subdomain already in use")
+	ErrSubdomainReserved = errors.New("core: subdomain is reserved")
+	ErrSubdomainInvalid  = errors.New("core: subdomain is invalid")
+	ErrTunnelLimit       = errors.New("core: tunnel limit reached for token")
+	ErrConflict          = errors.New("core: conflicting write")
+	ErrUnsupportedProto  = errors.New("core: unsupported protocol")
 
 	// ErrTunnelUnavailable means the agent connection died with a request in
 	// flight. The ingress turns this into a 502.

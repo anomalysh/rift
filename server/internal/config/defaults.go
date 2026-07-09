@@ -53,8 +53,8 @@ const (
 	DefaultSubdomainMinLength = 3
 	DefaultSubdomainMaxLength = 63
 	// Lowercase alphanumeric with internal hyphens; no leading/trailing hyphen.
-	DefaultSubdomainPattern     = `^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`
-	DefaultSubdomainGenLength   = 10
+	DefaultSubdomainPattern   = `^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`
+	DefaultSubdomainGenLength = 10
 	// Ambiguous glyphs (0/o, 1/l/i) are omitted so a subdomain can be read
 	// aloud or copied off a terminal without transcription errors.
 	DefaultSubdomainGenAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"

@@ -21,11 +21,11 @@ const (
 	KeyIngressTrustedProxyIPs = EnvPrefix + "INGRESS_TRUSTED_PROXY_IPS"
 
 	// Gateway: WebSocket endpoint that tunnel agents dial.
-	KeyGatewayAddr              = EnvPrefix + "GATEWAY_ADDR"
-	KeyGatewayPath              = EnvPrefix + "GATEWAY_PATH"
-	KeyGatewayHandshakeTimeout  = EnvPrefix + "GATEWAY_HANDSHAKE_TIMEOUT"
-	KeyGatewayWriteTimeout      = EnvPrefix + "GATEWAY_WRITE_TIMEOUT"
-	KeyGatewayAllowedOrigins    = EnvPrefix + "GATEWAY_ALLOWED_ORIGINS"
+	KeyGatewayAddr             = EnvPrefix + "GATEWAY_ADDR"
+	KeyGatewayPath             = EnvPrefix + "GATEWAY_PATH"
+	KeyGatewayHandshakeTimeout = EnvPrefix + "GATEWAY_HANDSHAKE_TIMEOUT"
+	KeyGatewayWriteTimeout     = EnvPrefix + "GATEWAY_WRITE_TIMEOUT"
+	KeyGatewayAllowedOrigins   = EnvPrefix + "GATEWAY_ALLOWED_ORIGINS"
 
 	// Admin API: token and reservation management.
 	KeyAdminAddr    = EnvPrefix + "ADMIN_ADDR"
@@ -33,11 +33,11 @@ const (
 	KeyAdminEnabled = EnvPrefix + "ADMIN_ENABLED"
 
 	// Postgres.
-	KeyPostgresDSN             = EnvPrefix + "POSTGRES_DSN"
-	KeyPostgresMaxConns        = EnvPrefix + "POSTGRES_MAX_CONNS"
-	KeyPostgresMinConns        = EnvPrefix + "POSTGRES_MIN_CONNS"
-	KeyPostgresConnectTimeout  = EnvPrefix + "POSTGRES_CONNECT_TIMEOUT"
-	KeyPostgresMigrateOnStart  = EnvPrefix + "POSTGRES_MIGRATE_ON_START"
+	KeyPostgresDSN            = EnvPrefix + "POSTGRES_DSN"
+	KeyPostgresMaxConns       = EnvPrefix + "POSTGRES_MAX_CONNS"
+	KeyPostgresMinConns       = EnvPrefix + "POSTGRES_MIN_CONNS"
+	KeyPostgresConnectTimeout = EnvPrefix + "POSTGRES_CONNECT_TIMEOUT"
+	KeyPostgresMigrateOnStart = EnvPrefix + "POSTGRES_MIGRATE_ON_START"
 
 	// Redis (optional; enables multi-node routing).
 	KeyRedisEnabled = EnvPrefix + "REDIS_ENABLED"
@@ -52,12 +52,12 @@ const (
 	KeyPeerSecret = EnvPrefix + "PEER_SECRET"
 
 	// Tunnel behaviour.
-	KeyBaseDomain          = EnvPrefix + "BASE_DOMAIN"
-	KeyPublicScheme        = EnvPrefix + "PUBLIC_SCHEME"
-	KeyNodeAdvertiseURL    = EnvPrefix + "NODE_ADVERTISE_URL"
-	KeyHeartbeatInterval   = EnvPrefix + "HEARTBEAT_INTERVAL"
-	KeyHeartbeatTimeout    = EnvPrefix + "HEARTBEAT_TIMEOUT"
-	KeyReaperInterval      = EnvPrefix + "REAPER_INTERVAL"
+	KeyBaseDomain        = EnvPrefix + "BASE_DOMAIN"
+	KeyPublicScheme      = EnvPrefix + "PUBLIC_SCHEME"
+	KeyNodeAdvertiseURL  = EnvPrefix + "NODE_ADVERTISE_URL"
+	KeyHeartbeatInterval = EnvPrefix + "HEARTBEAT_INTERVAL"
+	KeyHeartbeatTimeout  = EnvPrefix + "HEARTBEAT_TIMEOUT"
+	KeyReaperInterval    = EnvPrefix + "REAPER_INTERVAL"
 	// KeyTokenRevalidateInterval controls how often a live tunnel re-checks
 	// that its token is still valid, so revoking a token tears down the
 	// tunnels it opened instead of only blocking new ones.
@@ -69,12 +69,12 @@ const (
 	KeyStreamBufferSize    = EnvPrefix + "STREAM_BUFFER_SIZE"
 
 	// Subdomain rules.
-	KeySubdomainMinLength    = EnvPrefix + "SUBDOMAIN_MIN_LENGTH"
-	KeySubdomainMaxLength    = EnvPrefix + "SUBDOMAIN_MAX_LENGTH"
-	KeySubdomainPattern      = EnvPrefix + "SUBDOMAIN_PATTERN"
-	KeySubdomainBlocklist    = EnvPrefix + "SUBDOMAIN_BLOCKLIST"
-	KeySubdomainGenLength    = EnvPrefix + "SUBDOMAIN_GENERATED_LENGTH"
-	KeySubdomainGenAlphabet  = EnvPrefix + "SUBDOMAIN_GENERATED_ALPHABET"
+	KeySubdomainMinLength   = EnvPrefix + "SUBDOMAIN_MIN_LENGTH"
+	KeySubdomainMaxLength   = EnvPrefix + "SUBDOMAIN_MAX_LENGTH"
+	KeySubdomainPattern     = EnvPrefix + "SUBDOMAIN_PATTERN"
+	KeySubdomainBlocklist   = EnvPrefix + "SUBDOMAIN_BLOCKLIST"
+	KeySubdomainGenLength   = EnvPrefix + "SUBDOMAIN_GENERATED_LENGTH"
+	KeySubdomainGenAlphabet = EnvPrefix + "SUBDOMAIN_GENERATED_ALPHABET"
 )
 
 // Route paths exposed by the server. Declared once so Caddy config, tests and
@@ -102,13 +102,13 @@ const (
 
 // HTTP header names used across ingress and peer forwarding.
 const (
-	HeaderForwardedFor    = "X-Forwarded-For"
-	HeaderForwardedProto  = "X-Forwarded-Proto"
-	HeaderForwardedHost   = "X-Forwarded-Host"
-	HeaderRealIP          = "X-Real-IP"
-	HeaderAuthorization   = "Authorization"
-	HeaderTunlSubdomain   = "X-Tunl-Subdomain"
-	HeaderTunlRequestID   = "X-Tunl-Request-Id"
-	HeaderTunlPeerToken   = "X-Tunl-Peer-Token"
-	BearerPrefix          = "Bearer "
+	HeaderForwardedFor   = "X-Forwarded-For"
+	HeaderForwardedProto = "X-Forwarded-Proto"
+	HeaderForwardedHost  = "X-Forwarded-Host"
+	HeaderRealIP         = "X-Real-IP"
+	HeaderAuthorization  = "Authorization"
+	HeaderTunlSubdomain  = "X-Tunl-Subdomain"
+	HeaderTunlRequestID  = "X-Tunl-Request-Id"
+	HeaderTunlPeerToken  = "X-Tunl-Peer-Token"
+	BearerPrefix         = "Bearer "
 )
