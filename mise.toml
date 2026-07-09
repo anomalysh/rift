@@ -19,16 +19,20 @@ bun = "1.3.14"
 # Aggregate tasks span projects, so they live at the root and depend on the
 # per-project tasks by absolute reference. Ops workflows (deploy, provision,
 # backup, …) stay in the Makefile.
-[tasks.check]
-description = "Lint, type-check, and test everything"
+# The one task CI runs (`mise run ci`), and the same one to run everything
+# locally. CI adds -race and a Postgres DSN via env; see .github/workflows/ci.yml.
+[tasks.ci]
+description = "Everything CI runs: lint, type-check, build, test, and CVE-scan"
 depends = [
   "//projects/cli:lint",
   "//projects/cli:typecheck",
   "//projects/cli:test",
+  "//projects/cli:build",
   "//projects/server:gofmt",
   "//projects/server:vet",
   "//projects/server:build",
   "//projects/server:test",
+  "//projects/server:vuln",
 ]
 
 [tasks.pre-commit]

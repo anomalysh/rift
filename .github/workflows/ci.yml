@@ -3,13 +3,15 @@ name: ci
 # Build, lint, and test on every branch push and pull request. Kept
 # secret-free so it also passes on pull requests opened from forks.
 #
-# The toolchain (Go, Bun, biome) is provisioned by mise from the repo's
-# mise.toml files, so CI runs the exact pinned versions used locally, and the
-# checks run through the same `mise run //project:task` tasks — one source of
-# truth for both. See https://mise.jdx.dev/continuous-integration.html.
+# The whole toolchain (Go, Bun, biome) and every check come from mise: CI runs
+# the same `mise run ci` task used locally, at the exact pinned versions. That
+# task depends on the per-project install/deps tasks, so it fetches dependencies
+# (with the network) before the network-denied checks run offline. One source of
+# truth for local and CI. See https://mise.jdx.dev/continuous-integration.html.
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 # One in-flight run per ref; a new push cancels the previous run for that ref.
 concurrency:
@@ -21,11 +23,12 @@ permissions:
   contents: read
 
 jobs:
-  server:
-    name: server (go)
+  ci:
+    name: ci (mise)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # A real Postgres so the store tests run instead of skipping (see below).
+    # A real Postgres so the store tests run instead of skipping (see the DSN
+    # below); the mise `ci` task runs the server suite with -race against it.
     services:
       postgres:
         image: postgres:16-alpine
@@ -41,17 +44,13 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-    defaults:
-      run:
-        working-directory: projects/server
     steps:
       # Third-party actions are pinned to full commit SHAs (immutable) with the
       # human-readable version in a trailing comment, per supply-chain hardening.
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      # mise provides the pinned Go toolchain (root mise.toml [tools]); no
-      # separate setup-go, so local and CI build with the exact same version.
+      # mise installs the pinned Go, Bun, and biome from the repo's mise.toml.
       - name: Set up mise
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
 
@@ -65,69 +64,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
-      # Warm the module cache so the network-denied build/vet/gofmt tasks (which
-      # are sandboxed with deny_net) run fully offline.
-      - name: Download modules
-        run: go mod download
-
-      - name: Build
-        run: mise run //projects/server:build
-
-      - name: Vet
-        run: mise run //projects/server:vet
-
-      - name: Gofmt
-        run: mise run //projects/server:gofmt
-
-      - name: Test (race)
-        # The store tests skip unless RIFT_TEST_POSTGRES_DSN is set; point it at
-        # the service container so they actually run. sslmode=disable: the
-        # container serves plaintext on the runner-local network. Run explicitly
-        # (not the mise task) for -race, which the local task omits for speed.
+      - name: Run CI
+        # One task fans out to lint, type-check, build, test, and CVE-scan across
+        # both projects (parallel, with dependency ordering). GO_TEST_FLAGS adds
+        # the race detector; RIFT_TEST_POSTGRES_DSN points the store tests at the
+        # service container so they run instead of skipping.
         env:
+          GO_TEST_FLAGS: -race
           RIFT_TEST_POSTGRES_DSN: postgres://rift:rift@localhost:5432/rift_test?sslmode=disable
-        run: go test -race ./...
-
-      - name: Vulnerability scan
-        # Fails on a CVE reachable from our code (stdlib or a dependency).
-        run: mise run //projects/server:vuln
-
-  cli:
-    name: cli (bun)
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: projects/cli
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-
-      # mise provides Bun and biome (both pinned in mise.toml). biome is no
-      # longer an npm devDependency, so lint runs the mise-managed version.
-      - name: Set up mise
-        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
-
-      - name: Install deps
-        run: bun install --frozen-lockfile
-
-      - name: Lint (biome)
-        run: mise run //projects/cli:lint
-
-      - name: Typecheck
-        run: mise run //projects/cli:typecheck
-
-      - name: Test
-        run: mise run //projects/cli:test
-
-      - name: Build
-        run: mise run //projects/cli:build
-
-      - name: Verify the built binary runs
-        run: |
-          version="$(./dist/rift --version)"
-          echo "rift --version -> $version"
-          test -n "$version"
+        run: mise run ci
 
   scripts:
     name: scripts (shell + compose)

@@ -3,17 +3,26 @@
 #
 # Each task is sandboxed to exactly what it needs (https://mise.jdx.dev/sandboxing.html):
 # read-only checks deny everything and re-open only reads under the project; the
-# build denies the network and may only write dist/. The task's own tool binary
-# (biome/bun, installed by mise outside the project) is always allowed to run.
+# build denies the network and may only write dist/. The offline checks depend on
+# `install`, so `mise run ci` fetches dependencies once (with the network) before
+# the sandboxed tasks run. The task's own tool binary (biome/bun, installed by
+# mise outside the project) is always allowed to run.
 
 # biome is pinned as a mise tool (not an npm devDependency) so lint runs the exact
 # same version locally and in CI, managed by mise alongside go and bun.
 [tools]
 biome = "2.5.3"
 
+# Fetch dependencies. Needs the network, so it is not sandboxed; the offline
+# checks depend on it so node_modules is present before they run.
+[tasks.install]
+description = "Install the CLI's dependencies"
+run = "bun install --frozen-lockfile"
+
 [tasks.lint]
 description = "Lint the CLI with biome"
-# Call biome directly so the mise-pinned tool is used, not a node_modules copy.
+# biome is self-contained (no node_modules), so lint needs no install and is
+# fully read-only. Call biome directly so the mise-pinned tool is used.
 run = "biome check src test"
 deny_all = true
 allow_read = ["."]
@@ -23,6 +32,7 @@ description = "Type-check the CLI (tsc)"
 # tsc reads beyond the project (bun cache, tmp), so reads stay open; it emits
 # nothing (--noEmit) and needs no network.
 run = "bun run typecheck"
+depends = ["install"]
 deny_net = true
 deny_write = true
 
@@ -31,11 +41,13 @@ description = "Run the CLI test suite"
 # Tests bind loopback sockets, so the network stays open (mise cannot filter net
 # per-host on Linux — it is all-or-nothing). Deny writes as the guard instead.
 run = "bun test"
+depends = ["install"]
 deny_write = true
 
 # The build reads sources and writes the single binary into dist/.
 [tasks.build]
 description = "Compile the CLI single binary"
 run = "bun run build"
+depends = ["install"]
 deny_net = true
 allow_write = ["./dist"]

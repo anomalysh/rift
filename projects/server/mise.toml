@@ -3,18 +3,28 @@
 #
 # Go keeps its module and build caches under $HOME (GOMODCACHE, GOCACHE), so
 # build/vet/test cannot be scoped to the project with allow_write — they deny the
-# network instead (all-or-nothing: mise cannot filter net per-host on Linux).
-# gofmt only reads .go files, so it is fully locked down. test binds loopback for
-# the in-process integration tests, and vuln needs the module proxy, so neither
-# is sandboxed.
+# network instead (all-or-nothing: mise cannot filter net per-host on Linux) and
+# depend on `deps` so the module cache is warm before they run offline. gofmt only
+# reads .go files, so it is fully locked down. test binds loopback for the
+# in-process integration tests, and vuln needs the module proxy, so neither
+# denies the network.
+
+# Download modules. Needs the network, so it is not sandboxed; the offline
+# build/vet/test depend on it so the module cache is warm before they run.
+[tasks.deps]
+description = "Download the server's Go modules"
+run = "go mod download"
+
 [tasks.build]
 description = "Build the server"
 run = "go build ./..."
+depends = ["deps"]
 deny_net = true
 
 [tasks.vet]
 description = "Vet the server"
 run = "go vet ./..."
+depends = ["deps"]
 deny_net = true
 
 [tasks.gofmt]
@@ -28,7 +38,10 @@ allow_read = ["."]
 
 [tasks.test]
 description = "Run the server test suite"
-run = "go test ./..."
+# CI exports GO_TEST_FLAGS=-race (and RIFT_TEST_POSTGRES_DSN so the store tests
+# run instead of skipping); locally it stays fast and needs no C toolchain.
+run = "go test ${GO_TEST_FLAGS:-} ./..."
+depends = ["deps"]
 
 [tasks.vuln]
 description = "Scan the server for known CVEs (govulncheck)"
