@@ -101,11 +101,16 @@ func (i *Ingress) handleTLSAsk(w http.ResponseWriter, r *http.Request) {
 	}
 	domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
 
-	// The gateway's own hostname is not a tunnel subdomain, so the checks
-	// below would refuse it. It must be authorized explicitly: agents dial it
-	// over TLS, and it usually sits under the same wildcard as the tunnels,
-	// where Caddy will only ever issue its certificate on demand.
-	if i.cfg.Gateway.Hostname != "" && domain == i.cfg.Gateway.Hostname {
+	// Two names this server owns are not tunnel subdomains, so the checks below
+	// would refuse them, leaving each with no certificate at all:
+	//
+	//   - the gateway hostname, which agents dial over TLS
+	//   - the base domain itself, which a wildcard certificate does not cover
+	//     and which visitors reach by simply trimming a subdomain off the URL
+	//
+	// Both are names the operator configured, not names a client can suggest,
+	// so authorizing them does not widen what an attacker can make us issue.
+	if i.ownsHostname(domain) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -144,6 +149,15 @@ func (i *Ingress) handleTLSAsk(w http.ResponseWriter, r *http.Request) {
 
 	i.logger.Debug("refusing certificate for inactive subdomain", slog.String("subdomain", sub))
 	http.Error(w, "no such tunnel", http.StatusNotFound)
+}
+
+// ownsHostname reports whether domain is a name this deployment serves in its
+// own right, rather than a tunnel subdomain.
+func (i *Ingress) ownsHostname(domain string) bool {
+	if i.cfg.Gateway.Hostname != "" && domain == i.cfg.Gateway.Hostname {
+		return true
+	}
+	return domain == strings.ToLower(i.cfg.Tunnel.BaseDomain)
 }
 
 // handlePublic routes a request from the public internet into a tunnel.

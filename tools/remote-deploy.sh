@@ -90,4 +90,23 @@ else
 	"$SSH" "$compose_up"
 fi
 
+# 5. Reload Caddy.
+#
+# The Caddyfile is a bind mount, so `compose up` sees an unchanged service spec
+# and leaves Caddy running with its old configuration. A Caddyfile edit would
+# deploy silently and never take effect. `caddy reload` applies it gracefully,
+# keeping the certificate cache and dropping no connections; a restart is the
+# fallback when the admin API is unreachable.
+caddy_reload="docker exec rift-caddy-1 caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile"
+caddy_restart="cd '$REMOTE_DIR/deploy' && docker compose -f docker-compose.yml -f docker-compose.prod.yml restart caddy"
+if [ "$dry_run" = true ]; then
+	log_info "[dry-run] would reload Caddy: $caddy_reload"
+else
+	log_info "reloading Caddy configuration"
+	if ! "$SSH" "$caddy_reload"; then
+		log_warn "caddy reload failed; restarting the container instead"
+		"$SSH" "$caddy_restart"
+	fi
+fi
+
 log_info "deploy complete"

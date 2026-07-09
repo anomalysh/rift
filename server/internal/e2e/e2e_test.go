@@ -528,6 +528,10 @@ func TestTLSAskAuthorizesOnlyLiveOrReservedSubdomains(t *testing.T) {
 		// TLS. Refusing it leaves the gateway with no certificate at all.
 		{"gateway." + testBaseDomain, http.StatusOK},
 		{"GATEWAY." + strings.ToUpper(testBaseDomain), http.StatusOK},
+		// A wildcard certificate does not cover the apex, so it needs its own.
+		{testBaseDomain, http.StatusOK},
+		// A sibling of the base domain is still somebody else's.
+		{"evil" + testBaseDomain, http.StatusForbidden},
 	}
 	for _, tc := range cases {
 		resp, err := s.client.Get(s.ingressURL + config.RouteTLSAsk + "?" + config.QueryParamDomain + "=" + tc.domain)

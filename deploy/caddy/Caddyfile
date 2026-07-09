@@ -52,6 +52,19 @@
 	reverse_proxy {$RIFT_UPSTREAM_HOST:riftd}:{$RIFT_INGRESS_PORT:8080}
 }
 
+# --- The base domain itself: https://RIFT_BASE_DOMAIN ------------------------
+# A wildcard certificate covers *.example.com but NOT example.com, and the
+# wildcard site block above does not match the apex either. Without this block
+# the apex has no certificate and anyone who trims a subdomain off a tunnel URL
+# gets a TLS error rather than an answer. riftd replies with a plain 404 saying
+# the host is not a tunnel, which is the truthful response.
+{$RIFT_BASE_DOMAIN} {
+	tls {
+		on_demand
+	}
+	reverse_proxy {$RIFT_UPSTREAM_HOST:riftd}:{$RIFT_INGRESS_PORT:8080}
+}
+
 # --- Agent gateway: wss://RIFT_GATEWAY_HOSTNAME -----------------------------
 # The CLI dials the gateway over TLS from the public internet.
 {$RIFT_GATEWAY_HOSTNAME} {
