@@ -1,25 +1,41 @@
 # Tasks for the rift CLI (Bun/TypeScript). Run from the repo root as
 # `mise //projects/cli:<task>`, or `mise :<task>` from inside this directory.
-# Read-only, offline tasks are sandboxed: no network (blocks exfiltration or a
-# compromised dependency phoning home) and no filesystem writes.
+#
+# Each task is sandboxed to exactly what it needs (https://mise.jdx.dev/sandboxing.html):
+# read-only checks deny everything and re-open only reads under the project; the
+# build denies the network and may only write dist/. The task's own tool binary
+# (biome/bun, installed by mise outside the project) is always allowed to run.
+
+# biome is pinned as a mise tool (not an npm devDependency) so lint runs the exact
+# same version locally and in CI, managed by mise alongside go and bun.
+[tools]
+biome = "2.5.3"
+
 [tasks.lint]
 description = "Lint the CLI with biome"
-run = "bun run lint"
-deny_net = true
-deny_write = true
+# Call biome directly so the mise-pinned tool is used, not a node_modules copy.
+run = "biome check src test"
+deny_all = true
+allow_read = ["."]
 
 [tasks.typecheck]
 description = "Type-check the CLI (tsc)"
+# tsc reads beyond the project (bun cache, tmp), so reads stay open; it emits
+# nothing (--noEmit) and needs no network.
 run = "bun run typecheck"
 deny_net = true
 deny_write = true
 
 [tasks.test]
 description = "Run the CLI test suite"
+# Tests bind loopback sockets, so the network stays open (mise cannot filter net
+# per-host on Linux — it is all-or-nothing). Deny writes as the guard instead.
 run = "bun test"
+deny_write = true
 
-# The build writes dist/, so only the network is denied.
+# The build reads sources and writes the single binary into dist/.
 [tasks.build]
 description = "Compile the CLI single binary"
 run = "bun run build"
 deny_net = true
+allow_write = ["./dist"]
