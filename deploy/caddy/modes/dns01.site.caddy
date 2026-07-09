@@ -1,4 +1,19 @@
-# No per-site tls directive. Certificates are managed for each site's subjects
-# using the global DNS-01 issuer, and *.BASE_DOMAIN yields a wildcard that
-# covers every subdomain -- live, reserved, or never used. No on-demand policy
-# exists in this mode, so no site can be shadowed by one.
+# One wildcard certificate per site's subjects, proved over DNS-01.
+#
+# The provider solver is compiled into the Caddy image; if this import fails
+# with "module not registered: dns.providers.<name>", rebuild with
+# tools/build-caddy.sh.
+#
+# resolvers is the split-horizon lever. Caddy checks that the challenge record
+# has propagated before asking the CA to validate, and by default it uses the
+# container's resolver. With split-horizon DNS that resolver may return the
+# INTERNAL view of the zone and never see the record the public CA will check,
+# so issuance hangs. Point RIFT_ACME_DNS_RESOLVERS at your authoritative server
+# or a public resolver to make the check see what the CA sees. Empty leaves
+# Caddy's default; the resolvers snippet is chosen by RIFT_ACME_DNS_RESOLVERS
+# being set (see docker-compose.prod.yml), so an unset value emits no directive
+# rather than an empty one, which Caddy rejects.
+tls {
+	import /etc/caddy/dns/{$RIFT_ACME_DNS_PROVIDER}.caddy
+	import /etc/caddy/resolvers/{$RIFT_ACME_DNS_RESOLVERS_PROFILE:none}.caddy
+}

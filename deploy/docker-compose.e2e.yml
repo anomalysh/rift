@@ -108,6 +108,8 @@ services:
       RIFT_DNS_TSIG_KEY_NAME: ${RIFT_E2E_TSIG_NAME:-}
       RIFT_DNS_TSIG_KEY_ALG: ${RIFT_E2E_TSIG_ALG:-}
       RIFT_DNS_TSIG_KEY: ${RIFT_E2E_TSIG_KEY:-}
+      RIFT_ACME_DNS_RESOLVERS: ${RIFT_E2E_ACME_RESOLVERS:-}
+      RIFT_ACME_DNS_RESOLVERS_PROFILE: ${RIFT_E2E_ACME_RESOLVERS:+custom}
       RIFT_TLS_MODE: ${RIFT_TLS_MODE:-internal}
       RIFT_TLS_CERT_FILE: ${RIFT_TLS_CERT_FILE:-}
       RIFT_TLS_KEY_FILE: ${RIFT_TLS_KEY_FILE:-}
@@ -125,16 +127,6 @@ services:
     ports:
       - "127.0.0.1:${RIFT_E2E_HTTP_PORT:-18080}:80"
       - "127.0.0.1:${RIFT_E2E_HTTPS_PORT:-18443}:443"
-    # The rfc2136 solver looks up the zone's SOA before writing the challenge
-    # record, and that lookup uses the container resolver. Point it at BIND so
-    # the lookup for rift.localtest resolves; in production the operator's real
-    # domain is publicly delegated and this is the system resolver's job. BIND
-    # answers nothing else, so Caddy reaches its peers through /etc/hosts.
-    dns:
-      - ${RIFT_E2E_BIND_IP:-10.77.53.11}
-    extra_hosts:
-      - "pebble:${RIFT_E2E_PEBBLE_IP:-10.77.53.12}"
-      - "riftd:${RIFT_E2E_RIFTD_IP:-10.77.53.20}"
     networks:
       default:
         # BIND advertises this address for every rift hostname, so Pebble can

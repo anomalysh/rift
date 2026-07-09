@@ -1,2 +1,2 @@
 # DigitalOcean. The token has account-wide DNS write access; scope it if you can.
-acme_dns digitalocean {$RIFT_DNS_API_TOKEN}
+dns digitalocean {$RIFT_DNS_API_TOKEN}

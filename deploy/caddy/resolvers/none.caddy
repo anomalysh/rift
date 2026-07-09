@@ -1,0 +1,3 @@
+# No resolver override: Caddy uses the container's resolver for propagation
+# checks. Correct when the zone is publicly delegated and resolves the same way
+# everywhere.

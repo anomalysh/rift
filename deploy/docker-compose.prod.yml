@@ -51,6 +51,11 @@ services:
       RIFT_ACME_CA_ROOT: ${RIFT_ACME_CA_ROOT:-}
       # dns01 only. Selects deploy/caddy/dns/<provider>.caddy.
       RIFT_ACME_DNS_PROVIDER: ${RIFT_ACME_DNS_PROVIDER:-}
+      # Split-horizon lever for the DNS-01 propagation check. When set, the
+      # profile flips to "custom" (docker's :+ expansion), which emits a
+      # `resolvers` directive; unset emits none, since Caddy rejects an empty one.
+      RIFT_ACME_DNS_RESOLVERS: ${RIFT_ACME_DNS_RESOLVERS:-}
+      RIFT_ACME_DNS_RESOLVERS_PROFILE: ${RIFT_ACME_DNS_RESOLVERS:+custom}
       RIFT_DNS_API_TOKEN: ${RIFT_DNS_API_TOKEN:-}
       RIFT_DNS_SERVER: ${RIFT_DNS_SERVER:-}
       RIFT_DNS_TSIG_KEY_NAME: ${RIFT_DNS_TSIG_KEY_NAME:-}

@@ -293,6 +293,7 @@ run_mode() {
 	export RIFT_ACME_CA_PROFILE="public" RIFT_ACME_CA_URL="" RIFT_ACME_CA_ROOT=""
 	export RIFT_ACME_DNS_PROVIDER=""
 	export RIFT_E2E_TSIG_NAME="" RIFT_E2E_TSIG_ALG="" RIFT_E2E_TSIG_KEY=""
+	export RIFT_E2E_ACME_RESOLVERS=""
 	export RIFT_E2E_REDIS_ENABLED="false" RIFT_E2E_PEER_SECRET="$PEER_SECRET"
 	unset RIFT_CADDY_IMAGE || true
 	export COMPOSE_PROFILES=""
@@ -320,6 +321,10 @@ run_mode() {
 			export RIFT_E2E_TSIG_NAME="$TSIG_NAME"
 			export RIFT_E2E_TSIG_ALG="$TSIG_ALG"
 			export RIFT_E2E_TSIG_KEY="$TSIG_KEY"
+			# The real split-horizon lever: point the DNS-01 challenge lookups
+			# at BIND. rift.localtest resolves nowhere else, exactly as an
+			# operator's internal-only view would not resolve their zone.
+			export RIFT_E2E_ACME_RESOLVERS="${RIFT_E2E_BIND_IP:-10.77.53.11}"
 		fi
 		;;
 	*) die "mode $mode is not supported by this harness (see --help)" ;;
@@ -360,6 +365,22 @@ run_mode() {
 	wait_for_tcp "$UPSTREAM_PORT" "upstream"
 
 	CURRENT_MODE="$mode"
+
+	# The ACME modes obtain several certificates as separate orders (the
+	# wildcard, the apex, the gateway host). The wildcard covers the tunnel, so
+	# the tunnel can be live while the apex order is still in flight. Wait for
+	# each name the routing assertions will probe, or they race issuance.
+	case "$mode" in
+	http01)
+		# http01 issues on demand, so only names that will be requested exist;
+		# the apex and gateway are requested below. Wait for the gateway host.
+		wait_for_tls "gateway.$BASE_DOMAIN" || log_warn "gateway cert not ready"
+		;;
+	dns01 | internal)
+		wait_for_tls "$BASE_DOMAIN" || log_warn "apex cert not ready"
+		wait_for_tls "gateway.$BASE_DOMAIN" || log_warn "gateway cert not ready"
+		;;
+	esac
 
 	local token
 	token="$(mint_token)"
