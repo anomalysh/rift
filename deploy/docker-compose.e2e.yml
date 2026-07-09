@@ -12,6 +12,18 @@
 # generates certificates for the `self` mode and knows which ports to poll.
 name: rift-e2e
 
+# Static addressing. BIND hands Pebble an A record for every rift hostname, and
+# a record cannot point at an address Docker has not assigned yet.
+#
+# The subnet is overridable because Docker refuses a pool that overlaps an
+# existing network, and every machine has a different set of those.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${RIFT_E2E_SUBNET:-10.77.53.0/24}
+
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -45,9 +57,18 @@ services:
       RIFT_TLS_MODE: ${RIFT_TLS_MODE:-internal}
       RIFT_TLS_CERT_FILE: ${RIFT_TLS_CERT_FILE:-}
       RIFT_TLS_KEY_FILE: ${RIFT_TLS_KEY_FILE:-}
+      # riftd validates the TLS mode as strictly as Caddy consumes it, so the
+      # dns01/self settings must reach it too or it refuses to boot.
+      RIFT_ACME_DNS_PROVIDER: ${RIFT_ACME_DNS_PROVIDER:-}
 
       RIFT_ADMIN_ENABLED: "true"
       RIFT_ADMIN_TOKEN: ${RIFT_E2E_ADMIN_TOKEN:?e2e admin token must be set by tools/e2e.sh}
+
+      # Multi-node routing. Off unless the cluster profile is active.
+      RIFT_REDIS_ENABLED: ${RIFT_E2E_REDIS_ENABLED:-false}
+      RIFT_REDIS_ADDR: redis:6379
+      RIFT_NODE_ADVERTISE_URL: http://riftd:8080
+      RIFT_PEER_SECRET: ${RIFT_E2E_PEER_SECRET:-}
 
       # Caddy is the only client of the ingress.
       RIFT_INGRESS_TRUSTED_PROXY_IPS: 172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
@@ -59,6 +80,9 @@ services:
       RIFT_REAPER_INTERVAL: 2s
       RIFT_TOKEN_REVALIDATE_INTERVAL: 1s
       RIFT_REQUEST_TIMEOUT: 15s
+    networks:
+      default:
+        ipv4_address: ${RIFT_E2E_RIFTD_IP:-10.77.53.20}
     ports:
       # The agent dials the gateway directly rather than through Caddy: a Bun
       # client on the host cannot resolve rift.localtest, and curl's --resolve
@@ -77,6 +101,13 @@ services:
       RIFT_GATEWAY_HOSTNAME: gateway.${RIFT_E2E_BASE_DOMAIN:-rift.localtest}
       RIFT_ACME_EMAIL: e2e@example.test
       RIFT_ACME_CA_PROFILE: ${RIFT_ACME_CA_PROFILE:-public}
+      RIFT_ACME_CA_URL: ${RIFT_ACME_CA_URL:-}
+      RIFT_ACME_CA_ROOT: ${RIFT_ACME_CA_ROOT:-}
+      RIFT_ACME_DNS_PROVIDER: ${RIFT_ACME_DNS_PROVIDER:-}
+      RIFT_DNS_SERVER: ${RIFT_E2E_BIND_IP:-10.77.53.11}:53
+      RIFT_DNS_TSIG_KEY_NAME: ${RIFT_E2E_TSIG_NAME:-}
+      RIFT_DNS_TSIG_KEY_ALG: ${RIFT_E2E_TSIG_ALG:-}
+      RIFT_DNS_TSIG_KEY: ${RIFT_E2E_TSIG_KEY:-}
       RIFT_TLS_MODE: ${RIFT_TLS_MODE:-internal}
       RIFT_TLS_CERT_FILE: ${RIFT_TLS_CERT_FILE:-}
       RIFT_TLS_KEY_FILE: ${RIFT_TLS_KEY_FILE:-}
@@ -88,12 +119,117 @@ services:
       - ./caddy:/etc/caddy:ro
       # Certificates the `self` mode serves; tools/e2e.sh generates them.
       - ${RIFT_E2E_CERT_DIR:-./caddy}:/certs:ro
+      # Pebble's CA root, so Caddy will talk to the test ACME server at all.
+      - ${RIFT_E2E_PEBBLE_DIR:-./caddy}:/pebble:ro
       - caddy_data:/data
     ports:
       - "127.0.0.1:${RIFT_E2E_HTTP_PORT:-18080}:80"
       - "127.0.0.1:${RIFT_E2E_HTTPS_PORT:-18443}:443"
+    # The rfc2136 solver looks up the zone's SOA before writing the challenge
+    # record, and that lookup uses the container resolver. Point it at BIND so
+    # the lookup for rift.localtest resolves; in production the operator's real
+    # domain is publicly delegated and this is the system resolver's job. BIND
+    # answers nothing else, so Caddy reaches its peers through /etc/hosts.
+    dns:
+      - ${RIFT_E2E_BIND_IP:-10.77.53.11}
+    extra_hosts:
+      - "pebble:${RIFT_E2E_PEBBLE_IP:-10.77.53.12}"
+      - "riftd:${RIFT_E2E_RIFTD_IP:-10.77.53.20}"
+    networks:
+      default:
+        # BIND advertises this address for every rift hostname, so Pebble can
+        # reach Caddy to solve an HTTP-01 challenge.
+        ipv4_address: ${RIFT_E2E_CADDY_IP:-10.77.53.10}
     depends_on:
       - riftd
+
+  # --- ACME: a real ACME server, so the client is exercised rather than mocked
+  #
+  # Pebble is Let's Encrypt's own test server. Running it here means the http01
+  # and dns01 modes drive a genuine ACME order, authorization and finalization
+  # -- the code path that reaches production -- with no internet and no rate
+  # limit. Its issuing root is regenerated on every start, so the harness must
+  # fetch it rather than pin it.
+  pebble:
+    profiles: ["acme"]
+    image: ghcr.io/letsencrypt/pebble:latest
+    # Pebble's default config validates HTTP-01 on port 5002; Caddy serves 80.
+    # `-dnsserver` points every challenge lookup at our authoritative BIND.
+    command:
+      - "-config"
+      - "/etc/pebble/pebble-config.json"
+      - "-dnsserver"
+      - "${RIFT_E2E_BIND_IP:-10.77.53.11}:53"
+    volumes:
+      - ../tools/e2e/acme/pebble-config.json:/etc/pebble/pebble-config.json:ro
+    networks:
+      default:
+        ipv4_address: ${RIFT_E2E_PEBBLE_IP:-10.77.53.12}
+    depends_on:
+      - bind
+
+  # --- DNS: authoritative for rift.localtest, accepting TSIG dynamic updates
+  #
+  # Pebble resolves challenge records here. For dns01, Caddy's rfc2136 solver
+  # writes them here too, over the same TSIG-signed update a production
+  # self-hosted zone would accept. Nothing about the mechanism is simulated.
+  bind:
+    profiles: ["acme"]
+    build:
+      context: ../tools/e2e/dns
+    environment:
+      RIFT_BIND_IP: ${RIFT_E2E_BIND_IP:-10.77.53.11}
+      RIFT_CADDY_IP: ${RIFT_E2E_CADDY_IP:-10.77.53.10}
+    volumes:
+      - ../tools/e2e/dns:/zone:ro
+    networks:
+      default:
+        ipv4_address: ${RIFT_E2E_BIND_IP:-10.77.53.11}
+
+  # --- Cluster: a second riftd node, routed to via Redis
+  redis:
+    profiles: ["cluster"]
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  # The agent attaches HERE, while public traffic arrives at riftd. Proving a
+  # request crosses from one node to the other is the entire point of Redis.
+  riftd2:
+    profiles: ["cluster"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      RIFT_ENV: development
+      RIFT_LOG_LEVEL: ${RIFT_E2E_LOG_LEVEL:-info}
+      RIFT_LOG_FORMAT: json
+      RIFT_POSTGRES_DSN: postgres://rift:rift@postgres:5432/rift?sslmode=disable
+      RIFT_BASE_DOMAIN: ${RIFT_E2E_BASE_DOMAIN:-rift.localtest}
+      RIFT_GATEWAY_HOSTNAME: gateway.${RIFT_E2E_BASE_DOMAIN:-rift.localtest}
+      RIFT_PUBLIC_SCHEME: https
+      RIFT_TLS_MODE: ${RIFT_TLS_MODE:-internal}
+      RIFT_ADMIN_ENABLED: "false"
+      RIFT_ADMIN_TOKEN: ${RIFT_E2E_ADMIN_TOKEN:?}
+      RIFT_REDIS_ENABLED: "true"
+      RIFT_REDIS_ADDR: redis:6379
+      RIFT_NODE_ADVERTISE_URL: http://riftd2:8080
+      RIFT_PEER_SECRET: ${RIFT_E2E_PEER_SECRET:?peer secret must be set by tools/e2e.sh}
+      RIFT_HEARTBEAT_INTERVAL: 1s
+      RIFT_HEARTBEAT_TIMEOUT: 4s
+      RIFT_REAPER_INTERVAL: 2s
+      RIFT_TOKEN_REVALIDATE_INTERVAL: 1s
+    ports:
+      - "127.0.0.1:${RIFT_E2E_GATEWAY2_PORT:-18091}:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   caddy_data:

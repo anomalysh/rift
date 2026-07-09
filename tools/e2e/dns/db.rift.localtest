@@ -1,0 +1,13 @@
+$TTL 60
+@	IN	SOA	ns.rift.localtest. admin.rift.localtest. (
+			1 ; serial
+			60 ; refresh
+			60 ; retry
+			120 ; expire
+			60 ) ; minimum
+@	IN	NS	ns.rift.localtest.
+ns	IN	A	__BIND_IP__
+; Caddy answers for the apex and every tunnel subdomain. Pebble resolves these
+; when validating an HTTP-01 challenge.
+@	IN	A	__CADDY_IP__
+*	IN	A	__CADDY_IP__
