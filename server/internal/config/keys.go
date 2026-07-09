@@ -54,6 +54,15 @@ const (
 	// let anyone who can reach the ingress port impersonate a peer node.
 	KeyPeerSecret = EnvPrefix + "PEER_SECRET"
 
+	// TLS. These configure the reverse proxy in front of this server, not this
+	// server's own listeners, which never terminate TLS. The server reads them
+	// anyway so that a broken TLS configuration fails at boot with one clear
+	// message, instead of surfacing later as an unexplained handshake error.
+	KeyTLSMode         = EnvPrefix + "TLS_MODE"
+	KeyACMEDNSProvider = EnvPrefix + "ACME_DNS_PROVIDER"
+	KeyTLSCertFile     = EnvPrefix + "TLS_CERT_FILE"
+	KeyTLSKeyFile      = EnvPrefix + "TLS_KEY_FILE"
+
 	// Tunnel behaviour.
 	KeyBaseDomain        = EnvPrefix + "BASE_DOMAIN"
 	KeyPublicScheme      = EnvPrefix + "PUBLIC_SCHEME"

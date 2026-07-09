@@ -13,10 +13,17 @@ import (
 // one restart per mistake.
 type loader struct {
 	errs []string
+	// warns are legal but noteworthy settings. They are surfaced by the caller
+	// after the logger exists, so they never gag a boot.
+	warns []string
 }
 
 func (l *loader) fail(key string, err error) {
 	l.errs = append(l.errs, fmt.Sprintf("%s: %v", key, err))
+}
+
+func (l *loader) warn(key, msg string) {
+	l.warns = append(l.warns, fmt.Sprintf("%s: %s", key, msg))
 }
 
 func (l *loader) err() error {

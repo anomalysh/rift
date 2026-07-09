@@ -46,6 +46,10 @@ func run() error {
 	logger := observability.NewLogger(cfg, os.Stdout)
 	slog.SetDefault(logger)
 
+	for _, w := range cfg.Warnings {
+		logger.Warn("configuration warning", slog.String("detail", w))
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -145,6 +149,8 @@ func run() error {
 	logger.Info("riftd ready",
 		slog.String("base_domain", cfg.Tunnel.BaseDomain),
 		slog.String("gateway_path", cfg.Gateway.Path),
+		slog.String("tls_mode", cfg.TLS.Mode),
+		slog.Bool("tls_publicly_trusted", cfg.TLS.PubliclyTrusted()),
 		slog.Bool("redis", cfg.Redis.Enabled),
 		slog.Bool("admin", cfg.Admin.Enabled))
 

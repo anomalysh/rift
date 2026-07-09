@@ -29,10 +29,15 @@ type Config struct {
 	Postgres Postgres
 	Redis    Redis
 	Cluster  Cluster
+	TLS      TLS
 	Tunnel   Tunnel
 
 	// SubdomainRules is derived from Tunnel settings and validated at boot.
 	SubdomainRules *core.SubdomainRules
+
+	// Warnings are legal settings worth saying out loud. The caller logs them
+	// once a logger exists; they never prevent a boot.
+	Warnings []string
 }
 
 // Production reports whether the server runs with production guardrails.
@@ -102,6 +107,34 @@ type Redis struct {
 type Cluster struct {
 	// PeerSecret authenticates the internal proxy route between nodes.
 	PeerSecret string
+}
+
+// TLS describes how the reverse proxy in front of this server obtains
+// certificates. This server never terminates TLS itself; it validates the
+// settings so that a misconfiguration is a boot failure rather than a
+// handshake failure discovered by a visitor.
+type TLS struct {
+	Mode string
+	// ACMEDNSProvider names the Caddy DNS solver, e.g. rfc2136 or acmedns.
+	// Required when Mode is dns01.
+	ACMEDNSProvider string
+	// CertFile and KeyFile are paths inside the proxy container.
+	// Required when Mode is self.
+	CertFile string
+	KeyFile  string
+}
+
+// PubliclyTrusted reports whether the mode yields certificates a stock client
+// trusts without extra configuration.
+func (t TLS) PubliclyTrusted() bool {
+	return t.Mode == TLSModeDNS01 || t.Mode == TLSModeHTTP01
+}
+
+// CoversUnknownSubdomains reports whether a hostname with no live tunnel can
+// still complete a TLS handshake, and so receive a readable 404 instead of a
+// protocol error.
+func (t TLS) CoversUnknownSubdomains() bool {
+	return t.Mode != TLSModeHTTP01
 }
 
 // Tunnel holds the behavioural knobs of the tunnelling layer.
@@ -177,6 +210,14 @@ func Load() (*Config, error) {
 		Cluster: Cluster{
 			PeerSecret: l.str(KeyPeerSecret, ""),
 		},
+		TLS: TLS{
+			// Deliberately no default here: development gets one below,
+			// production must say what it means.
+			Mode:            l.str(KeyTLSMode, ""),
+			ACMEDNSProvider: l.str(KeyACMEDNSProvider, ""),
+			CertFile:        l.str(KeyTLSCertFile, ""),
+			KeyFile:         l.str(KeyTLSKeyFile, ""),
+		},
 		Tunnel: Tunnel{
 			BaseDomain:   l.requiredStr(KeyBaseDomain),
 			PublicScheme: l.str(KeyPublicScheme, DefaultPublicScheme),
@@ -235,6 +276,7 @@ func Load() (*Config, error) {
 	if err := l.err(); err != nil {
 		return nil, err
 	}
+	cfg.Warnings = l.warns
 	return cfg, nil
 }
 
@@ -265,7 +307,64 @@ func parseLogLevel(l *loader, s string) slog.Level {
 	return lvl
 }
 
+// validateTLS enforces the TLS mode contract.
+//
+// The mode is required in production and has no fallback there. A silent
+// fallback to an untrusted certificate is the worst outcome available: the
+// handshake succeeds, so nothing looks broken, and the operator learns months
+// later that clients have been clicking through a warning. An unset mode is
+// therefore a boot failure, not a default.
+func (c *Config) validateTLS(l *loader) {
+	if c.TLS.Mode == "" {
+		if c.Production() {
+			l.fail(KeyTLSMode, fmt.Errorf(
+				"is required in %s; expected one of %s. There is no default: an unset mode would silently serve untrusted certificates",
+				EnvProduction, strings.Join(TLSModes, ", ")))
+			return
+		}
+		c.TLS.Mode = DefaultTLSMode
+	}
+
+	valid := false
+	for _, m := range TLSModes {
+		if c.TLS.Mode == m {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		l.fail(KeyTLSMode, fmt.Errorf("expected one of %s, got %q", strings.Join(TLSModes, ", "), c.TLS.Mode))
+		return
+	}
+
+	switch c.TLS.Mode {
+	case TLSModeDNS01:
+		if c.TLS.ACMEDNSProvider == "" {
+			l.fail(KeyACMEDNSProvider, fmt.Errorf(
+				"is required when %s is %q; it names the Caddy DNS solver, e.g. rfc2136 or acmedns",
+				KeyTLSMode, TLSModeDNS01))
+		}
+	case TLSModeSelf:
+		if c.TLS.CertFile == "" {
+			l.fail(KeyTLSCertFile, fmt.Errorf("is required when %s is %q", KeyTLSMode, TLSModeSelf))
+		}
+		if c.TLS.KeyFile == "" {
+			l.fail(KeyTLSKeyFile, fmt.Errorf("is required when %s is %q", KeyTLSMode, TLSModeSelf))
+		}
+	}
+
+	// A public scheme of https with an internal CA is legal — an operator may
+	// distribute their own root — but it is worth saying out loud.
+	if c.Production() && !c.TLS.PubliclyTrusted() {
+		l.warn(KeyTLSMode, fmt.Sprintf(
+			"%q does not produce publicly trusted certificates; clients must trust your CA or the handshake will fail",
+			c.TLS.Mode))
+	}
+}
+
 func (c *Config) validate(l *loader) {
+	c.validateTLS(l)
+
 	switch c.Env {
 	case EnvDevelopment, EnvProduction:
 	default:

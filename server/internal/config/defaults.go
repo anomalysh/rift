@@ -90,3 +90,33 @@ const (
 	SchemeHTTP  = "http"
 	SchemeHTTPS = "https"
 )
+
+// TLS modes. Each selects a different Caddyfile snippet under deploy/caddy/modes.
+const (
+	// TLSModeDNS01 obtains one wildcard certificate over the DNS-01 challenge.
+	// Every subdomain is then covered, so an unknown tunnel answers with a 404
+	// over valid TLS rather than failing the handshake. Requires a DNS provider.
+	TLSModeDNS01 = "dns01"
+
+	// TLSModeHTTP01 issues a certificate per hostname, on first contact, over
+	// HTTP-01, gated by the TLS-ask endpoint. Needs no DNS credentials, but a
+	// hostname that has never served a tunnel has no certificate and so cannot
+	// complete a TLS handshake at all.
+	TLSModeHTTP01 = "http01"
+
+	// TLSModeSelf serves a certificate and key the operator supplies. No ACME,
+	// no renewal: both are the operator's responsibility.
+	TLSModeSelf = "self"
+
+	// TLSModeInternal signs certificates with Caddy's own CA. Nothing is
+	// publicly trusted. Correct for local development and the e2e harness, and
+	// for a deployment whose clients already trust an internal root.
+	TLSModeInternal = "internal"
+)
+
+// DefaultTLSMode applies in development only. Production must name a mode
+// explicitly; see Config.validate.
+const DefaultTLSMode = TLSModeInternal
+
+// TLSModes lists every valid mode, for error messages and validation.
+var TLSModes = []string{TLSModeDNS01, TLSModeHTTP01, TLSModeSelf, TLSModeInternal}
