@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/anomaly-sh/rift/server/internal/config"
+	"github.com/anomalysh/rift/server/internal/config"
 )
 
 // forwardToPeer relays the request to the node whose agent holds the subdomain.

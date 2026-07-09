@@ -46,7 +46,7 @@ RUN set -eux; \
 # OCI image metadata. The publish workflow (and tools/publish-images.sh) inject
 # real values via --build-arg; the defaults keep a plain `docker build` emitting
 # a valid, if generic, labelled image.
-ARG IMAGE_SOURCE="https://github.com/anomaly-sh/rift"
+ARG IMAGE_SOURCE="https://github.com/anomalysh/rift"
 ARG IMAGE_REVISION=""
 ARG IMAGE_VERSION="dev"
 ARG IMAGE_CREATED=""

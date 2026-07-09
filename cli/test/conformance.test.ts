@@ -4,7 +4,7 @@
 //
 // The expected hex strings below were produced by running the Go encoder
 // (tunnelproto.Encode / EncodeControl / EncodeJSONFrame) via a throwaway
-// program that imports github.com/anomaly-sh/rift/server/internal/tunnelproto.
+// program that imports github.com/anomalysh/rift/server/internal/tunnelproto.
 // If the wire format changes, regenerate these against Go — do not hand-edit.
 
 import { describe, expect, test } from "bun:test";

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anomaly-sh/rift/server/internal/config"
-	"github.com/anomaly-sh/rift/server/internal/core"
-	"github.com/anomaly-sh/rift/server/internal/store/migrations"
+	"github.com/anomalysh/rift/server/internal/config"
+	"github.com/anomalysh/rift/server/internal/core"
+	"github.com/anomalysh/rift/server/internal/store/migrations"
 )
 
 // testDB opens a pool against RIFT_TEST_POSTGRES_DSN, migrates, and truncates so

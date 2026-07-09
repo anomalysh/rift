@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anomaly-sh/rift/server/internal/core"
+	"github.com/anomalysh/rift/server/internal/core"
 )
 
 // Store implements core.TokenStore, core.ReservationStore and core.TunnelStore.

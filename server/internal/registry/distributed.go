@@ -9,8 +9,8 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/anomaly-sh/rift/server/internal/config"
-	"github.com/anomaly-sh/rift/server/internal/core"
+	"github.com/anomalysh/rift/server/internal/config"
+	"github.com/anomalysh/rift/server/internal/core"
 )
 
 // routeKeyNamespace segments subdomain->node leases from anything else sharing

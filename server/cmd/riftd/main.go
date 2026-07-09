@@ -15,14 +15,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/anomaly-sh/rift/server/internal/adminapi"
-	"github.com/anomaly-sh/rift/server/internal/config"
-	"github.com/anomaly-sh/rift/server/internal/gateway"
-	"github.com/anomaly-sh/rift/server/internal/ingress"
-	"github.com/anomaly-sh/rift/server/internal/observability"
-	"github.com/anomaly-sh/rift/server/internal/reaper"
-	"github.com/anomaly-sh/rift/server/internal/registry"
-	"github.com/anomaly-sh/rift/server/internal/store/postgres"
+	"github.com/anomalysh/rift/server/internal/adminapi"
+	"github.com/anomalysh/rift/server/internal/config"
+	"github.com/anomalysh/rift/server/internal/gateway"
+	"github.com/anomalysh/rift/server/internal/ingress"
+	"github.com/anomalysh/rift/server/internal/observability"
+	"github.com/anomalysh/rift/server/internal/reaper"
+	"github.com/anomalysh/rift/server/internal/registry"
+	"github.com/anomalysh/rift/server/internal/store/postgres"
 )
 
 // shutdownGrace bounds how long in-flight public requests may finish before

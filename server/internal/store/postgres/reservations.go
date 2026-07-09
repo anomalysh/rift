@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/anomaly-sh/rift/server/internal/core"
+	"github.com/anomalysh/rift/server/internal/core"
 )
 
 const reservationColumns = `subdomain, token_id, note, created_at`

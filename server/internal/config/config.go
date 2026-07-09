@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomaly-sh/rift/server/internal/core"
+	"github.com/anomalysh/rift/server/internal/core"
 )
 
 // Config is the fully validated server configuration.

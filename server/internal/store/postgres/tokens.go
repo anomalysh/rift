@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/anomaly-sh/rift/server/internal/core"
+	"github.com/anomalysh/rift/server/internal/core"
 )
 
 const tokenColumns = `id, name, token_hash, max_tunnels, created_at, last_used_at, revoked_at, expires_at`

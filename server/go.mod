@@ -1,4 +1,4 @@
-module github.com/anomaly-sh/rift/server
+module github.com/anomalysh/rift/server
 
 go 1.21
 

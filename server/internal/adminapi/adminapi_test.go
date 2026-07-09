@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anomaly-sh/rift/server/internal/config"
-	"github.com/anomaly-sh/rift/server/internal/core"
+	"github.com/anomalysh/rift/server/internal/config"
+	"github.com/anomalysh/rift/server/internal/core"
 )
 
 const adminToken = "rift_admin_super_secret_value"

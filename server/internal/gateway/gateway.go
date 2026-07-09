@@ -13,10 +13,10 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/anomaly-sh/rift/server/internal/auth"
-	"github.com/anomaly-sh/rift/server/internal/config"
-	"github.com/anomaly-sh/rift/server/internal/core"
-	"github.com/anomaly-sh/rift/server/internal/tunnelproto"
+	"github.com/anomalysh/rift/server/internal/auth"
+	"github.com/anomalysh/rift/server/internal/config"
+	"github.com/anomalysh/rift/server/internal/core"
+	"github.com/anomalysh/rift/server/internal/tunnelproto"
 )
 
 // subdomainGenerationAttempts bounds retries when the server allocates a

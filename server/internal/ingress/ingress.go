@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anomaly-sh/rift/server/internal/config"
-	"github.com/anomaly-sh/rift/server/internal/core"
-	"github.com/anomaly-sh/rift/server/internal/tunnelproto"
+	"github.com/anomalysh/rift/server/internal/config"
+	"github.com/anomalysh/rift/server/internal/core"
+	"github.com/anomalysh/rift/server/internal/tunnelproto"
 )
 
 // copyBufferSize is the chunk size used when streaming a tunnel response to

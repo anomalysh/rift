@@ -5,7 +5,7 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/anomaly-sh/rift/server/internal/config"
+	"github.com/anomalysh/rift/server/internal/config"
 )
 
 // NewLogger builds the process logger described by cfg.

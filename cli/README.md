@@ -24,7 +24,7 @@ Prebuilt binaries are published for Linux (glibc and musl, x64/arm64), macOS
 ### `curl | sh` (recommended)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/anomaly-sh/rift/main/tools/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/anomalysh/rift/main/tools/install.sh | sh
 ```
 
 The installer detects your OS, architecture, and (on Linux) glibc vs musl,
@@ -40,7 +40,7 @@ Override its behaviour with environment variables:
 | ----------------------- | ---------------------- | -------------------------------- |
 | `RIFT_INSTALL_VERSION`  | latest release         | install a specific version       |
 | `RIFT_INSTALL_DIR`      | `/usr/local/bin` etc.  | install into a specific directory|
-| `RIFT_INSTALL_REPO`     | `anomaly-sh/rift`      | source GitHub `owner/repo`       |
+| `RIFT_INSTALL_REPO`     | `anomalysh/rift`      | source GitHub `owner/repo`       |
 | `RIFT_INSTALL_BASE_URL` | GitHub releases URL    | mirror / custom download base    |
 
 Run `sh install.sh --help`, or add `--version <v>`, `--dir <path>`, or
@@ -52,7 +52,7 @@ Every release ships a `SHA256SUMS` file. Always verify before running the binary
 
 ```sh
 VERSION=0.1.0
-BASE="https://github.com/anomaly-sh/rift/releases/download/v${VERSION}"
+BASE="https://github.com/anomalysh/rift/releases/download/v${VERSION}"
 # Pick the artifact for your platform, e.g. rift-linux-x64, rift-linux-x64-musl,
 # rift-darwin-arm64, rift-windows-x64.exe
 ARTIFACT=rift-linux-x64

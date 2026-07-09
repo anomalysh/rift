@@ -24,7 +24,7 @@ binary against it** before trusting it.
 		checksum mismatch it refuses to install.
 
 		```sh
-		curl -fsSL https://raw.githubusercontent.com/anomaly-sh/rift/main/tools/install.sh | sh
+		curl -fsSL https://raw.githubusercontent.com/anomalysh/rift/main/tools/install.sh | sh
 		```
 
 		It installs to `/usr/local/bin` if that is writable, otherwise to
@@ -52,7 +52,7 @@ binary against it** before trusting it.
 		| ----------------------- | -------------------- | ---------------------------------- |
 		| `RIFT_INSTALL_VERSION`  | latest release       | install a specific version         |
 		| `RIFT_INSTALL_DIR`      | `/usr/local/bin` etc.| install into a specific directory  |
-		| `RIFT_INSTALL_REPO`     | `anomaly-sh/rift`    | source GitHub `owner/repo`         |
+		| `RIFT_INSTALL_REPO`     | `anomalysh/rift`    | source GitHub `owner/repo`         |
 		| `RIFT_INSTALL_BASE_URL` | GitHub releases URL  | mirror or custom download base     |
 	</TabItem>
 
@@ -61,7 +61,7 @@ binary against it** before trusting it.
 
 		```sh
 		VERSION=0.1.0
-		BASE="https://github.com/anomaly-sh/rift/releases/download/v${VERSION}"
+		BASE="https://github.com/anomalysh/rift/releases/download/v${VERSION}"
 		# Pick the artifact for your platform, e.g. rift-linux-x64,
 		# rift-linux-x64-musl, rift-darwin-arm64, rift-windows-x64.exe
 		ARTIFACT=rift-linux-x64
@@ -109,7 +109,7 @@ binary against it** before trusting it.
 		[Bun](https://bun.sh) 1.3 or newer.
 
 		```sh
-		git clone https://github.com/anomaly-sh/rift
+		git clone https://github.com/anomalysh/rift
 		cd rift/cli
 		bun install          # install dev dependencies
 		bun run build        # compile a standalone binary to ./dist/rift

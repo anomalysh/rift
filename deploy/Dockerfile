@@ -42,7 +42,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # real values via --build-arg; the defaults keep a plain `docker build` emitting
 # a valid, if generic, labelled image. Last layer on purpose: only the labels
 # change per commit, so the rest of the image stays cached.
-ARG IMAGE_SOURCE="https://github.com/anomaly-sh/rift"
+ARG IMAGE_SOURCE="https://github.com/anomalysh/rift"
 ARG IMAGE_REVISION=""
 ARG IMAGE_VERSION="dev"
 ARG IMAGE_CREATED=""

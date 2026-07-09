@@ -13,9 +13,9 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/anomaly-sh/rift/server/internal/config"
-	"github.com/anomaly-sh/rift/server/internal/core"
-	"github.com/anomaly-sh/rift/server/internal/tunnelproto"
+	"github.com/anomalysh/rift/server/internal/config"
+	"github.com/anomalysh/rift/server/internal/core"
+	"github.com/anomalysh/rift/server/internal/tunnelproto"
 )
 
 // requestChunkSize is how much request body we read per REQ_BODY frame. Well

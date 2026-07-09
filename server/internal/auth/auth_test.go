@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anomaly-sh/rift/server/internal/config"
-	"github.com/anomaly-sh/rift/server/internal/core"
+	"github.com/anomalysh/rift/server/internal/config"
+	"github.com/anomalysh/rift/server/internal/core"
 )
 
 // fakeTokenStore is an in-memory core.TokenStore keyed by hash. Only the

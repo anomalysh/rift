@@ -10,7 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/anomaly-sh/rift/server/internal/store/migrations"
+	"github.com/anomalysh/rift/server/internal/store/migrations"
 )
 
 // migrationLockKey scopes the session-level advisory lock the runner holds

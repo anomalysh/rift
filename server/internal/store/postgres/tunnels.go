@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/anomaly-sh/rift/server/internal/core"
+	"github.com/anomalysh/rift/server/internal/core"
 )
 
 const tunnelColumns = `id, subdomain, token_id, protocol, local_port, node_id, client_addr, connected_at, last_seen_at`

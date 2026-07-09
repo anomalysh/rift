@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/anomaly-sh/rift/server/internal/core"
+	"github.com/anomalysh/rift/server/internal/core"
 )
 
 // Local is the in-memory subdomain -> session map for this process.

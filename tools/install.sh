@@ -4,10 +4,10 @@
 # Detects OS/arch/libc, downloads the matching release binary from GitHub,
 # VERIFIES its SHA256 against the published SHA256SUMS, and installs it.
 #
-#   curl -fsSL https://raw.githubusercontent.com/anomaly-sh/rift/main/tools/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/anomalysh/rift/main/tools/install.sh | sh
 #
 # Overridable via environment:
-#   RIFT_INSTALL_REPO      GitHub owner/repo            (default anomaly-sh/rift)
+#   RIFT_INSTALL_REPO      GitHub owner/repo            (default anomalysh/rift)
 #   RIFT_INSTALL_BASE_URL  release download base URL    (default GitHub releases)
 #   RIFT_INSTALL_VERSION   version to install           (default latest release)
 #   RIFT_INSTALL_DIR       install directory            (default /usr/local/bin
@@ -16,7 +16,7 @@
 # Written for POSIX sh: no arrays, no bashisms, no `local`.
 set -eu
 
-REPO="${RIFT_INSTALL_REPO:-anomaly-sh/rift}"
+REPO="${RIFT_INSTALL_REPO:-anomalysh/rift}"
 BASE_URL="${RIFT_INSTALL_BASE_URL:-https://github.com/${REPO}/releases/download}"
 VERSION="${RIFT_INSTALL_VERSION:-}"
 INSTALL_DIR="${RIFT_INSTALL_DIR:-}"

@@ -10,8 +10,8 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/anomaly-sh/rift/server/internal/config"
-	"github.com/anomaly-sh/rift/server/internal/core"
+	"github.com/anomalysh/rift/server/internal/config"
+	"github.com/anomalysh/rift/server/internal/core"
 )
 
 // New builds the registry implied by cfg: local-only, or Redis-backed.

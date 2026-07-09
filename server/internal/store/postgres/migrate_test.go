@@ -4,7 +4,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/anomaly-sh/rift/server/internal/store/migrations"
+	"github.com/anomalysh/rift/server/internal/store/migrations"
 )
 
 func TestParseMigrationsOrdersByVersion(t *testing.T) {

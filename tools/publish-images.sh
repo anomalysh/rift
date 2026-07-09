@@ -14,10 +14,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/lib/common.sh"
 
-DEFAULT_REGISTRY="ghcr.io/anomaly-sh"
+DEFAULT_REGISTRY="ghcr.io/anomalysh"
 DEFAULT_TAG="local"
 # The default source URL and license baked into the images when not overridden.
-IMAGE_SOURCE_URL="https://github.com/anomaly-sh/rift"
+IMAGE_SOURCE_URL="https://github.com/anomalysh/rift"
 # No LICENSE is declared in the repo yet; NOASSERTION is the SPDX placeholder.
 IMAGE_LICENSES="NOASSERTION"
 
