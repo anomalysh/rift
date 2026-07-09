@@ -12,12 +12,12 @@
 
 import { ENV, LOG_LEVELS, type LogLevel } from "./constants.ts";
 import {
+  type ConnStatus,
   createStyle,
   Dashboard,
+  type DashboardDeps,
   formatEvent,
   formatPlainBanner,
-  type ConnStatus,
-  type DashboardDeps,
   type Metrics,
   type SessionInfo,
 } from "./ui.ts";
@@ -59,7 +59,7 @@ export function isLogLevel(v: string): v is LogLevel {
 function format(level: LogLevel, message: string, rest: unknown[]): string {
   const ts = new Date().toISOString();
   const tag = level.toUpperCase().padEnd(5);
-  const extra = rest.length > 0 ? " " + rest.map(render).join(" ") : "";
+  const extra = rest.length > 0 ? ` ${rest.map(render).join(" ")}` : "";
   return `${ts} ${tag} ${message}${extra}\n`;
 }
 
@@ -79,7 +79,7 @@ function render(value: unknown): string {
 
 /** Merge a message and its rest args into one line for the TUI scrollback. */
 function joinMessage(message: string, rest: unknown[]): string {
-  return rest.length > 0 ? message + " " + rest.map(render).join(" ") : message;
+  return rest.length > 0 ? `${message} ${rest.map(render).join(" ")}` : message;
 }
 
 /**
@@ -108,7 +108,7 @@ function createPlainLogger(level: LogLevel): Logger {
   const stdoutAllowed = level !== "silent";
   const writeStdout = (text: string): void => {
     if (stdoutAllowed) {
-      process.stdout.write(text.endsWith("\n") ? text : text + "\n");
+      process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
     }
   };
   return {
@@ -163,7 +163,9 @@ function createTuiLogger(level: LogLevel): Logger {
     if (LEVEL_RANK[lvl] < threshold) {
       return;
     }
-    dashboard.event(formatEvent(lvl, joinMessage(message, rest), style, Date.now()));
+    dashboard.event(
+      formatEvent(lvl, joinMessage(message, rest), style, Date.now()),
+    );
   };
 
   return {
@@ -190,5 +192,7 @@ function createTuiLogger(level: LogLevel): Logger {
 }
 
 export function createLogger(level: LogLevel): Logger {
-  return shouldUseTui(level) ? createTuiLogger(level) : createPlainLogger(level);
+  return shouldUseTui(level)
+    ? createTuiLogger(level)
+    : createPlainLogger(level);
 }

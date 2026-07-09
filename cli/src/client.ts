@@ -9,9 +9,12 @@
 // A revoked token or a displaced tunnel will only fail again, so retrying them
 // would loop forever; transport loss is expected to be transient.
 
+import { Backoff } from "./backoff.ts";
+import type { ResolvedConfig } from "./config.ts";
 import {
   ControlType,
   FrameType,
+  HelloErrorCode,
   PROTOCOL_VERSION,
   RECONNECT,
   ResetCode,
@@ -19,11 +22,7 @@ import {
   SUBPROTOCOL,
   VERSION,
 } from "./constants.ts";
-import { Backoff } from "./backoff.ts";
-import type { ResolvedConfig } from "./config.ts";
-import { RequestStream, type FrameSink, type Stream } from "./forwarder.ts";
-import { UpgradeStream } from "./upgrade.ts";
-import { formatRetryDelay, type SessionInfo } from "./ui.ts";
+import { type FrameSink, RequestStream, type Stream } from "./forwarder.ts";
 import type { Logger } from "./logger.ts";
 import {
   asHelloError,
@@ -31,16 +30,20 @@ import {
   asRequestHead,
   asShutdown,
   asStreamReset,
+  type ControlEnvelope,
   decodeControl,
   decodeFrame,
   decodeJson,
   encodeControl,
   encodeFrame,
   encodeJsonFrame,
-  isKnownFrameType,
-  type Hello,
+  type Frame,
   type Heartbeat,
+  type Hello,
+  isKnownFrameType,
 } from "./protocol.ts";
+import { formatRetryDelay, type SessionInfo } from "./ui.ts";
+import { UpgradeStream } from "./upgrade.ts";
 
 export interface ClientOptions {
   readonly config: ResolvedConfig;
@@ -65,6 +68,8 @@ export class TunnelClient {
   private readonly protocol: string;
   /** Subdomain to request; updated to the gateway-assigned one after hello_ok. */
   private subdomain: string | undefined;
+  /** Whether the user asked for a specific subdomain (vs. an auto-generated one). */
+  private readonly requestedByUser: boolean;
 
   private ws: WebSocket | null = null;
   private readonly streams = new Map<bigint, Stream>();
@@ -94,6 +99,7 @@ export class TunnelClient {
     this.port = opts.port;
     this.protocol = opts.protocol;
     this.subdomain = opts.subdomain;
+    this.requestedByUser = opts.subdomain !== undefined;
     this.sink = {
       send: (type, streamId, payload) =>
         this.sendRaw(encodeFrame(type, streamId, payload)),
@@ -130,7 +136,8 @@ export class TunnelClient {
     const ws = this.ws;
     if (
       ws !== null &&
-      (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
+      (ws.readyState === WebSocket.OPEN ||
+        ws.readyState === WebSocket.CONNECTING)
     ) {
       ws.close(1000, "client shutdown");
     } else {
@@ -174,7 +181,9 @@ export class TunnelClient {
       // Detail arrives via the following close event; log for visibility.
       this.logger.debug("websocket error");
     });
-    ws.addEventListener("close", (event) => this.onClose(event.code, event.reason));
+    ws.addEventListener("close", (event) =>
+      this.onClose(event.code, event.reason),
+    );
   }
 
   private onOpen(): void {
@@ -199,7 +208,7 @@ export class TunnelClient {
       this.logger.warn("ignoring non-binary websocket message");
       return;
     }
-    let frame;
+    let frame: Frame;
     try {
       frame = decodeFrame(new Uint8Array(raw));
     } catch (err) {
@@ -209,7 +218,9 @@ export class TunnelClient {
       return;
     }
     if (!isKnownFrameType(frame.type)) {
-      this.logger.debug(`ignoring unknown frame type 0x${frame.type.toString(16)}`);
+      this.logger.debug(
+        `ignoring unknown frame type 0x${frame.type.toString(16)}`,
+      );
       return;
     }
 
@@ -231,13 +242,15 @@ export class TunnelClient {
         return;
       default:
         // RES_* frames are agent->gateway only; ignore if echoed back.
-        this.logger.debug(`ignoring unexpected frame type 0x${frame.type.toString(16)}`);
+        this.logger.debug(
+          `ignoring unexpected frame type 0x${frame.type.toString(16)}`,
+        );
         return;
     }
   }
 
   private handleControl(payload: Uint8Array): void {
-    let envelope;
+    let envelope: ControlEnvelope;
     try {
       envelope = decodeControl(payload);
     } catch (err) {
@@ -281,7 +294,9 @@ export class TunnelClient {
     this.subdomain = ok.subdomain;
     // A raw tunnel (tcp/tls) is reached at a host:port, not the http URL.
     const publicAddr =
-      ok.bind_addr !== undefined ? `${this.protocol}://${ok.bind_addr}` : ok.url;
+      ok.bind_addr !== undefined
+        ? `${this.protocol}://${ok.bind_addr}`
+        : ok.url;
     const localAddr =
       this.protocol === "http"
         ? `http://${this.config.host}:${this.port}`
@@ -300,6 +315,17 @@ export class TunnelClient {
       this.logger.info(`reconnected: ${publicAddr}`);
     }
     this.logger.status?.("online");
+    // The gateway may speak a newer protocol than this build; the handshake
+    // still succeeded (we are within its supported range), but flag it once so
+    // an out-of-date agent knows an upgrade exists.
+    if (
+      ok.protocol_version !== undefined &&
+      ok.protocol_version > PROTOCOL_VERSION
+    ) {
+      this.logger.warn(
+        `the gateway speaks protocol v${ok.protocol_version}; this rift speaks v${PROTOCOL_VERSION} — a newer rift may be available`,
+      );
+    }
     this.startHeartbeat(ok.heartbeat_interval_ms);
   }
 
@@ -314,10 +340,37 @@ export class TunnelClient {
 
   private handleHelloError(payload: unknown): void {
     const err = asHelloError(payload);
+    // A version gap cannot be retried away and is not the user's config fault;
+    // surface the gateway's guidance (which says which side to upgrade) plainly.
+    if (err?.code === HelloErrorCode.UNSUPPORTED_VERSION) {
+      this.fail(
+        new ClientError(`incompatible with the gateway: ${err.message}`),
+      );
+      return;
+    }
+    // An auto-generated subdomain that another client claimed during a
+    // disconnect is recoverable: drop it so the reconnect is issued a fresh one.
+    // A subdomain the user explicitly asked for is not -- failing tells them it
+    // is taken rather than silently moving them to a different URL.
+    if (
+      !this.requestedByUser &&
+      this.subdomain !== undefined &&
+      (err?.code === HelloErrorCode.SUBDOMAIN_TAKEN ||
+        err?.code === HelloErrorCode.SUBDOMAIN_RESERVED)
+    ) {
+      this.logger.warn(
+        `subdomain ${this.subdomain} is no longer available; requesting a new one`,
+      );
+      // Clearing it makes the next hello omit the subdomain, so the gateway
+      // generates a fresh one. The socket closes after hello_error, which
+      // triggers the normal reconnect path.
+      this.subdomain = undefined;
+      return;
+    }
     const detail =
       err !== null ? `${err.code}: ${err.message}` : "unknown reason";
-    // Any handshake rejection is a configuration problem that a retry cannot
-    // fix (bad token, taken/invalid subdomain, unsupported protocol/version).
+    // Any other handshake rejection is a configuration problem that a retry
+    // cannot fix (bad token, taken/invalid subdomain, unsupported protocol).
     this.fail(new ClientError(`handshake rejected: ${detail}`));
   }
 
@@ -379,7 +432,9 @@ export class TunnelClient {
       );
       stream = new UpgradeStream(streamId, head, deps);
     } else {
-      this.logger.debug(`REQ_HEAD ${head.method} ${head.path} stream ${streamId}`);
+      this.logger.debug(
+        `REQ_HEAD ${head.method} ${head.path} stream ${streamId}`,
+      );
       stream = new RequestStream(streamId, head, deps);
     }
     this.streams.set(streamId, stream);
@@ -479,7 +534,8 @@ export class TunnelClient {
     const ws = this.ws;
     if (
       ws !== null &&
-      (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)
+      (ws.readyState === WebSocket.OPEN ||
+        ws.readyState === WebSocket.CONNECTING)
     ) {
       ws.close(1000, "client fatal");
     } else {

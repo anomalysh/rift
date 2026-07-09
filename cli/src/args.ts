@@ -3,13 +3,13 @@
 //
 //   rift <protocol> <port> [subdomain] [flags]
 
+import type { PartialConfig } from "./config.ts";
 import {
   LOG_LEVELS,
-  SUPPORTED_PROTOCOLS,
   type LogLevel,
+  SUPPORTED_PROTOCOLS,
   type SupportedProtocol,
 } from "./constants.ts";
-import type { PartialConfig } from "./config.ts";
 import { isLogLevel } from "./logger.ts";
 
 /** Flag values that feed configuration resolution (see config.ts). */

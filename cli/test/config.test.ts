@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,10 +14,10 @@ import {
   ConfigError,
   configFilePath,
   loadConfigFile,
+  type PartialConfig,
   parseConfigFile,
   resolveConfig,
   writeConfigValues,
-  type PartialConfig,
 } from "../src/config.ts";
 
 const CONFIG_PATH = "/home/user/.config/rift/config.json";
@@ -68,16 +74,25 @@ describe("precedence: flag > env > file > default", () => {
       env: { RIFT_TOKEN: "t", RIFT_SERVER: "s", RIFT_HOST: "env-host" },
       file: { host: "file-host" },
     };
-    expect(resolve({ ...layered, flags: { host: "flag-host" } }).host).toBe("flag-host");
-    expect(resolve(layered).host).toBe("env-host");
-    expect(resolve({ file: layered.file, env: { RIFT_TOKEN: "t", RIFT_SERVER: "s" } }).host).toBe(
-      "file-host",
+    expect(resolve({ ...layered, flags: { host: "flag-host" } }).host).toBe(
+      "flag-host",
     );
+    expect(resolve(layered).host).toBe("env-host");
+    expect(
+      resolve({
+        file: layered.file,
+        env: { RIFT_TOKEN: "t", RIFT_SERVER: "s" },
+      }).host,
+    ).toBe("file-host");
   });
 
   test("insecure comes from flags and defaults to false", () => {
-    expect(resolve({ flags: { token: "t", server: "s" } }).insecure).toBe(false);
-    expect(resolve({ flags: { token: "t", server: "s", insecure: true } }).insecure).toBe(true);
+    expect(resolve({ flags: { token: "t", server: "s" } }).insecure).toBe(
+      false,
+    );
+    expect(
+      resolve({ flags: { token: "t", server: "s", insecure: true } }).insecure,
+    ).toBe(true);
   });
 });
 
@@ -106,27 +121,35 @@ describe("missing required settings", () => {
   });
 
   test("empty string env values are treated as unset", () => {
-    expect(() => resolve({ env: { RIFT_TOKEN: "", RIFT_SERVER: "s" } })).toThrow(ConfigError);
+    expect(() =>
+      resolve({ env: { RIFT_TOKEN: "", RIFT_SERVER: "s" } }),
+    ).toThrow(ConfigError);
   });
 });
 
 describe("env validation", () => {
   test("invalid RIFT_LOG_LEVEL is rejected", () => {
     expect(() =>
-      resolve({ env: { RIFT_TOKEN: "t", RIFT_SERVER: "s", RIFT_LOG_LEVEL: "loud" } }),
+      resolve({
+        env: { RIFT_TOKEN: "t", RIFT_SERVER: "s", RIFT_LOG_LEVEL: "loud" },
+      }),
     ).toThrow(ConfigError);
   });
 
   test("valid RIFT_LOG_LEVEL is honoured", () => {
     expect(
-      resolve({ env: { RIFT_TOKEN: "t", RIFT_SERVER: "s", RIFT_LOG_LEVEL: "error" } }).logLevel,
+      resolve({
+        env: { RIFT_TOKEN: "t", RIFT_SERVER: "s", RIFT_LOG_LEVEL: "error" },
+      }).logLevel,
     ).toBe("error");
   });
 });
 
 describe("configFilePath", () => {
   test("honours XDG_CONFIG_HOME", () => {
-    expect(configFilePath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/rift/config.json");
+    expect(configFilePath({ XDG_CONFIG_HOME: "/xdg" })).toBe(
+      "/xdg/rift/config.json",
+    );
   });
 
   test("falls back to HOME/.config", () => {
@@ -136,9 +159,9 @@ describe("configFilePath", () => {
   });
 
   test("XDG_CONFIG_HOME wins over HOME", () => {
-    expect(configFilePath({ XDG_CONFIG_HOME: "/xdg", HOME: "/home/user" })).toBe(
-      "/xdg/rift/config.json",
-    );
+    expect(
+      configFilePath({ XDG_CONFIG_HOME: "/xdg", HOME: "/home/user" }),
+    ).toBe("/xdg/rift/config.json");
   });
 });
 
@@ -148,16 +171,26 @@ describe("parseConfigFile", () => {
       JSON.stringify({ token: "t", server: "s", host: "h", logLevel: "debug" }),
       CONFIG_PATH,
     );
-    expect(cfg).toEqual({ token: "t", server: "s", host: "h", logLevel: "debug" });
+    expect(cfg).toEqual({
+      token: "t",
+      server: "s",
+      host: "h",
+      logLevel: "debug",
+    });
   });
 
   test("ignores unknown keys and empty strings", () => {
-    const cfg = parseConfigFile(JSON.stringify({ token: "", extra: 1, host: "h" }), CONFIG_PATH);
+    const cfg = parseConfigFile(
+      JSON.stringify({ token: "", extra: 1, host: "h" }),
+      CONFIG_PATH,
+    );
     expect(cfg).toEqual({ host: "h" });
   });
 
   test("rejects invalid JSON", () => {
-    expect(() => parseConfigFile("{not json", CONFIG_PATH)).toThrow(ConfigError);
+    expect(() => parseConfigFile("{not json", CONFIG_PATH)).toThrow(
+      ConfigError,
+    );
   });
 
   test("rejects a non-object top level", () => {
@@ -165,13 +198,15 @@ describe("parseConfigFile", () => {
   });
 
   test("rejects a non-string field", () => {
-    expect(() => parseConfigFile(JSON.stringify({ token: 5 }), CONFIG_PATH)).toThrow(ConfigError);
+    expect(() =>
+      parseConfigFile(JSON.stringify({ token: 5 }), CONFIG_PATH),
+    ).toThrow(ConfigError);
   });
 
   test("rejects an invalid logLevel", () => {
-    expect(() => parseConfigFile(JSON.stringify({ logLevel: "loud" }), CONFIG_PATH)).toThrow(
-      ConfigError,
-    );
+    expect(() =>
+      parseConfigFile(JSON.stringify({ logLevel: "loud" }), CONFIG_PATH),
+    ).toThrow(ConfigError);
   });
 });
 
@@ -215,7 +250,9 @@ describe("writeConfigValues", () => {
     const path = configFilePath(env);
     // Simulate a pre-existing world-readable config.
     mkdirSync(join(dir, "rift"), { recursive: true });
-    writeFileSync(path, JSON.stringify({ server: "wss://old" }), { mode: 0o644 });
+    writeFileSync(path, JSON.stringify({ server: "wss://old" }), {
+      mode: 0o644,
+    });
     writeConfigValues(env, { token: "rift_abc" });
     expect(statSync(path).mode & 0o777).toBe(0o600);
   });
@@ -224,6 +261,8 @@ describe("writeConfigValues", () => {
     const path = configFilePath(env);
     mkdirSync(join(dir, "rift"), { recursive: true });
     writeFileSync(path, "{not json", "utf8");
-    expect(() => writeConfigValues(env, { token: "rift_abc" })).toThrow(ConfigError);
+    expect(() => writeConfigValues(env, { token: "rift_abc" })).toThrow(
+      ConfigError,
+    );
   });
 });

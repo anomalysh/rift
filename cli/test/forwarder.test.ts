@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { gunzipSync, gzipSync } from "node:zlib";
 
 import { FrameType } from "../src/constants.ts";
-import { RequestStream, type FrameSink } from "../src/forwarder.ts";
+import { type FrameSink, RequestStream } from "../src/forwarder.ts";
 import type { RequestHead, ResponseHead } from "../src/protocol.ts";
 
 /** A body long enough that gzip is meaningfully smaller than the plaintext. */
@@ -172,7 +172,12 @@ describe("forwarder request framing", () => {
   // fetch would wait for them.
   test("content-length is dropped when there is no body", async () => {
     const { done } = makeStream(
-      head({ method: "POST", path: "/empty", has_body: false, headers: { "content-length": ["0"] } }),
+      head({
+        method: "POST",
+        path: "/empty",
+        has_body: false,
+        headers: { "content-length": ["0"] },
+      }),
     );
     await done;
 
@@ -208,7 +213,9 @@ describe("forwarder request framing", () => {
     expect(sink.heads).toHaveLength(1);
     expect(sink.heads[0]?.status).toBe(200);
     expect(sink.heads[0]?.headers["x-upstream"]).toEqual(["yes"]);
-    expect(new TextDecoder().decode(new Uint8Array(sink.body))).toBe("upstream-ok");
+    expect(new TextDecoder().decode(new Uint8Array(sink.body))).toBe(
+      "upstream-ok",
+    );
     expect(sink.ended).toBe(true);
   });
 

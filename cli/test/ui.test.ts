@@ -8,13 +8,13 @@ import {
   formatPlainBanner,
   formatRetryDelay,
   justify,
+  type PanelState,
   padEndVisible,
   renderPanel,
+  type SessionInfo,
   stripAnsi,
   truncateVisible,
   visibleWidth,
-  type PanelState,
-  type SessionInfo,
 } from "../src/ui.ts";
 
 // A disabled palette makes rendering deterministic and escape-free, so layout
@@ -131,9 +131,17 @@ describe("formatRetryDelay", () => {
 
 describe("clampWidth", () => {
   test("caps wide terminals and floors narrow ones", () => {
-    expect(clampWidth(200)).toBe(72);
-    expect(clampWidth(60)).toBe(60);
-    expect(clampWidth(5)).toBe(24);
+    expect(clampWidth(200)).toBe(72); // capped at PANEL_MAX_WIDTH
+    expect(clampWidth(60)).toBe(59); // one trailing column reserved
+    expect(clampWidth(5)).toBe(24); // floored at PANEL_MIN_WIDTH
+  });
+
+  // Regression: a panel as wide as the terminal phantom-wraps its last cell,
+  // which desyncs the redraw's line count and prints events on top of the panel.
+  test("leaves a trailing column so panel lines never fill the terminal", () => {
+    for (let columns = 26; columns <= 300; columns++) {
+      expect(clampWidth(columns)).toBeLessThan(columns);
+    }
   });
 });
 
@@ -204,7 +212,12 @@ describe("renderPanel", () => {
 
 describe("formatEvent", () => {
   test("prefixes a timestamp and a per-level glyph (plain)", () => {
-    const line = formatEvent("info", "connecting to wss://gw", plain, Date.UTC(2026, 0, 1, 9, 8, 7));
+    const line = formatEvent(
+      "info",
+      "connecting to wss://gw",
+      plain,
+      Date.UTC(2026, 0, 1, 9, 8, 7),
+    );
     expect(line).toContain("connecting to wss://gw");
     expect(line).toContain("•");
     expect(stripAnsi(line)).toBe(line); // no colour when disabled
@@ -218,7 +231,9 @@ describe("formatEvent", () => {
   });
 
   test("tints warnings and errors when colour is enabled", () => {
-    expect(formatEvent("error", "boom", colored, Date.now())).toContain("\x1b[31m");
+    expect(formatEvent("error", "boom", colored, Date.now())).toContain(
+      "\x1b[31m",
+    );
   });
 });
 

@@ -39,7 +39,8 @@ describe("conformance with Go tunnelproto encoder", () => {
       "200000000000000003000000557b22737461747573223a3230302c2268656164657273223a7b22636f6e74656e742d6c656e677468223a5b2232225d2c22636f6e74656e742d74797065223a5b226170706c69636174696f6e2f6a736f6e225d7d7d",
     reset:
       "300000000000000005000000417b22636f6465223a22757073747265616d5f6572726f72222c226d657373616765223a2245434f4e4e52454655534544203132372e302e302e313a33303030227d",
-    ctrl_pong_nopayload: "0100000000000000000000000f7b2274797065223a22706f6e67227d",
+    ctrl_pong_nopayload:
+      "0100000000000000000000000f7b2274797065223a22706f6e67227d",
   } as const;
 
   test("RES_BODY raw payload", () => {
@@ -49,9 +50,9 @@ describe("conformance with Go tunnelproto encoder", () => {
   });
 
   test("RES_END empty payload", () => {
-    expect(
-      toHex(encodeFrame(FrameType.RES_END, 42n, new Uint8Array(0))),
-    ).toBe(GO.res_end_empty);
+    expect(toHex(encodeFrame(FrameType.RES_END, 42n, new Uint8Array(0)))).toBe(
+      GO.res_end_empty,
+    );
   });
 
   test("RES_BODY with stream_id beyond 2^40 and binary payload", () => {

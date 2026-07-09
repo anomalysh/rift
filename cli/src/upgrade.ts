@@ -9,6 +9,7 @@
 // In both, REQ_BODY carries client->service bytes and RES_BODY the reverse,
 // with REQ_END/RES_END as half-closes, until either side ends.
 
+import type { Socket } from "bun";
 import {
   FrameType,
   MAX_PAYLOAD_BYTES,
@@ -18,8 +19,12 @@ import {
 } from "./constants.ts";
 import type { ForwardTarget, FrameSink, Stream } from "./forwarder.ts";
 import type { Logger } from "./logger.ts";
-import type { HeaderMap, RequestHead, ResponseHead, StreamReset } from "./protocol.ts";
-import type { Socket } from "bun";
+import type {
+  HeaderMap,
+  RequestHead,
+  ResponseHead,
+  StreamReset,
+} from "./protocol.ts";
 
 const EMPTY = new Uint8Array(0);
 const CRLF = "\r\n";
@@ -187,7 +192,10 @@ export class UpgradeStream implements Stream {
         this.deps.sink.send(FrameType.RES_END, this.streamId, EMPTY);
       }
     } else {
-      this.sendReset(ResetCode.UPSTREAM_ERROR, "upstream closed before responding");
+      this.sendReset(
+        ResetCode.UPSTREAM_ERROR,
+        "upstream closed before responding",
+      );
       this.terminateSocket();
       this.finish();
     }
@@ -204,7 +212,10 @@ export class UpgradeStream implements Stream {
           this.deps.sink.send(FrameType.RES_END, this.streamId, EMPTY);
         }
       } else {
-        this.sendReset(ResetCode.UPSTREAM_ERROR, "upstream closed before responding");
+        this.sendReset(
+          ResetCode.UPSTREAM_ERROR,
+          "upstream closed before responding",
+        );
       }
     }
     this.finish();

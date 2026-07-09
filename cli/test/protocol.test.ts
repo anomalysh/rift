@@ -12,9 +12,9 @@ import {
   decodeFrame,
   encodeControl,
   encodeFrame,
+  type Frame,
   FrameError,
   isKnownFrameType,
-  type Frame,
 } from "../src/protocol.ts";
 
 const utf8 = new TextEncoder();
@@ -82,27 +82,35 @@ describe("frame round-trip", () => {
   test("stream_id beyond Number.MAX_SAFE_INTEGER survives as bigint", () => {
     const big = 0xffff_ffff_ffff_fffen; // 2^64 - 2
     expect(big > BigInt(Number.MAX_SAFE_INTEGER)).toBe(true);
-    const decoded = decodeFrame(encodeFrame(FrameType.RES_BODY, big, utf8.encode("x")));
+    const decoded = decodeFrame(
+      encodeFrame(FrameType.RES_BODY, big, utf8.encode("x")),
+    );
     expect(decoded.streamId).toBe(big);
   });
 
   test("maximum uint64 stream_id round-trips", () => {
     const max = 0xffff_ffff_ffff_ffffn;
-    const decoded = decodeFrame(encodeFrame(FrameType.REQ_HEAD, max, new Uint8Array(0)));
+    const decoded = decodeFrame(
+      encodeFrame(FrameType.REQ_HEAD, max, new Uint8Array(0)),
+    );
     expect(decoded.streamId).toBe(max);
   });
 });
 
 describe("stream-id discipline", () => {
   test("encode rejects control frame on a non-zero stream", () => {
-    expect(frameErrorCode(() => encodeFrame(FrameType.CONTROL, 1n, new Uint8Array(0)))).toBe(
-      "control_stream",
-    );
+    expect(
+      frameErrorCode(() =>
+        encodeFrame(FrameType.CONTROL, 1n, new Uint8Array(0)),
+      ),
+    ).toBe("control_stream");
   });
 
   test("encode rejects data frame on stream 0", () => {
     expect(
-      frameErrorCode(() => encodeFrame(FrameType.REQ_HEAD, CONTROL_STREAM_ID, new Uint8Array(0))),
+      frameErrorCode(() =>
+        encodeFrame(FrameType.REQ_HEAD, CONTROL_STREAM_ID, new Uint8Array(0)),
+      ),
     ).toBe("data_stream");
   });
 
@@ -138,15 +146,17 @@ describe("unknown and malformed frames", () => {
   });
 
   test("truncated frame (shorter than header) is rejected", () => {
-    expect(frameErrorCode(() => decodeFrame(new Uint8Array(HEADER_SIZE - 1)))).toBe(
-      "short_frame",
-    );
+    expect(
+      frameErrorCode(() => decodeFrame(new Uint8Array(HEADER_SIZE - 1))),
+    ).toBe("short_frame");
   });
 
   test("declared length longer than payload is rejected", () => {
     const raw = encodeFrame(FrameType.REQ_BODY, 1n, utf8.encode("hello"));
     const truncated = raw.subarray(0, raw.length - 1); // drop a payload byte
-    expect(frameErrorCode(() => decodeFrame(truncated))).toBe("length_mismatch");
+    expect(frameErrorCode(() => decodeFrame(truncated))).toBe(
+      "length_mismatch",
+    );
   });
 
   test("declared length shorter than payload is rejected", () => {
@@ -158,7 +168,13 @@ describe("unknown and malformed frames", () => {
 
   test("encode rejects an oversize payload", () => {
     expect(
-      frameErrorCode(() => encodeFrame(FrameType.REQ_BODY, 1n, new Uint8Array(MAX_PAYLOAD_BYTES + 1))),
+      frameErrorCode(() =>
+        encodeFrame(
+          FrameType.REQ_BODY,
+          1n,
+          new Uint8Array(MAX_PAYLOAD_BYTES + 1),
+        ),
+      ),
     ).toBe("payload_too_large");
   });
 });
@@ -184,7 +200,11 @@ describe("control envelope", () => {
   });
 
   test("decode rejects an envelope without a type", () => {
-    const raw = encodeFrame(FrameType.CONTROL, CONTROL_STREAM_ID, utf8.encode(`{"payload":{}}`));
+    const raw = encodeFrame(
+      FrameType.CONTROL,
+      CONTROL_STREAM_ID,
+      utf8.encode(`{"payload":{}}`),
+    );
     expect(() => decodeControl(decodeFrame(raw).payload)).toThrow();
   });
 

@@ -51,7 +51,12 @@ describe("valid invocations", () => {
   });
 
   test("flags in --flag=value form", () => {
-    const parsed = parseArgs(["http", "3000", "--token=abc", "--server=ws://x"]);
+    const parsed = parseArgs([
+      "http",
+      "3000",
+      "--token=abc",
+      "--server=ws://x",
+    ]);
     expect(parsed.kind).toBe("run");
     if (parsed.kind === "run") {
       expect(parsed.flags.token).toBe("abc");
@@ -77,7 +82,16 @@ describe("valid invocations", () => {
 describe("bad port", () => {
   // Every one of these is rejected. "-1" reads as a flag, "" as a missing
   // port; the rest reach the port validator.
-  for (const bad of ["0", "70000", "65536", "abc", "-1", "3000.5", "0x10", ""]) {
+  for (const bad of [
+    "0",
+    "70000",
+    "65536",
+    "abc",
+    "-1",
+    "3000.5",
+    "0x10",
+    "",
+  ]) {
     test(`rejects port ${JSON.stringify(bad)}`, () => {
       expect(parseArgs(["http", bad]).kind).toBe("error");
     });

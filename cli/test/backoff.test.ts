@@ -26,7 +26,12 @@ describe("Backoff (decorrelated jitter)", () => {
     }
     // Monotone non-decreasing: no jumping back toward zero like full jitter.
     for (let i = 1; i < delays.length; i++) {
-      expect(delays[i]!).toBeGreaterThanOrEqual(delays[i - 1]!);
+      const prev = delays[i - 1];
+      const cur = delays[i];
+      if (prev === undefined || cur === undefined) {
+        continue; // unreachable: i is always in bounds
+      }
+      expect(cur).toBeGreaterThanOrEqual(prev);
     }
     // Reaches and stays at the cap.
     expect(delays[delays.length - 1]).toBe(CAP);

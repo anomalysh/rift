@@ -7,12 +7,12 @@
 import {
   CONTROL_STREAM_ID,
   ControlType,
+  type ControlTypeValue,
   FrameType,
   HEADER_SIZE,
   KNOWN_FRAME_TYPES,
   MAX_FRAME_BYTES,
   MAX_PAYLOAD_BYTES,
-  type ControlTypeValue,
 } from "./constants.ts";
 
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
@@ -55,10 +55,7 @@ export function isKnownFrameType(type: number): boolean {
 function checkStreamID(type: number, streamID: bigint): void {
   if (type === FrameType.CONTROL) {
     if (streamID !== CONTROL_STREAM_ID) {
-      throw new FrameError(
-        "control_stream",
-        "control frame must use stream 0",
-      );
+      throw new FrameError("control_stream", "control frame must use stream 0");
     }
     return;
   }
@@ -154,6 +151,8 @@ export interface HelloOk {
   heartbeat_interval_ms: number;
   /** Public host:port for a raw tunnel (tcp/tls); absent for http. */
   bind_addr?: string;
+  /** The gateway's current protocol version, so the agent can warn if behind. */
+  protocol_version?: number;
 }
 
 export interface HelloError {
@@ -217,15 +216,16 @@ export function encodeControl(
 /** Parse a CONTROL frame payload into its envelope. Throws on invalid JSON. */
 export function decodeControl(payload: Uint8Array): ControlEnvelope {
   const parsed: unknown = JSON.parse(textDecoder.decode(payload));
-  if (!isRecord(parsed) || typeof parsed["type"] !== "string" || parsed["type"] === "") {
-    throw new FrameError(
-      "length_mismatch",
-      "control envelope missing type",
-    );
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.type !== "string" ||
+    parsed.type === ""
+  ) {
+    throw new FrameError("length_mismatch", "control envelope missing type");
   }
-  const envelope: ControlEnvelope = { type: parsed["type"] };
-  if ("payload" in parsed && parsed["payload"] !== undefined) {
-    envelope.payload = parsed["payload"];
+  const envelope: ControlEnvelope = { type: parsed.type };
+  if ("payload" in parsed && parsed.payload !== undefined) {
+    envelope.payload = parsed.payload;
   }
   return envelope;
 }
@@ -273,21 +273,24 @@ export function isHeaderMap(v: unknown): v is HeaderMap {
 export function asHelloOk(v: unknown): HelloOk | null {
   if (
     isRecord(v) &&
-    typeof v["tunnel_id"] === "string" &&
-    typeof v["subdomain"] === "string" &&
-    typeof v["hostname"] === "string" &&
-    typeof v["url"] === "string" &&
-    typeof v["heartbeat_interval_ms"] === "number"
+    typeof v.tunnel_id === "string" &&
+    typeof v.subdomain === "string" &&
+    typeof v.hostname === "string" &&
+    typeof v.url === "string" &&
+    typeof v.heartbeat_interval_ms === "number"
   ) {
     const ok: HelloOk = {
-      tunnel_id: v["tunnel_id"],
-      subdomain: v["subdomain"],
-      hostname: v["hostname"],
-      url: v["url"],
-      heartbeat_interval_ms: v["heartbeat_interval_ms"],
+      tunnel_id: v.tunnel_id,
+      subdomain: v.subdomain,
+      hostname: v.hostname,
+      url: v.url,
+      heartbeat_interval_ms: v.heartbeat_interval_ms,
     };
-    if (typeof v["bind_addr"] === "string" && v["bind_addr"] !== "") {
-      ok.bind_addr = v["bind_addr"];
+    if (typeof v.bind_addr === "string" && v.bind_addr !== "") {
+      ok.bind_addr = v.bind_addr;
+    }
+    if (typeof v.protocol_version === "number") {
+      ok.protocol_version = v.protocol_version;
     }
     return ok;
   }
@@ -295,25 +298,25 @@ export function asHelloOk(v: unknown): HelloOk | null {
 }
 
 export function asHelloError(v: unknown): HelloError | null {
-  if (isRecord(v) && typeof v["code"] === "string") {
+  if (isRecord(v) && typeof v.code === "string") {
     return {
-      code: v["code"],
-      message: typeof v["message"] === "string" ? v["message"] : "",
+      code: v.code,
+      message: typeof v.message === "string" ? v.message : "",
     };
   }
   return null;
 }
 
 export function asHeartbeat(v: unknown): Heartbeat | null {
-  if (isRecord(v) && typeof v["ts"] === "number") {
-    return { ts: v["ts"] };
+  if (isRecord(v) && typeof v.ts === "number") {
+    return { ts: v.ts };
   }
   return null;
 }
 
 export function asShutdown(v: unknown): Shutdown | null {
-  if (isRecord(v) && typeof v["reason"] === "string") {
-    return { reason: v["reason"] };
+  if (isRecord(v) && typeof v.reason === "string") {
+    return { reason: v.reason };
   }
   return null;
 }
@@ -321,35 +324,35 @@ export function asShutdown(v: unknown): Shutdown | null {
 export function asRequestHead(v: unknown): RequestHead | null {
   if (
     isRecord(v) &&
-    typeof v["method"] === "string" &&
-    typeof v["path"] === "string" &&
-    isHeaderMap(v["headers"]) &&
-    typeof v["host"] === "string" &&
-    typeof v["scheme"] === "string" &&
-    typeof v["remote_addr"] === "string" &&
-    typeof v["has_body"] === "boolean"
+    typeof v.method === "string" &&
+    typeof v.path === "string" &&
+    isHeaderMap(v.headers) &&
+    typeof v.host === "string" &&
+    typeof v.scheme === "string" &&
+    typeof v.remote_addr === "string" &&
+    typeof v.has_body === "boolean"
   ) {
     return {
-      method: v["method"],
-      path: v["path"],
-      headers: v["headers"],
-      host: v["host"],
-      scheme: v["scheme"],
-      remote_addr: v["remote_addr"],
-      has_body: v["has_body"],
+      method: v.method,
+      path: v.path,
+      headers: v.headers,
+      host: v.host,
+      scheme: v.scheme,
+      remote_addr: v.remote_addr,
+      has_body: v.has_body,
       // `upgrade` and `raw` are omitempty on the wire; absent means false.
-      upgrade: v["upgrade"] === true,
-      raw: v["raw"] === true,
+      upgrade: v.upgrade === true,
+      raw: v.raw === true,
     };
   }
   return null;
 }
 
 export function asStreamReset(v: unknown): StreamReset | null {
-  if (isRecord(v) && typeof v["code"] === "string") {
-    const reset: StreamReset = { code: v["code"] };
-    if (typeof v["message"] === "string") {
-      reset.message = v["message"];
+  if (isRecord(v) && typeof v.code === "string") {
+    const reset: StreamReset = { code: v.code };
+    if (typeof v.message === "string") {
+      reset.message = v.message;
     }
     return reset;
   }

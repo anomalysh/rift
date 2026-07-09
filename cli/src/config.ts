@@ -17,17 +17,16 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-
+import type { FlagConfig } from "./args.ts";
 import {
   CONFIG_DIR_NAME,
   CONFIG_FILE_NAME,
   DEFAULTS,
   ENV,
   LOG_LEVELS,
-  XDG_CONFIG_FALLBACK,
   type LogLevel,
+  XDG_CONFIG_FALLBACK,
 } from "./constants.ts";
-import type { FlagConfig } from "./args.ts";
 import { isLogLevel } from "./logger.ts";
 import { isRecord } from "./protocol.ts";
 
@@ -138,7 +137,11 @@ export function configFilePath(
 ): string {
   const xdg = nonEmpty(env[ENV.XDG_CONFIG_HOME]);
   const home = nonEmpty(env[ENV.HOME]);
-  const base = xdg ?? (home !== undefined ? join(home, XDG_CONFIG_FALLBACK) : XDG_CONFIG_FALLBACK);
+  const base =
+    xdg ??
+    (home !== undefined
+      ? join(home, XDG_CONFIG_FALLBACK)
+      : XDG_CONFIG_FALLBACK);
   return join(base, CONFIG_DIR_NAME, CONFIG_FILE_NAME);
 }
 
@@ -172,7 +175,7 @@ export function parseConfigFile(text: string, path: string): PartialConfig {
   strField("server");
   strField("host");
 
-  const level = parsed["logLevel"];
+  const level = parsed.logLevel;
   if (level !== undefined) {
     if (typeof level !== "string" || !isLogLevel(level)) {
       throw new ConfigError(
@@ -219,14 +222,16 @@ export function writeConfigValues(
       );
     }
     if (!isRecord(parsed)) {
-      throw new ConfigError(`invalid config in ${path}: expected a JSON object`);
+      throw new ConfigError(
+        `invalid config in ${path}: expected a JSON object`,
+      );
     }
     current = parsed;
   }
 
   const merged = { ...current, ...updates };
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, JSON.stringify(merged, null, 2) + "\n", { mode: 0o600 });
+  writeFileSync(path, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });
   // writeFileSync only applies mode on creation; enforce it for an existing
   // file that may have been created with looser permissions.
   chmodSync(path, 0o600);

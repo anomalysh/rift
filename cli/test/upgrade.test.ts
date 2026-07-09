@@ -93,7 +93,8 @@ class RecordingSink implements FrameSink {
 
   send(type: number, _id: bigint, payload: Uint8Array): void {
     // payload aliases the socket buffer; copy before retaining.
-    if (type === FrameType.RES_BODY) this.bodyChunks.push(new Uint8Array(payload));
+    if (type === FrameType.RES_BODY)
+      this.bodyChunks.push(new Uint8Array(payload));
     if (type === FrameType.RES_END) this.ended = true;
   }
   sendJson(type: number, _id: bigint, payload: unknown): void {
@@ -153,7 +154,7 @@ describe("UpgradeStream", () => {
 
     await waitFor(() => sink.heads.length > 0);
     expect(sink.heads[0]?.status).toBe(101);
-    expect(sink.heads[0]?.headers["upgrade"]).toEqual(["websocket"]);
+    expect(sink.heads[0]?.headers.upgrade).toEqual(["websocket"]);
 
     // Client -> service -> (echo) -> client.
     stream.pushBody(new TextEncoder().encode("ping-frame"));

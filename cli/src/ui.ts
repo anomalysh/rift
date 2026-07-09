@@ -72,6 +72,7 @@ export function createStyle(enabled: boolean): Style {
 
 // Only SGR sequences (ending in `m`) ever appear inside content strings; cursor
 // control is emitted by the Dashboard separately and never measured here.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching the ANSI ESC (0x1b) is the whole point of stripping SGR codes.
 const ANSI_SGR = /\x1b\[[0-9;]*m/g;
 
 /** Strip SGR colour codes, leaving the printable text. */
@@ -272,9 +273,15 @@ const PANEL_MIN_WIDTH = 24;
 /** Interior padding (`│ ` … ` │`) subtracted from the panel width. */
 const FRAME_PADDING = 4;
 
-/** Clamp a terminal width into the panel's drawable range. */
+/** Clamp a terminal width into the panel's drawable range.
+ *
+ * The panel is kept strictly narrower than the terminal: a line that fills the
+ * final column phantom-wraps on many terminals, which makes the redraw's
+ * logical line count smaller than the rows actually on screen. `moveUpAndClear`
+ * then scrolls up too few rows and the next event is drawn on top of the panel.
+ * Reserving one trailing column avoids that entirely. */
 export function clampWidth(columns: number): number {
-  return Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, columns));
+  return Math.max(PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, columns - 1));
 }
 
 interface StatusMeta {
@@ -286,11 +293,19 @@ interface StatusMeta {
 function statusMeta(status: ConnStatus): StatusMeta {
   switch (status) {
     case "connecting":
-      return { label: "connecting", glyph: "spinner", paint: (s, t) => s.yellow(t) };
+      return {
+        label: "connecting",
+        glyph: "spinner",
+        paint: (s, t) => s.yellow(t),
+      };
     case "online":
       return { label: "online", glyph: "on", paint: (s, t) => s.green(t) };
     case "reconnecting":
-      return { label: "reconnecting", glyph: "spinner", paint: (s, t) => s.yellow(t) };
+      return {
+        label: "reconnecting",
+        glyph: "spinner",
+        paint: (s, t) => s.yellow(t),
+      };
     case "closing":
       return { label: "closing", glyph: "spinner", paint: (s, t) => s.dim(t) };
     case "offline":
@@ -345,15 +360,17 @@ export function renderPanel(
     meta.glyph === "on" ? "●" : meta.glyph === "off" ? "○" : state.spinnerFrame;
   const statusCell =
     meta.paint(style, `${glyph} ${meta.label}`) +
-    (state.detail !== "" ? " " + style.dim(state.detail) : "");
+    (state.detail !== "" ? ` ${style.dim(state.detail)}` : "");
   const brand =
     style.bold("rift") +
-    (state.session !== null ? " " + style.dim(state.session.version) : "");
+    (state.session !== null ? ` ${style.dim(state.session.version)}` : "");
   lines.push(row(justify(brand, statusCell, inner)));
   lines.push(row(""));
 
   if (state.session !== null) {
-    lines.push(row(fieldRow(style, "Forwarding", style.cyan(state.session.url))));
+    lines.push(
+      row(fieldRow(style, "Forwarding", style.cyan(state.session.url))),
+    );
     lines.push(
       row(fieldRow(style, "", style.dim("→ ") + state.session.forwardTo)),
     );
@@ -518,11 +535,11 @@ export class Dashboard {
   /** Print a scrollback line above the panel, then repaint the panel below it. */
   event(line: string): void {
     if (this.stopped) {
-      this.deps.write(line.endsWith("\n") ? line : line + "\n");
+      this.deps.write(line.endsWith("\n") ? line : `${line}\n`);
       return;
     }
     this.tearDown();
-    this.deps.write(line.endsWith("\n") ? line : line + "\n");
+    this.deps.write(line.endsWith("\n") ? line : `${line}\n`);
     this.draw(true);
   }
 
@@ -571,7 +588,7 @@ export class Dashboard {
     const lines = renderPanel(state, this.deps.style, width);
     let out = this.renderedLines > 0 ? moveUpAndClear(this.renderedLines) : "";
     for (const line of lines) {
-      out += line + "\n";
+      out += `${line}\n`;
     }
     this.deps.write(out);
     this.renderedLines = lines.length;
@@ -593,7 +610,9 @@ function signatureOf(state: PanelState, width: number): string {
   const animated = state.status === "online" || state.status === "offline";
   const spin = animated ? "" : state.spinnerFrame;
   const metrics =
-    state.metrics !== null ? `${state.metrics.total}/${state.metrics.open}` : "-";
+    state.metrics !== null
+      ? `${state.metrics.total}/${state.metrics.open}`
+      : "-";
   const session =
     state.session !== null
       ? `${state.session.url}|${state.session.forwardTo}|${state.session.gateway}|${state.session.version}`

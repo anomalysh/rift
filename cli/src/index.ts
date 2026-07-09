@@ -8,15 +8,15 @@ import {
   ConfigError,
   configFilePath,
   loadConfigFile,
+  type ResolvedConfig,
   resolveConfig,
   writeConfigValues,
-  type ResolvedConfig,
 } from "./config.ts";
 import { EXIT, VERSION } from "./constants.ts";
 import { createLogger } from "./logger.ts";
 
 function fail(message: string, code: number): never {
-  process.stderr.write(message.endsWith("\n") ? message : message + "\n");
+  process.stderr.write(message.endsWith("\n") ? message : `${message}\n`);
   process.exit(code);
 }
 
@@ -41,11 +41,11 @@ async function main(): Promise<void> {
 
   switch (parsed.kind) {
     case "help":
-      process.stdout.write(usageText() + "\n");
+      process.stdout.write(`${usageText()}\n`);
       process.exit(EXIT.OK);
       break;
     case "version":
-      process.stdout.write(VERSION + "\n");
+      process.stdout.write(`${VERSION}\n`);
       process.exit(EXIT.OK);
       break;
     case "error":
