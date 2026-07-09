@@ -1,0 +1,6 @@
+[tools]
+# Pin the Go toolchain so local builds match CI and the server Docker image, and
+# stay current with standard-library security fixes (see server/go.mod). Bumping
+# here should move alongside deploy/Dockerfile and .github/workflows/ci.yml.
+go = "1.25"
+bun = "1.3.14"

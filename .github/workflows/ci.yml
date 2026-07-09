@@ -48,7 +48,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: "1.21"
+          go-version: "1.25"
           # Cache is managed explicitly below, keyed on go.sum.
           cache: false
 
@@ -85,6 +85,13 @@ jobs:
         env:
           RIFT_TEST_POSTGRES_DSN: postgres://rift:rift@localhost:5432/rift_test?sslmode=disable
         run: go test -race ./...
+
+      - name: Vulnerability scan
+        # Fails on a CVE reachable from our code (stdlib or a dependency). Keeps
+        # the toolchain and modules from silently drifting behind security fixes.
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
 
   cli:
     name: cli (bun)

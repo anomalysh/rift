@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- build ------------------------------------------------------------------
-FROM golang:1.21-alpine AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 
 # The Go module lives under server/. Copy the manifests first so `go mod
