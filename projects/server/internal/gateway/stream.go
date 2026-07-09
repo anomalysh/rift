@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/anomalysh/rift/projects/server/internal/core"
 	"github.com/anomalysh/rift/projects/server/internal/tunnelproto"
@@ -68,19 +69,23 @@ func (s *stream) reason() error {
 // bodyReader adapts the stream's chunk channel to an io.ReadCloser suitable
 // for http.Response.Body.
 type bodyReader struct {
-	st      *stream
-	sess    *session
-	cur     []byte
-	closed  bool
-	drained bool
+	st   *stream
+	sess *session
+	cur  []byte
+
+	// On the upgraded raw path, the service->client copy goroutine calls Read
+	// while the teardown goroutine calls Close, so these two flags are touched
+	// concurrently and must be atomic. cur is only ever touched by Read.
+	closed  atomic.Bool
+	drained atomic.Bool
 }
 
 func (r *bodyReader) Read(p []byte) (int, error) {
-	if r.closed {
+	if r.closed.Load() {
 		return 0, io.ErrClosedPipe
 	}
 	for len(r.cur) == 0 {
-		if r.drained {
+		if r.drained.Load() {
 			return 0, io.EOF
 		}
 		// An abort outranks buffered chunks: the response is incomplete and
@@ -97,7 +102,7 @@ func (r *bodyReader) Read(p []byte) (int, error) {
 		select {
 		case chunk, ok := <-r.st.body:
 			if !ok {
-				r.drained = true
+				r.drained.Store(true)
 				return 0, io.EOF
 			}
 			r.cur = chunk
@@ -116,12 +121,11 @@ func (r *bodyReader) Read(p []byte) (int, error) {
 // Close releases the stream. If the body was not fully read, the agent is told
 // to cancel the local request rather than keep streaming into a dead socket.
 func (r *bodyReader) Close() error {
-	if r.closed {
+	if !r.closed.CompareAndSwap(false, true) {
 		return nil
 	}
-	r.closed = true
 
-	incomplete := !r.drained
+	incomplete := !r.drained.Load()
 	select {
 	case <-r.st.done:
 		incomplete = false // already aborted or ended; nothing to cancel
