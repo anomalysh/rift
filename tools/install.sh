@@ -4,7 +4,7 @@
 # Detects OS/arch/libc, downloads the matching release binary from GitHub,
 # VERIFIES its SHA256 against the published SHA256SUMS, and installs it.
 #
-#   curl -fsSL https://raw.githubusercontent.com/anomalysh/rift/main/tools/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/anomalysh/rift/master/tools/install.sh | sh
 #
 # Overridable via environment:
 #   RIFT_INSTALL_REPO      GitHub owner/repo            (default anomalysh/rift)

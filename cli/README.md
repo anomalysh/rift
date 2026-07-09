@@ -24,7 +24,7 @@ Prebuilt binaries are published for Linux (glibc and musl, x64/arm64), macOS
 ### `curl | sh` (recommended)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/anomalysh/rift/main/tools/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/anomalysh/rift/master/tools/install.sh | sh
 ```
 
 The installer detects your OS, architecture, and (on Linux) glibc vs musl,

@@ -3,7 +3,7 @@ name: publish
 # Publish the rift container images to GitHub Packages (ghcr.io).
 #
 # Triggers:
-#   - push to the default branch  -> build + push :edge and :sha-<short>
+#   - push to the default branch (master)  -> build + push :edge and :sha-<short>
 #   - push of a v* tag            -> build + push :X.Y.Z, :X.Y and :latest
 #   - pull_request                -> build ONLY, never push
 #
@@ -13,7 +13,7 @@ name: publish
 # Dockerfiles compile; they just never log in, push, or attest.
 on:
   push:
-    branches: [main]
+    branches: [master]
     tags: ["v*"]
   pull_request:
 
