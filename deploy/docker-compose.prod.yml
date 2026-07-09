@@ -1,0 +1,55 @@
+# tunl production overlay. Apply on top of the base file:
+#     docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# All secrets come from an untracked .env sitting next to these files; nothing
+# sensitive is inlined here.
+
+services:
+  postgres:
+    restart: unless-stopped
+
+  redis:
+    restart: unless-stopped
+
+  tunld:
+    restart: unless-stopped
+    # In production tunld sits entirely behind Caddy on the private compose
+    # network; its ports must NEVER be published to the host. !reset clears the
+    # dev port mappings inherited from the base file.
+    ports: !reset []
+    environment:
+      TUNL_ENV: ${TUNL_ENV:-production}
+      TUNL_PUBLIC_SCHEME: ${TUNL_PUBLIC_SCHEME:-https}
+      # Behind Caddy, so trust the X-Forwarded-* it sets. Caddy reaches tunld by
+      # the compose service DNS name; trust that source.
+      TUNL_INGRESS_TRUSTED_PROXY_IPS: ${TUNL_INGRESS_TRUSTED_PROXY_IPS:-}
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - tunld
+    # Only Caddy publishes host ports. 443/udp serves HTTP/3.
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      # Consumed by {$VAR} placeholders in caddy/Caddyfile at Caddy start-up.
+      TUNL_BASE_DOMAIN: ${TUNL_BASE_DOMAIN:-tunl.siliconcolony.dev}
+      TUNL_GATEWAY_HOSTNAME: ${TUNL_GATEWAY_HOSTNAME:-gateway.tunl.siliconcolony.dev}
+      TUNL_ACME_EMAIL: ${TUNL_ACME_EMAIL:-}
+      TUNL_UPSTREAM_HOST: ${TUNL_UPSTREAM_HOST:-tunld}
+      TUNL_INGRESS_PORT: ${TUNL_INGRESS_PORT:-8080}
+      TUNL_GATEWAY_PORT: ${TUNL_GATEWAY_PORT:-8081}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # caddy_data holds issued certificates and the ACME account key. Losing it
+      # forces re-issuance on the next boot and can trip Let's Encrypt duplicate
+      # -certificate rate limits, so it MUST persist in a named volume.
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

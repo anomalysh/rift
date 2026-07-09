@@ -1,0 +1,79 @@
+# tunl local development stack.
+#
+# There is no Caddy and no public DNS locally, so tunld's ports are published
+# straight to the host and you reach a tunnel by sending the Host header
+# yourself, e.g.:
+#     curl -H 'Host: myapp.tunl.siliconcolony.dev' http://127.0.0.1:8080/
+#
+# Production layers deploy/docker-compose.prod.yml on top of this file, which
+# adds Caddy, stops publishing tunld's ports, and sets restart policies.
+name: tunl
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      # Local throwaway credentials for the dev database only — NOT production.
+      POSTGRES_USER: ${POSTGRES_USER:-tunl}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tunl}
+      POSTGRES_DB: ${POSTGRES_DB:-tunl}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tunl} -d ${POSTGRES_DB:-tunl}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    # Optional multi-node routing backend, off by default. Enable it with
+    # `docker compose --profile redis up` AND set TUNL_REDIS_ENABLED=true so
+    # tunld actually connects (TUNL_REDIS_ENABLED defaults to false).
+    profiles: ["redis"]
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  tunld:
+    build:
+      # Context is the repo root so the build can reach server/; the same
+      # relative layout exists on the VPS (/opt/tunl) after remote-deploy.
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      # --- required ---
+      # Local dev gets a working default DSN pointed at the postgres service.
+      TUNL_POSTGRES_DSN: ${TUNL_POSTGRES_DSN:-postgres://tunl:tunl@postgres:5432/tunl?sslmode=disable}
+      TUNL_BASE_DOMAIN: ${TUNL_BASE_DOMAIN:-tunl.siliconcolony.dev}
+      # Dev-only throwaway admin token; production must set a >=32 char secret.
+      TUNL_ADMIN_TOKEN: ${TUNL_ADMIN_TOKEN:-dev-admin-token-change-me-please}
+      # --- environment / listeners ---
+      TUNL_ENV: ${TUNL_ENV:-development}
+      TUNL_LOG_LEVEL: ${TUNL_LOG_LEVEL:-info}
+      TUNL_LOG_FORMAT: ${TUNL_LOG_FORMAT:-json}
+      TUNL_INGRESS_ADDR: ${TUNL_INGRESS_ADDR:-:8080}
+      TUNL_GATEWAY_ADDR: ${TUNL_GATEWAY_ADDR:-:8081}
+      TUNL_ADMIN_ADDR: ${TUNL_ADMIN_ADDR:-:8082}
+      # --- redis (only consulted when TUNL_REDIS_ENABLED=true + --profile redis) ---
+      TUNL_REDIS_ENABLED: ${TUNL_REDIS_ENABLED:-false}
+      TUNL_REDIS_ADDR: ${TUNL_REDIS_ADDR:-redis:6379}
+      TUNL_REDIS_PASSWORD: ${TUNL_REDIS_PASSWORD:-}
+      # Required only for multi-node (TUNL_REDIS_ENABLED=true); empty otherwise.
+      TUNL_PEER_SECRET: ${TUNL_PEER_SECRET:-}
+    ports:
+      # Local only. The prod override clears these with `ports: !reset []`.
+      - "8080:8080" # ingress
+      - "8081:8081" # gateway
+      - "8082:8082" # admin (never published in production)
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # NB: redis is intentionally omitted from depends_on — it lives behind a
+    # profile, and depending on a disabled-profile service would break startup.
+
+volumes:
+  postgres_data:

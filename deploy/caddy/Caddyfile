@@ -1,0 +1,75 @@
+# tunl production reverse proxy.
+#
+# Wildcard TLS via DNS-01 would need DNS-provider API credentials we do not
+# have, so certificates are issued ON DEMAND over HTTP-01 / TLS-ALPN. This only
+# works because the wildcard A/AAAA records already point every label under
+# TUNL_BASE_DOMAIN at this host, so ACME can validate each subdomain the first
+# time it is requested. Everything host/domain-specific comes from {$VAR}
+# placeholders (supplied by the caddy container's environment), never literals.
+{
+	# ACME account contact; Let's Encrypt uses it for expiry warnings.
+	email {$TUNL_ACME_EMAIL}
+
+	# On-demand TLS mints a certificate the first time an unrecognised SNI
+	# arrives. WITHOUT an `ask` endpoint this is an OPEN CERTIFICATE-ISSUANCE
+	# RELAY: anyone who points a hostname at this IP could make us request
+	# certificates on their behalf and exhaust our Let's Encrypt rate limit.
+	# `ask` is therefore MANDATORY. Caddy GETs this URL with `?domain=<sni>`
+	# appended (QueryParamDomain); tunld replies 200 to authorise issuance (the
+	# subdomain maps to a live tunnel) or non-200 to refuse. The path is the
+	# RouteTLSAsk constant from server/internal/config/keys.go.
+	on_demand_tls {
+		ask http://{$TUNL_UPSTREAM_HOST:tunld}:{$TUNL_INGRESS_PORT:8080}/internal/tls-ask
+	}
+
+	# Long-lived streams are the entire point of this service. Any non-zero
+	# read/write/idle timeout here would silently sever a WebSocket tunnel or a
+	# slow streamed response, so every server timeout is disabled. Liveness is
+	# enforced by tunld's own application-level heartbeat, not by the proxy.
+	servers {
+		timeouts {
+			read_body 0
+			read_header 0
+			write 0
+			idle 0
+		}
+	}
+}
+
+# --- Public tunnel traffic: https://<subdomain>.TUNL_BASE_DOMAIN ------------
+*.{$TUNL_BASE_DOMAIN} {
+	tls {
+		on_demand
+	}
+
+	# NO Strict-Transport-Security on the wildcard. Each tunnel is an
+	# untrusted, user-controlled subdomain of TUNL_BASE_DOMAIN. An HSTS header
+	# served from one malicious tunnel (especially with includeSubDomains)
+	# would be cached by the browser against the PARENT domain and could brick
+	# unrelated sibling subdomains. HSTS belongs only on hostnames we fully
+	# control, never here.
+
+	reverse_proxy {$TUNL_UPSTREAM_HOST:tunld}:{$TUNL_INGRESS_PORT:8080}
+}
+
+# --- Agent gateway: wss://TUNL_GATEWAY_HOSTNAME -----------------------------
+# The CLI dials the gateway over TLS from the public internet, so the gateway
+# needs a normal managed certificate (not on-demand) on a dedicated hostname.
+# This is an exact-match site, so Caddy prefers it over the wildcard above even
+# when TUNL_GATEWAY_HOSTNAME is itself a label under TUNL_BASE_DOMAIN.
+{$TUNL_GATEWAY_HOSTNAME} {
+	# Caddy upgrades WebSockets automatically. flush_interval -1 disables
+	# response buffering so the upgrade and every subsequent frame stream
+	# through immediately; together with the disabled server timeouts above a
+	# tunnel can stay connected indefinitely.
+	reverse_proxy {$TUNL_UPSTREAM_HOST:tunld}:{$TUNL_GATEWAY_PORT:8081} {
+		flush_interval -1
+	}
+}
+
+# --- Admin API is deliberately NOT exposed ----------------------------------
+# tunld's admin listener (TUNL_ADMIN_ADDR, default :8082) manages tokens and
+# reservations. It is intentionally not proxied by any site block here, and its
+# port is never published on the host. Reach it only from the VPS itself or
+# over an SSH tunnel. Exposing it publicly would put token minting one weak
+# credential away from a full takeover.
