@@ -38,4 +38,23 @@ EXPOSE 8080 8081 8082
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 	CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
 
+# OCI image metadata. The publish workflow (and tools/publish-images.sh) inject
+# real values via --build-arg; the defaults keep a plain `docker build` emitting
+# a valid, if generic, labelled image. Last layer on purpose: only the labels
+# change per commit, so the rest of the image stays cached.
+ARG IMAGE_SOURCE="https://github.com/anomaly-sh/rift"
+ARG IMAGE_REVISION=""
+ARG IMAGE_VERSION="dev"
+ARG IMAGE_CREATED=""
+ARG IMAGE_LICENSES="NOASSERTION"
+ARG IMAGE_TITLE="riftd"
+ARG IMAGE_DESCRIPTION="rift self-hosted tunnel server"
+LABEL org.opencontainers.image.source="$IMAGE_SOURCE" \
+      org.opencontainers.image.revision="$IMAGE_REVISION" \
+      org.opencontainers.image.version="$IMAGE_VERSION" \
+      org.opencontainers.image.created="$IMAGE_CREATED" \
+      org.opencontainers.image.licenses="$IMAGE_LICENSES" \
+      org.opencontainers.image.title="$IMAGE_TITLE" \
+      org.opencontainers.image.description="$IMAGE_DESCRIPTION"
+
 ENTRYPOINT ["riftd"]

@@ -20,4 +20,23 @@ FROM debian:12-slim AS runtime
 RUN useradd -r -u 10001 rift
 COPY --from=build /out/rift /usr/local/bin/rift
 USER rift
+
+# OCI image metadata. The publish workflow (and tools/publish-images.sh) inject
+# real values via --build-arg; the defaults keep a plain `docker build` emitting
+# a valid, if generic, labelled image.
+ARG IMAGE_SOURCE="https://github.com/anomaly-sh/rift"
+ARG IMAGE_REVISION=""
+ARG IMAGE_VERSION="dev"
+ARG IMAGE_CREATED=""
+ARG IMAGE_LICENSES="NOASSERTION"
+ARG IMAGE_TITLE="rift-cli"
+ARG IMAGE_DESCRIPTION="rift CLI tunnel agent"
+LABEL org.opencontainers.image.source="$IMAGE_SOURCE" \
+      org.opencontainers.image.revision="$IMAGE_REVISION" \
+      org.opencontainers.image.version="$IMAGE_VERSION" \
+      org.opencontainers.image.created="$IMAGE_CREATED" \
+      org.opencontainers.image.licenses="$IMAGE_LICENSES" \
+      org.opencontainers.image.title="$IMAGE_TITLE" \
+      org.opencontainers.image.description="$IMAGE_DESCRIPTION"
+
 ENTRYPOINT ["rift"]

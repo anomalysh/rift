@@ -1,0 +1,182 @@
+name: ci
+
+# Build, lint, and test on every branch push and pull request. Kept
+# secret-free so it also passes on pull requests opened from forks.
+on:
+  push:
+  pull_request:
+
+# One in-flight run per ref; a new push cancels the previous run for that ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: CI only reads the checked-out code.
+permissions:
+  contents: read
+
+jobs:
+  server:
+    name: server (go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # A real Postgres so the store tests run instead of skipping (see below).
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: rift
+          POSTGRES_PASSWORD: rift
+          POSTGRES_DB: rift_test
+        ports:
+          - 5432:5432
+        # Gate the job's DB access on readiness rather than racing start-up.
+        options: >-
+          --health-cmd "pg_isready -U rift -d rift_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      # Third-party actions are pinned to full commit SHAs (immutable) with the
+      # human-readable version in a trailing comment, per supply-chain hardening.
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.21"
+          # Cache is managed explicitly below, keyed on go.sum.
+          cache: false
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('server/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Gofmt
+        # Fail on any formatting drift so it cannot land unnoticed.
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-formatted:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+
+      - name: Test (race)
+        # The store tests skip unless RIFT_TEST_POSTGRES_DSN is set; point it at
+        # the service container so they actually run. sslmode=disable: the
+        # container serves plaintext on the runner-local network.
+        env:
+          RIFT_TEST_POSTGRES_DSN: postgres://rift:rift@localhost:5432/rift_test?sslmode=disable
+        run: go test -race ./...
+
+  cli:
+    name: cli (bun)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.3.12
+
+      - name: Install
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bun test
+
+      - name: Build
+        run: bun run build
+
+      - name: Verify the built binary runs
+        run: |
+          version="$(./dist/rift --version)"
+          echo "rift --version -> $version"
+          test -n "$version"
+
+  scripts:
+    name: scripts (shell + compose)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Syntax-check shell scripts
+        run: bash -n tools/*.sh tools/lib/*.sh
+
+      - name: Shellcheck
+        # tools/install.sh is POSIX sh (curl | sh installer); check it as sh so
+        # it is not flagged for legitimately avoiding bashisms. -x follows the
+        # `. lib/common.sh` sources.
+        run: |
+          bash_scripts="$(ls tools/*.sh tools/lib/*.sh | grep -v '^tools/install.sh$')"
+          shellcheck -x $bash_scripts
+          shellcheck -x -s sh tools/install.sh
+
+      - name: Validate compose (dev)
+        run: docker compose -f deploy/docker-compose.yml config -q
+
+      - name: Validate compose (prod overlay)
+        # The prod overlay declares RIFT_TLS_MODE as required (${VAR:?...}) so a
+        # missing TLS mode fails the stack rather than the first handshake;
+        # supply a valid value so `config` can render.
+        run: RIFT_TLS_MODE=http01 docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.prod.yml config -q
+
+  e2e:
+    name: e2e (docker)
+    runs-on: ubuntu-latest
+    # Builds container images and drives two TLS modes end to end.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # The harness builds the CLI from source when cli/dist/rift is absent.
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.3.12
+
+      - name: Run e2e
+        # --verbose streams container logs on failure into the captured log.
+        run: make e2e ARGS=--verbose 2>&1 | tee e2e.log
+
+      - name: Upload harness logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-logs
+          path: e2e.log
+          if-no-files-found: warn

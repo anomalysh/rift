@@ -1,0 +1,160 @@
+name: publish
+
+# Publish the rift container images to GitHub Packages (ghcr.io).
+#
+# Triggers:
+#   - push to the default branch  -> build + push :edge and :sha-<short>
+#   - push of a v* tag            -> build + push :X.Y.Z, :X.Y and :latest
+#   - pull_request                -> build ONLY, never push
+#
+# Fork pull requests cannot be granted `packages: write` (GITHUB_TOKEN is
+# read-only for forks), so every privileged step below is gated on
+# `github.event_name != 'pull_request'`. PRs still build each image to prove the
+# Dockerfiles compile; they just never log in, push, or attest.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+# One in-flight run per ref; a new push cancels the previous run for that ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege. packages: write publishes to ghcr; id-token + attestations
+# are consumed only by actions/attest-build-provenance below. Nothing else.
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      # Publish every image even if one fails, so a flake in one does not hide a
+      # green build of the others.
+      fail-fast: false
+      matrix:
+        include:
+          - image: riftd
+            dockerfile: deploy/Dockerfile
+            platforms: linux/amd64,linux/arm64
+            title: riftd
+            description: rift self-hosted tunnel server
+            build-args: ""
+          - image: rift-caddy
+            dockerfile: deploy/Dockerfile.caddy
+            # amd64 only: this image compiles Caddy from source with xcaddy,
+            # which is a Go build. Under buildx the arm64 variant would run the
+            # whole Go toolchain through QEMU emulation, which is impractically
+            # slow (tens of minutes). Rather than ship a broken/partial manifest
+            # we build amd64 only. If arm64 is ever required, add a native arm64
+            # runner instead of emulating.
+            platforms: linux/amd64
+            title: rift-caddy
+            description: Caddy with DNS-01 solver plugins for rift
+            # Compile exactly the providers that have a snippet in
+            # deploy/caddy/dns/. RIFT_ACME_DNS_PROVIDER selects one at runtime.
+            build-args: |
+              RIFT_CADDY_DNS_PLUGINS=github.com/caddy-dns/acmedns github.com/caddy-dns/cloudflare github.com/caddy-dns/digitalocean github.com/caddy-dns/linode github.com/caddy-dns/powerdns github.com/caddy-dns/rfc2136
+          - image: rift-cli
+            dockerfile: deploy/Dockerfile.cli
+            platforms: linux/amd64,linux/arm64
+            title: rift-cli
+            description: rift CLI tunnel agent
+            build-args: ""
+    steps:
+      # Third-party actions are pinned to full commit SHAs (immutable) with the
+      # human-readable version in a trailing comment, per supply-chain hardening.
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # QEMU registers binfmt handlers so buildx can build linux/arm64 on the
+      # amd64 runner.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      # Fork PRs cannot receive packages: write, so only authenticate for
+      # base-repo branch/tag events. Never a PAT; the workflow-scoped
+      # GITHUB_TOKEN is enough to push to this repo's ghcr namespace.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ghcr.io/anomaly-sh/${{ matrix.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=edge,branch=${{ github.event.repository.default_branch }}
+            type=sha,prefix=sha-,format=short,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+          # latest=false: never let metadata-action move :latest on its own.
+          # The explicit raw tag above pins :latest to v* tag pushes only, so a
+          # branch build can never repoint :latest.
+          flavor: |
+            latest=false
+          # No LICENSE is declared in the repo yet; NOASSERTION is the SPDX
+          # placeholder for "undetermined". Replace once a LICENSE lands.
+          labels: |
+            org.opencontainers.image.title=${{ matrix.title }}
+            org.opencontainers.image.description=${{ matrix.description }}
+            org.opencontainers.image.licenses=NOASSERTION
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platforms }}
+          # Build always; push only on base-repo branch/tag events (never PRs).
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          # Also feed the labels to the Dockerfile ARG/LABEL block so a plain
+          # `docker build` (and tools/publish-images.sh) produces the same OCI
+          # metadata as CI. matrix.build-args is appended last (e.g. the Caddy
+          # plugin list).
+          build-args: |
+            IMAGE_SOURCE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.source'] }}
+            IMAGE_REVISION=${{ github.sha }}
+            IMAGE_VERSION=${{ steps.meta.outputs.version }}
+            IMAGE_CREATED=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            IMAGE_LICENSES=NOASSERTION
+            IMAGE_TITLE=${{ matrix.title }}
+            IMAGE_DESCRIPTION=${{ matrix.description }}
+            ${{ matrix.build-args }}
+          # An image nobody can trace back to a commit is not a release
+          # artifact: emit SLSA provenance and an SBOM as buildx attestations.
+          provenance: true
+          sbom: true
+          # Per-image cache scope so the three builds do not evict each other.
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      # GitHub-native build provenance, verifiable with `gh attestation verify`.
+      # Complements the buildx attestation above; requires the pushed digest, so
+      # it is skipped on PRs where nothing was pushed.
+      - name: Attest build provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-name: ghcr.io/anomaly-sh/${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
