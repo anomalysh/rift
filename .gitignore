@@ -1,0 +1,33 @@
+# Build artifacts
+/dist/
+/bin/
+*.exe
+
+# Go
+server/tunld
+server/bin/
+
+# Bun / Node
+node_modules/
+cli/dist/
+cli/tunl
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!deploy/**/*.example
+tools/.ssh/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local state
+deploy/caddy/data/
+deploy/caddy/config/
