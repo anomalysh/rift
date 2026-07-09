@@ -105,11 +105,18 @@ Run the tests:
 ```console
 $ cd server && go test ./...          # postgres tests skip without a database
 $ cd cli && bun test
+$ make e2e                            # the whole stack in Docker, over real TLS
 ```
 
 The Postgres store tests run against a real database when you point
 `RIFT_TEST_POSTGRES_DSN` at one, and skip otherwise, so `go test ./...` stays
 green on a laptop with nothing installed.
+
+`make e2e` is the black-box suite: it brings up Postgres, riftd, and a real Caddy
+using the production Caddyfile, then drives it with the compiled CLI over HTTPS,
+validating the certificate chain with no `-k` anywhere. It runs the `internal`
+and `self` TLS modes, and it is hermetic — nothing reaches the internet. Both
+TLS bugs this project has shipped would have failed it.
 
 ## Deploying
 
@@ -131,26 +138,53 @@ $ tools/remote-deploy.sh
 Secrets are read from the environment at runtime. `.env` is gitignored and
 `.env.example` contains no credential — only empty placeholders.
 
-### About TLS
+### TLS
 
-Wildcard certificates require a DNS-01 challenge, which needs DNS provider API
-credentials. rift does not assume you have them. Instead Caddy issues a
-certificate **on demand**, the first time a hostname is requested, validated
-over HTTP-01. This works because the wildcard A/AAAA records already point every
-label at the host.
+`RIFT_TLS_MODE` picks how certificates are obtained. It is **required in
+production** — an unset mode is a boot failure, never a silent fallback to an
+untrusted certificate. Development defaults to `internal`.
 
-On-demand TLS without an authorization endpoint is an open certificate-issuance
-relay: anyone who points a hostname at your IP could make you request
-certificates on their behalf and burn your Let's Encrypt rate limit. Caddy is
-therefore configured to `ask` riftd before issuing, and riftd approves only:
+| Mode       | Certificates from            | Unknown subdomain sees | Needs                       |
+| ---------- | --------------------------- | ---------------------- | --------------------------- |
+| `dns01`    | ACME, DNS-01, one wildcard   | a readable 404         | DNS credentials + a plugin  |
+| `http01`   | ACME, HTTP-01, one per host  | **a TLS error**        | nothing                     |
+| `self`     | a cert and key you supply    | a readable 404         | your own cert               |
+| `internal` | Caddy's own CA              | a readable 404         | clients trusting your root  |
 
-1. a subdomain with a live tunnel,
-2. a subdomain someone has reserved, and
-3. `RIFT_GATEWAY_HOSTNAME` itself.
+That "unknown subdomain" column is the whole reason `dns01` exists. Under
+`http01`, a hostname that has never served a tunnel has no certificate, so the
+TLS handshake cannot complete and the browser shows `ERR_SSL_PROTOCOL_ERROR`
+rather than a 404 page. Only a wildcard certificate can cover a name before it
+is used, and only DNS-01 can obtain a wildcard.
 
-If you set `RIFT_GATEWAY_HOSTNAME` in Caddy's environment but not riftd's, the
-gateway gets no certificate and every agent connection fails at the handshake.
-The two must agree.
+Each mode is a pair of snippets in `deploy/caddy/modes/`, so every site block
+shares one certificate path. That matters: the gateway hostname once sat between
+two paths and silently received no certificate at all.
+
+**`http01` and the ask endpoint.** On-demand issuance without an authorization
+endpoint is an open certificate-issuance relay: anyone who points a hostname at
+your IP could make you request certificates on their behalf and burn your ACME
+rate limit. Caddy therefore asks riftd before issuing, and riftd approves only a
+subdomain with a live tunnel, a reserved subdomain, `RIFT_GATEWAY_HOSTNAME`, and
+the base domain itself.
+
+**`dns01` and DNS providers.** Caddy's DNS solvers are compile-time modules, so
+pick your providers and build an image:
+
+```console
+$ echo 'RIFT_CADDY_DNS_PLUGINS=github.com/caddy-dns/rfc2136' >> .env
+$ make build-caddy ARGS=--validate      # compiles, then parses every dns/ snippet
+$ # set RIFT_CADDY_IMAGE and RIFT_ACME_DNS_PROVIDER, then deploy
+```
+
+`deploy/caddy/dns/` holds one snippet per provider (`rfc2136`, `acmedns`,
+`powerdns`, `cloudflare`, `digitalocean`, `linode`). Adding one is a file, an
+entry in `RIFT_CADDY_DNS_PLUGINS`, and a rebuild. For a self-hosted zone,
+`rfc2136` (TSIG dynamic update) or `acmedns` (CNAME delegation, smallest blast
+radius) are the ones to reach for.
+
+`RIFT_ACME_CA_PROFILE=internal-ca` points ACME at your own CA — step-ca, Boulder,
+Vault — instead of Let's Encrypt.
 
 ## Admin API
 
