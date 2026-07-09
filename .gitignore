@@ -31,3 +31,16 @@ tools/.ssh/
 # Local state
 deploy/caddy/data/
 deploy/caddy/config/
+
+# Provisioning / pipeline state (records instance ids and IPs)
+.rift/
+
+# Backup artifacts — dumps hold token hashes, archives hold TLS keys; never commit
+/backups/
+rift-*-db.dump
+rift-*-caddy.tar.gz
+
+# Docs site build output
+docs-site/node_modules/
+docs-site/dist/
+docs-site/.astro/
