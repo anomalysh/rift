@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -256,6 +257,24 @@ func (i *Ingress) handleInternalProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tunnel not attached to this node", http.StatusServiceUnavailable)
 		return
 	}
+
+	// Restore the original request target. Without this the agent would receive
+	// RouteInternalProxy as the path instead of what the public client asked
+	// for, and the local service would answer the wrong route.
+	if fwd := r.Header.Get(config.HeaderRiftForwardedURI); fwd != "" {
+		if u, err := url.ParseRequestURI(fwd); err == nil {
+			r.URL.Path = u.Path
+			r.URL.RawPath = u.RawPath
+			r.URL.RawQuery = u.RawQuery
+		} else {
+			http.Error(w, "invalid "+config.HeaderRiftForwardedURI, http.StatusBadRequest)
+			return
+		}
+	}
+	r.Header.Del(config.HeaderRiftForwardedURI)
+	r.Header.Del(config.HeaderRiftPeerToken)
+	r.Header.Del(config.HeaderRiftSubdomain)
+
 	i.proxy(w, r, sess, sub)
 }
 

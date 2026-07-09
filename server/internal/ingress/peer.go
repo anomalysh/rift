@@ -24,10 +24,14 @@ func (i *Ingress) forwardToPeer(w http.ResponseWriter, r *http.Request, nodeURL,
 	}
 
 	// Carry the original request verbatim; the peer reconstructs it from these.
+	// The forwarding request is addressed to RouteInternalProxy, so the peer
+	// cannot recover the original path from its own URL -- it comes over in a
+	// header instead.
 	outbound.Header = r.Header.Clone()
 	outbound.Host = r.Host
 	outbound.ContentLength = r.ContentLength
 	outbound.Header.Set(config.HeaderRiftSubdomain, sub)
+	outbound.Header.Set(config.HeaderRiftForwardedURI, r.URL.RequestURI())
 	outbound.Header.Set(config.HeaderRiftPeerToken, i.cfg.Cluster.PeerSecret)
 	outbound.Header.Set(config.HeaderForwardedHost, r.Host)
 	outbound.Header.Set(config.HeaderForwardedProto, i.cfg.Tunnel.PublicScheme)

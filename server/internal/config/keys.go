@@ -122,5 +122,10 @@ const (
 	HeaderRiftSubdomain  = "X-Rift-Subdomain"
 	HeaderRiftRequestID  = "X-Rift-Request-Id"
 	HeaderRiftPeerToken  = "X-Rift-Peer-Token"
-	BearerPrefix         = "Bearer "
+	// HeaderRiftForwardedURI carries the original request target (path plus
+	// query) across a node-to-node hop. The forwarding request itself is
+	// addressed to RouteInternalProxy, so without this the receiving node would
+	// serve "/internal/proxy" to the agent instead of what the client asked for.
+	HeaderRiftForwardedURI = "X-Rift-Forwarded-Uri"
+	BearerPrefix           = "Bearer "
 )
