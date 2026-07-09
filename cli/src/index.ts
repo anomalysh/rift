@@ -1,0 +1,91 @@
+#!/usr/bin/env bun
+// tunl entrypoint: parse args, resolve configuration, run the tunnel agent,
+// and translate outcomes into process exit codes (see constants.ts EXIT).
+
+import { parseArgs, usageText } from "./args.ts";
+import { TunnelClient } from "./client.ts";
+import {
+  ConfigError,
+  configFilePath,
+  loadConfigFile,
+  resolveConfig,
+  type ResolvedConfig,
+} from "./config.ts";
+import { EXIT, VERSION } from "./constants.ts";
+import { createLogger } from "./logger.ts";
+
+function fail(message: string, code: number): never {
+  process.stderr.write(message.endsWith("\n") ? message : message + "\n");
+  process.exit(code);
+}
+
+function loadConfig(
+  flags: Parameters<typeof resolveConfig>[0]["flags"],
+): ResolvedConfig {
+  const env = process.env;
+  const configPath = configFilePath(env);
+  try {
+    const file = loadConfigFile(env);
+    return resolveConfig({ flags, env, file, configPath });
+  } catch (err) {
+    if (err instanceof ConfigError) {
+      fail(err.message, EXIT.ERROR);
+    }
+    throw err;
+  }
+}
+
+async function main(): Promise<void> {
+  const parsed = parseArgs(process.argv.slice(2));
+
+  switch (parsed.kind) {
+    case "help":
+      process.stdout.write(usageText() + "\n");
+      process.exit(EXIT.OK);
+      break;
+    case "version":
+      process.stdout.write(VERSION + "\n");
+      process.exit(EXIT.OK);
+      break;
+    case "error":
+      fail(`tunl: ${parsed.message}\nRun 'tunl --help' for usage.`, EXIT.USAGE);
+      break;
+    case "run":
+      break;
+  }
+
+  const config = loadConfig(parsed.flags);
+  const logger = createLogger(config.logLevel);
+
+  const clientOpts = {
+    config,
+    protocol: parsed.protocol,
+    port: parsed.port,
+    logger,
+    ...(parsed.subdomain !== undefined ? { subdomain: parsed.subdomain } : {}),
+  };
+  const client = new TunnelClient(clientOpts);
+
+  let signalExit: number | null = null;
+  const onSignal = (name: string, code: number): void => {
+    if (signalExit !== null) {
+      // A second signal forces an immediate exit.
+      process.exit(code);
+    }
+    signalExit = code;
+    logger.info(`received ${name}, shutting down`);
+    client.stop();
+  };
+  process.on("SIGINT", () => onSignal("SIGINT", EXIT.SIGINT));
+  process.on("SIGTERM", () => onSignal("SIGTERM", EXIT.SIGTERM));
+
+  try {
+    await client.run();
+    process.exit(signalExit ?? EXIT.OK);
+  } catch (err) {
+    logger.error(err instanceof Error ? err.message : String(err));
+    process.exit(EXIT.ERROR);
+  }
+}
+
+await main();
