@@ -44,10 +44,13 @@ run = "bun test"
 depends = ["install"]
 deny_write = true
 
-# The build reads sources and writes the single binary into dist/.
+# The build writes the single binary into dist/. allow_write must be the project
+# dir, not just ./dist: on a fresh checkout dist/ does not exist yet, and a
+# sandbox rule for a missing path cannot grant the create — so scope writes to
+# the project (still no writes outside it, and no network).
 [tasks.build]
 description = "Compile the CLI single binary"
 run = "bun run build"
 depends = ["install"]
 deny_net = true
-allow_write = ["./dist"]
+allow_write = ["."]
