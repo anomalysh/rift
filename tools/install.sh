@@ -240,7 +240,7 @@ else
 	chmod 0755 "$persist"
 	warn "${dest_dir} is not writable by this user; not using sudo automatically."
 	warn "the verified binary is at ${persist}. To finish, run:"
-	printf '\n    sudo install -m 0755 %s %s\n\n' "$persist" "$target" >&2
+	printf '\n    sudo install -Dm 0755 %s %s\n\n' "$persist" "$target" >&2
 	warn "or re-run with a writable directory, e.g. --dir \"\$HOME/.local/bin\""
 	exit 1
 fi

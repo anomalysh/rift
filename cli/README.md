@@ -79,8 +79,8 @@ completions:
 tar -xzf rift-linux-x64.tar.gz
 cd rift-linux-x64
 
-sudo install -m 0755 rift    /usr/local/bin/rift
-sudo install -m 0644 rift.1  /usr/local/share/man/man1/rift.1   # man rift
+sudo install -Dm 0755 rift    /usr/local/bin/rift
+sudo install -Dm 0644 rift.1  /usr/local/share/man/man1/rift.1   # man rift
 
 # Completions (adjust paths to your shell's convention):
 install -Dm 0644 completions/rift.bash ~/.local/share/bash-completion/completions/rift
