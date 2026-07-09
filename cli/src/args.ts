@@ -5,11 +5,14 @@
 
 import type { PartialConfig } from "./config.ts";
 import {
+  COMPLETION_SHELLS,
   LOG_LEVELS,
   type LogLevel,
+  type Shell,
   SUPPORTED_PROTOCOLS,
   type SupportedProtocol,
 } from "./constants.ts";
+import { renderHelp } from "./docgen.ts";
 import { isLogLevel } from "./logger.ts";
 
 /** Flag values that feed configuration resolution (see config.ts). */
@@ -30,9 +33,15 @@ export type ParsedArgs =
       flags: FlagConfig;
     }
   | { kind: "set-config"; updates: PartialConfig }
+  | { kind: "man" }
+  | { kind: "completions"; shell: Shell }
   | { kind: "help" }
   | { kind: "version" }
   | { kind: "error"; message: string };
+
+function isShell(v: string): v is Shell {
+  return (COMPLETION_SHELLS as readonly string[]).includes(v);
+}
 
 /** Run flags that take a value; the rest are booleans. */
 const VALUE_FLAGS = new Set(["--token", "--server", "--host", "--log-level"]);
@@ -136,6 +145,36 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     return { kind: "set-config", updates };
   }
 
+  // Doc subcommands print and exit; they take no tunnel flags.
+  if (positionals[0] === "man") {
+    if (positionals.length > 1) {
+      return { kind: "error", message: "man takes no arguments" };
+    }
+    return { kind: "man" };
+  }
+  if (positionals[0] === "completions") {
+    const shell = positionals[1];
+    if (shell === undefined) {
+      return {
+        kind: "error",
+        message: `completions requires a shell: ${COMPLETION_SHELLS.join(" | ")}`,
+      };
+    }
+    if (!isShell(shell)) {
+      return {
+        kind: "error",
+        message: `unsupported shell ${JSON.stringify(shell)}; supported: ${COMPLETION_SHELLS.join(", ")}`,
+      };
+    }
+    if (positionals.length > 2) {
+      return {
+        kind: "error",
+        message: `unexpected argument: ${positionals[2]}`,
+      };
+    }
+    return { kind: "completions", shell };
+  }
+
   if (positionals.length === 0) {
     return { kind: "error", message: "missing <protocol> and <port>" };
   }
@@ -224,46 +263,8 @@ function applySetFlag(
   }
 }
 
-/** Usage text for `--help`. */
+/** Usage text for `--help`, rendered from the single CLI spec so it can never
+ *  drift from the man page and shell completions (see cli-spec.ts / docgen.ts). */
 export function usageText(): string {
-  return `rift — expose a local port through the rift gateway
-
-USAGE
-  rift <protocol> <port> [subdomain] [flags]
-
-EXAMPLES
-  rift http 3000                 open an HTTP tunnel with a random subdomain
-  rift http 3000 myapp           request the subdomain "myapp"
-  rift tcp 22                    expose local TCP port 22 on a gateway port
-  rift tls 8443 myapp            SNI-route myapp.<domain> to a local TLS service
-  rift --set-token rift_xxx      save the auth token to the config file
-  rift --set-server wss://...    save the gateway URL to the config file
-
-ARGUMENTS
-  <protocol>   what to tunnel (supported: ${SUPPORTED_PROTOCOLS.join(", ")})
-                 http  routed by subdomain over the shared gateway
-                 tcp   raw TCP, reached on a public port the gateway allocates
-                 tls   raw TLS, SNI-routed; the local service terminates TLS
-  <port>       local TCP port to forward to (1..65535)
-  [subdomain]  desired subdomain (http/tls); the gateway picks one if omitted
-
-FLAGS
-  --token <t>        gateway auth token        (env ${"RIFT_TOKEN"})
-  --server <url>     gateway ws/wss URL        (env ${"RIFT_SERVER"})
-  --host <host>      local host to forward to  (env ${"RIFT_HOST"}, default 127.0.0.1)
-  --log-level <lvl>  ${LOG_LEVELS.join(" | ")}
-  --insecure         skip TLS certificate verification (wss only)
-  --version, -v      print version and exit
-  --help, -h         print this help and exit
-
-PERSIST CONFIG
-  --set-token <t>       save the auth token, then exit
-  --set-server <url>    save the gateway URL, then exit
-  --set-host <host>     save the default local host, then exit
-  --set-log-level <lvl> save the default log level, then exit
-  Values are written to ~/.config/rift/config.json (created 0700, file 0600).
-
-CONFIG
-  Precedence (highest first): flags > env vars > ~/.config/rift/config.json > defaults.
-  token and server have no default; one must be supplied or rift exits with an error.`;
+  return renderHelp();
 }

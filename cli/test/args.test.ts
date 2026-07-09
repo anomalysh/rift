@@ -127,6 +127,39 @@ describe("bad protocol", () => {
   });
 });
 
+describe("doc subcommands", () => {
+  test("man parses to the man kind", () => {
+    expect(parseArgs(["man"]).kind).toBe("man");
+  });
+
+  test("man takes no arguments", () => {
+    expect(parseArgs(["man", "extra"]).kind).toBe("error");
+  });
+
+  test("completions <shell> parses with the shell", () => {
+    for (const shell of ["bash", "zsh", "fish"] as const) {
+      const parsed = parseArgs(["completions", shell]);
+      expect(parsed.kind).toBe("completions");
+      if (parsed.kind === "completions") {
+        expect(parsed.shell).toBe(shell);
+      }
+    }
+  });
+
+  test("completions with no shell is an error naming the choices", () => {
+    const parsed = parseArgs(["completions"]);
+    expect(parsed.kind).toBe("error");
+    if (parsed.kind === "error") {
+      expect(parsed.message).toContain("bash");
+    }
+  });
+
+  test("completions with an unsupported shell is an error", () => {
+    const parsed = parseArgs(["completions", "powershell"]);
+    expect(parsed.kind).toBe("error");
+  });
+});
+
 describe("help and version", () => {
   test("--help and -h", () => {
     expect(parseArgs(["--help"]).kind).toBe("help");

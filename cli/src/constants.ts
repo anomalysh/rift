@@ -103,6 +103,10 @@ export type ResetCodeValue = (typeof ResetCode)[keyof typeof ResetCode];
 export const SUPPORTED_PROTOCOLS = ["http", "tcp", "tls"] as const;
 export type SupportedProtocol = (typeof SUPPORTED_PROTOCOLS)[number];
 
+/** Shells for which `rift completions <shell>` can emit a completion script. */
+export const COMPLETION_SHELLS = ["bash", "zsh", "fish"] as const;
+export type Shell = (typeof COMPLETION_SHELLS)[number];
+
 /** Log levels, ordered from most to least verbose. */
 export const LOG_LEVELS = ["debug", "info", "warn", "error", "silent"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];

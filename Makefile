@@ -10,7 +10,7 @@ COMPOSE_PROD := docker compose -f deploy/docker-compose.yml -f deploy/docker-com
 # is a single line so it can prefix a recipe command; a missing .env is fine.
 LOAD_ENV := set -a; [ -f .env ] && . ./.env; set +a;
 
-.PHONY: help build-server build-cli test e2e lint up down logs migrate deploy provision-key mint-token build-caddy release release-docker \
+.PHONY: help build-server build-cli test e2e lint up down logs migrate deploy provision-key mint-token build-caddy release release-docker gen-docs \
 	setup ship verify check-dns provision harden hostcheck backup restore e2e-recovery e2e-hostcheck e2e-provision e2e-setup publish-images docs
 
 help: ## Show this help
@@ -36,6 +36,10 @@ release: ## Cross-compile rift release artifacts into dist/release/<version> (AR
 
 release-docker: ## Reproducible release build in a pinned Bun container -> dist/release/ (ARGS=--bun 1.3.12)
 	bash tools/release-docker.sh $(ARGS)
+
+gen-docs: ## Regenerate the man page + shell completions from the CLI spec
+	cd cli && bun src/index.ts man > ../packaging/man/rift.1
+	cd cli && for sh in bash zsh fish; do bun src/index.ts completions $$sh > ../packaging/completions/rift.$$sh; done
 
 lint: ## Vet Go, syntax-check shell scripts, validate compose
 	cd server && go vet ./...

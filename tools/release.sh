@@ -130,6 +130,7 @@ main() {
 
 	[ "${#built[@]}" -gt 0 ] || die "no targets built successfully"
 
+	regen_docs
 	package_artifacts "$out" "${built[@]}"
 	write_checksums "$out"
 	verify_checksums "$out"
@@ -140,6 +141,18 @@ main() {
 		log_warn "skipped targets: ${skipped[*]}"
 	fi
 	log_info "release artifacts ready in $out"
+}
+
+# regen_docs — regenerate the man page and shell completions from the CLI's own
+# spec (rift man / rift completions), so every release ships docs that match the
+# binary rather than a hand-edited copy that drifts.
+regen_docs() {
+	log_info "regenerating man page and completions from the CLI spec"
+	bun "$ENTRY" man >"$MAN_PAGE"
+	local sh
+	for sh in bash zsh fish; do
+		bun "$ENTRY" completions "$sh" >"$COMPLETIONS_DIR/rift.$sh"
+	done
 }
 
 # package_artifacts OUT ARTIFACT...  — build a .tar.gz (unix) or .zip (windows)

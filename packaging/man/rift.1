@@ -1,40 +1,53 @@
-.\" Manual page for rift, the self-hosted ngrok-style tunnel agent.
-.\" Regenerate rendering checks with: man --warnings -E UTF-8 -l packaging/man/rift.1
+.\" Manual page for rift. Generated from cli-spec.ts;
+.\" regenerate with: rift man  (or make gen-docs).
 .TH RIFT 1 "2026-07-09" "rift 0.1.0" "User Commands"
 .SH NAME
 rift \- expose a local port through the rift gateway
 .SH SYNOPSIS
 .B rift
-.I protocol port
-.RI [ subdomain ]
-.RI [ options ]
+.RI "<protocol> <port> [subdomain] [options]"
 .br
 .B rift
-.BR \-\-version | \-v
+.RI "\-\-set\-token <token> | \-\-set\-server <url> | \-\-set\-host <host> | \-\-set\-log\-level <level>"
 .br
 .B rift
-.BR \-\-help | \-h
+.RI "completions <bash|zsh|fish>"
+.br
+.B rift
+.RI "man"
+.br
+.B rift
+.RI "\-\-version | \-v"
+.br
+.B rift
+.RI "\-\-help | \-h"
 .SH DESCRIPTION
-.B rift
-is a self-hosted, ngrok-style tunnel agent. It opens a WebSocket to the rift
-gateway and forwards public HTTP requests to a local port, streaming both
-directions.
+rift is a self\-hosted, ngrok\-style tunnel agent. It opens a WebSocket to the rift gateway and forwards public traffic to a local port, streaming both directions.
 .PP
-The tunnel URL banner is printed to standard output; all diagnostics go to
-standard error, so a pipeline such as
-.B rift http 3000 | ...
-yields just the URL line.
+The tunnel URL banner is printed to standard output; all diagnostics go to standard error, so a pipeline such as `rift http 3000 | ...` yields just the URL line.
+.PP
+The completions and man subcommands, and the \-\-set\-* flags, need neither a token nor a server: they print or persist and exit without opening a tunnel.
 .SH ARGUMENTS
 .TP
 .I protocol
-Application protocol to tunnel. The only supported value in this build is
-.BR http .
+Application protocol to tunnel (one of http, tcp, tls).
+.RS
+.TP
+.B http
+Forward HTTP requests; the gateway routes by subdomain and terminates TLS.
+.TP
+.B tcp
+Forward a raw TCP stream to the local port.
+.TP
+.B tls
+Forward a TLS stream, routed by SNI, to the local port.
+.RE
 .TP
 .I port
-Local TCP port to forward to. Must be an integer in the range 1..65535.
+Local TCP port to forward to (1..65535).
 .TP
 .I subdomain
-Optional desired subdomain. When omitted, the gateway picks one at random.
+Desired subdomain; the gateway picks one at random if omitted.
 .SH OPTIONS
 Value options accept both
 .BI \-\-flag " value"
@@ -43,73 +56,64 @@ and
 forms.
 .TP
 .BI \-\-token " token"
-Gateway authentication token. Overrides
-.BR RIFT_TOKEN .
-Has no default; one must be supplied via flag, environment, or config file.
+Gateway auth token. Overrides \fBRIFT_TOKEN\fR.
 .TP
 .BI \-\-server " url"
-Gateway
-.BR ws:// " / " wss://
-URL. Overrides
-.BR RIFT_SERVER .
-Has no default; one must be supplied via flag, environment, or config file.
+Gateway ws/wss URL. Overrides \fBRIFT_SERVER\fR.
 .TP
 .BI \-\-host " host"
-Local host to forward to. Overrides
-.BR RIFT_HOST .
-Defaults to
-.BR 127.0.0.1 .
+Local host to forward to. Overrides \fBRIFT_HOST\fR. Defaults to \fB127.0.0.1\fR.
 .TP
 .BI \-\-log\-level " level"
-Log verbosity, one of
-.BR debug ", " info ", " warn ", " error ", " silent .
-Overrides
-.BR RIFT_LOG_LEVEL .
-Defaults to
-.BR info .
+Log verbosity (debug, info, warn, error, silent). Overrides \fBRIFT_LOG_LEVEL\fR. Defaults to \fBinfo\fR.
 .TP
 .B \-\-insecure
-Skip TLS certificate verification. Applies only to
-.B wss
-connections.
+Skip TLS certificate verification (wss only).
 .TP
 .BR \-\-version ", " \-v
-Print the version and exit.
+Print version and exit.
 .TP
 .BR \-\-help ", " \-h
-Print usage and exit.
+Print this help and exit.
+.SH CONFIG
+The
+.B \-\-set\-*
+flags write a value to
+.B ~/.config/rift/config.json
+and exit without opening a tunnel.
+.TP
+.BI \-\-set\-token " token"
+Persist token to the config file and exit.
+.TP
+.BI \-\-set\-server " url"
+Persist server to the config file and exit.
+.TP
+.BI \-\-set\-host " host"
+Persist host to the config file and exit.
+.TP
+.BI \-\-set\-log\-level " level"
+Persist log level to the config file and exit.
+.PP
+Precedence, highest first: command\-line flags, then environment variables, then the config file, then built\-in defaults. token and server have no default; a missing one is a hard error.
 .SH ENVIRONMENT
-Configuration is resolved from four layers; higher layers win: command-line
-flags, then environment variables, then the config file, then built-in
-defaults.
 .TP
 .B RIFT_TOKEN
-Gateway authentication token (see
-.BR \-\-token ).
+Gateway auth token (see \-\-token).
 .TP
 .B RIFT_SERVER
-Gateway
-.BR ws:// " / " wss://
-URL (see
-.BR \-\-server ).
+Gateway ws/wss URL (see \-\-server).
 .TP
 .B RIFT_HOST
-Local host to forward to (see
-.BR \-\-host ).
+Local host to forward to (see \-\-host).
 .TP
 .B RIFT_LOG_LEVEL
-Log verbosity (see
-.BR \-\-log\-level ).
+Log verbosity (see \-\-log\-level).
 .TP
 .B XDG_CONFIG_HOME
-Base directory used to locate the config file. Falls back to
-.B $HOME/.config
-when unset.
+Base directory for the config file; falls back to $HOME/.config.
 .TP
 .B HOME
-Used to derive the config directory when
-.B XDG_CONFIG_HOME
-is unset.
+Used to derive the config directory when XDG_CONFIG_HOME is unset.
 .SH FILES
 .TP
 .B $XDG_CONFIG_HOME/rift/config.json
@@ -117,11 +121,20 @@ is unset.
 .TP
 .B ~/.config/rift/config.json
 .PD
-JSON config file providing
-.BR token ", " server ", " host ", and " logLevel .
-Unknown keys are ignored; invalid types or an unknown
-.B logLevel
-are a hard error.
+JSON config file providing token, server, host, and logLevel. Unknown keys are ignored; an invalid type or logLevel is a hard error.
+.SH EXAMPLES
+.TP
+Open a tunnel with a random subdomain.
+.B rift http 3000
+.TP
+Request the subdomain "myapp".
+.B rift http 3000 myapp
+.TP
+Forward a raw TCP port (e.g. Postgres).
+.B rift tcp 5432
+.TP
+Save a default gateway to the config file.
+.B rift \-\-set\-server wss://gw.example.com
 .SH EXIT STATUS
 .TP
 .B 0
@@ -138,16 +151,5 @@ Terminated by SIGINT (128 + 2).
 .TP
 .B 143
 Terminated by SIGTERM (128 + 15).
-.SH EXAMPLES
-.TP
-Open a tunnel with a random subdomain:
-.B rift http 3000
-.TP
-Request the subdomain \(dqmyapp\(dq:
-.B rift http 3000 myapp
-.TP
-Point at a specific gateway with a token and quiet logging:
-.B rift http 8080 \-\-server wss://gw.example.com \-\-token rift_xxx \-\-log\-level warn
 .SH SEE ALSO
-Project documentation and the wire-protocol contract ship with the source tree
-(README.md, docs/PROTOCOL.md).
+Project documentation and the wire\-protocol contract ship with the source tree (README.md, docs/PROTOCOL.md).

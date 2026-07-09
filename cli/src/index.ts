@@ -13,6 +13,7 @@ import {
   writeConfigValues,
 } from "./config.ts";
 import { EXIT, VERSION } from "./constants.ts";
+import { renderCompletion, renderManPage } from "./docgen.ts";
 import { createLogger } from "./logger.ts";
 
 function fail(message: string, code: number): never {
@@ -50,6 +51,14 @@ async function main(): Promise<void> {
       break;
     case "error":
       fail(`rift: ${parsed.message}\nRun 'rift --help' for usage.`, EXIT.USAGE);
+      break;
+    case "man":
+      process.stdout.write(renderManPage());
+      process.exit(EXIT.OK);
+      break;
+    case "completions":
+      process.stdout.write(renderCompletion(parsed.shell));
+      process.exit(EXIT.OK);
       break;
     case "set-config": {
       try {
