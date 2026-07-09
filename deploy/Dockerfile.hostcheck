@@ -1,0 +1,34 @@
+# Throwaway host mirror for exercising tools/harden.sh.
+#
+# FROM debian:trixie to match the production VPS (Debian 13) exactly: a green
+# run here means the hardening actually parses and loads against the same
+# openssh / nftables / fail2ban versions production runs. A pass on any other
+# base would prove nothing.
+#
+# The packages below mirror what harden.sh would otherwise apt-get on a real
+# host; baking them in keeps tools/e2e-hostcheck.sh fully offline and hermetic.
+# NO SSH keys are generated at build time -- the test mints a throwaway keypair
+# and host keys at runtime, so nothing secret is ever baked into the image.
+FROM debian:trixie
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      openssh-server \
+      nftables \
+      fail2ban \
+      unattended-upgrades \
+      python3 \
+      curl \
+      procps \
+      iproute2 \
+ && rm -rf /var/lib/apt/lists/*
+
+# harden.sh's workstation guard refuses to run unless this marker exists, so the
+# script can never be run by accident against a developer machine. The test
+# image is a legitimate target, so it carries the marker.
+RUN touch /etc/rift-hostcheck-target
+
+# Keep the container alive so tools/e2e-hostcheck.sh can exec into it.
+CMD ["sleep", "infinity"]

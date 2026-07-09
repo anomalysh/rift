@@ -1,0 +1,42 @@
+# rift host-hardening test stack.
+#
+# A single throwaway Debian container that mirrors the production VPS, used to
+# prove tools/harden.sh actually hardens a host. Every run of harden.sh happens
+# INSIDE this container -- never on the developer machine or the real VPS, both
+# of which the script would irreversibly alter.
+#
+# Driven by tools/e2e-hostcheck.sh, which builds the image, starts sshd, mints a
+# throwaway keypair, and asserts each area took effect. Do not `docker compose
+# up` this by hand.
+name: rift-hostcheck
+
+services:
+  hostcheck:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.hostcheck
+    # Keep the container alive for the test harness to exec into.
+    command: ["sleep", "infinity"]
+    # nftables must load a ruleset; NET_RAW covers the icmp/raw handling. Both
+    # act only on the container's OWN net namespace, never the host's.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    # No `ports:` -- a hardening test reachable from the host could never prove
+    # the firewall blocks anything; the whole point is isolation.
+    # No `network_mode: host` -- the ruleset and sshd must live in the
+    # container's own netns, never the host's.
+    # No docker.sock mount -- the test must not be able to reach the host's
+    # Docker daemon or its containers.
+    networks:
+      - hostcheck
+    volumes:
+      # The scripts under test, read-only: nothing the container does can modify
+      # the repo.
+      - ../tools:/opt/rift/tools:ro
+
+networks:
+  # Its own network, marked internal so the container cannot reach anything off
+  # the host either -- a hardening test that can phone out defeats its purpose.
+  hostcheck:
+    internal: true
