@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -269,6 +270,17 @@ func (i *Ingress) handleInternalProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	// The forwarding node advertises its protocol version. An older node omits
+	// the header, which we treat as compatible; a value outside our supported
+	// range means the cluster is mid-upgrade across a breaking change and this
+	// hop is not safe to serve.
+	if v := r.Header.Get(config.HeaderRiftProtoVersion); v != "" {
+		if n, err := strconv.Atoi(v); err != nil || n < tunnelproto.MinVersion || n > tunnelproto.Version {
+			i.logger.Warn("peer forwarded with an incompatible protocol version", slog.String("peer_version", v))
+			http.Error(w, "incompatible peer protocol version", http.StatusBadGateway)
+			return
+		}
+	}
 	sub := r.Header.Get(config.HeaderRiftSubdomain)
 	if sub == "" {
 		http.Error(w, "missing "+config.HeaderRiftSubdomain, http.StatusBadRequest)
@@ -298,6 +310,7 @@ func (i *Ingress) handleInternalProxy(w http.ResponseWriter, r *http.Request) {
 	r.Header.Del(config.HeaderRiftForwardedURI)
 	r.Header.Del(config.HeaderRiftPeerToken)
 	r.Header.Del(config.HeaderRiftSubdomain)
+	r.Header.Del(config.HeaderRiftProtoVersion)
 
 	i.proxy(w, r, sess, sub)
 }

@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/anomalysh/rift/server/internal/config"
+	"github.com/anomalysh/rift/server/internal/tunnelproto"
 )
 
 // forwardToPeer relays the request to the node whose agent holds the subdomain.
@@ -88,6 +90,7 @@ func (i *Ingress) doPeerForward(r *http.Request, nodeURL, sub string) (*http.Res
 	outbound.Header.Set(config.HeaderRiftSubdomain, sub)
 	outbound.Header.Set(config.HeaderRiftForwardedURI, r.URL.RequestURI())
 	outbound.Header.Set(config.HeaderRiftPeerToken, i.cfg.Cluster.PeerSecret)
+	outbound.Header.Set(config.HeaderRiftProtoVersion, strconv.Itoa(tunnelproto.Version))
 
 	return i.peers.Do(outbound)
 }

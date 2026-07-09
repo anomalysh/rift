@@ -173,6 +173,7 @@ func (g *Gateway) serve(r *http.Request, conn *websocket.Conn) {
 		URL:                 g.cfg.Tunnel.PublicURL(tunnel.Subdomain),
 		HeartbeatIntervalMS: g.cfg.Tunnel.HeartbeatInterval.Milliseconds(),
 		BindAddr:            bindAddr,
+		ProtocolVersion:     tunnelproto.Version,
 	}
 	frame, err := tunnelproto.EncodeControl(tunnelproto.ControlHelloOK, ok)
 	if err != nil {
@@ -315,11 +316,19 @@ func readHello(ctx context.Context, conn *websocket.Conn) (*tunnelproto.Hello, e
 
 // authorize validates the hello, claims a subdomain, and persists the tunnel.
 func (g *Gateway) authorize(ctx context.Context, r *http.Request, hello *tunnelproto.Hello) (*core.Tunnel, *core.Token, *handshakeError) {
-	if hello.ProtocolVersion != tunnelproto.Version {
-		return nil, nil, &handshakeError{
-			code:    tunnelproto.ErrCodeUnsupportedVersion,
-			message: fmt.Sprintf("server speaks protocol version %d, agent offered %d", tunnelproto.Version, hello.ProtocolVersion),
+	// Accept any agent inside the supported protocol range. Outside it, reject
+	// with a message that points at the side that needs upgrading -- retrying
+	// cannot fix a version gap, so the agent treats this as fatal.
+	if hello.ProtocolVersion < tunnelproto.MinVersion || hello.ProtocolVersion > tunnelproto.Version {
+		var message string
+		if hello.ProtocolVersion > tunnelproto.Version {
+			message = fmt.Sprintf("this gateway speaks protocol up to v%d but the agent offered v%d; upgrade the gateway",
+				tunnelproto.Version, hello.ProtocolVersion)
+		} else {
+			message = fmt.Sprintf("this gateway requires protocol v%d-v%d but the agent offered v%d; upgrade rift",
+				tunnelproto.MinVersion, tunnelproto.Version, hello.ProtocolVersion)
 		}
+		return nil, nil, &handshakeError{code: tunnelproto.ErrCodeUnsupportedVersion, message: message}
 	}
 	if !core.Protocol(hello.Protocol).Valid() {
 		return nil, nil, &handshakeError{

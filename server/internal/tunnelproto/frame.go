@@ -12,8 +12,17 @@ import (
 	"io"
 )
 
-// Version is the protocol version advertised in the hello handshake.
+// Version is the current protocol version this build speaks and advertises in
+// the hello handshake. It is the maximum an agent may offer.
 const Version = 1
+
+// MinVersion is the oldest protocol version this build still accepts from an
+// agent. A handshake is served when MinVersion <= agent.protocol_version <=
+// Version, which gives a compatibility window for rolling client upgrades:
+// bump Version for a new capability, keep MinVersion until old agents are gone,
+// and only then raise MinVersion to drop them. Additive, omitempty fields do
+// not need a Version bump because an older peer simply ignores them.
+const MinVersion = 1
 
 // Subprotocol is the WebSocket subprotocol both peers negotiate.
 const Subprotocol = "rift.v1"

@@ -140,5 +140,10 @@ const (
 	// addressed to RouteInternalProxy, so without this the receiving node would
 	// serve "/internal/proxy" to the agent instead of what the client asked for.
 	HeaderRiftForwardedURI = "X-Rift-Forwarded-Uri"
+	// HeaderRiftProtoVersion carries the forwarding node's protocol version on
+	// the internal proxy hop. It is advisory and lenient: an older node omits
+	// it, which the receiver treats as compatible. It lets a future breaking
+	// change gate a mixed-version cluster cleanly.
+	HeaderRiftProtoVersion = "X-Rift-Proto-Version"
 	BearerPrefix           = "Bearer "
 )

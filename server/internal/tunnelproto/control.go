@@ -80,6 +80,10 @@ type HelloOK struct {
 	// BindAddr is the public host:port a raw tunnel (tcp/tls) is reached on.
 	// Empty for http tunnels, which are reached by URL.
 	BindAddr string `json:"bind_addr,omitempty"`
+	// ProtocolVersion is the current protocol version the gateway speaks (its
+	// maximum). An agent behind this can warn that a newer rift is available
+	// without the handshake failing.
+	ProtocolVersion int `json:"protocol_version,omitempty"`
 }
 
 // HelloError rejects the handshake; the connection closes after it is sent.

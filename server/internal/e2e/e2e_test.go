@@ -27,6 +27,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"github.com/anomalysh/rift/server/internal/auth"
 	"github.com/anomalysh/rift/server/internal/config"
 	"github.com/anomalysh/rift/server/internal/core"
@@ -1038,6 +1040,79 @@ func selfSignedCert(t *testing.T, host string) tls.Certificate {
 		t.Fatalf("parse certificate: %v", err)
 	}
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: priv, Leaf: leaf}
+}
+
+// An agent offering a protocol version outside the supported range must be
+// rejected with unsupported_version and an actionable message.
+func TestUnsupportedProtocolVersionIsRejected(t *testing.T) {
+	s := newStack(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, s.gatewayWS, &websocket.DialOptions{
+		Subprotocols: []string{tunnelproto.Subprotocol},
+	})
+	if err != nil {
+		t.Fatalf("dial gateway: %v", err)
+	}
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
+
+	// A version far above the current one: the client is newer than the gateway.
+	hello, err := tunnelproto.EncodeControl(tunnelproto.ControlHello, tunnelproto.Hello{
+		ProtocolVersion: tunnelproto.Version + 99,
+		Token:           s.token,
+		Protocol:        "http",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Write(ctx, websocket.MessageBinary, hello); err != nil {
+		t.Fatalf("write hello: %v", err)
+	}
+
+	_, data, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	frame, err := tunnelproto.Decode(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := tunnelproto.DecodeControl(frame.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.Type != tunnelproto.ControlHelloError {
+		t.Fatalf("got %s, want hello_error", env.Type)
+	}
+	var he tunnelproto.HelloError
+	if err := tunnelproto.UnmarshalPayload(env, &he); err != nil {
+		t.Fatal(err)
+	}
+	if he.Code != tunnelproto.ErrCodeUnsupportedVersion {
+		t.Fatalf("code = %q, want %q", he.Code, tunnelproto.ErrCodeUnsupportedVersion)
+	}
+	if !strings.Contains(he.Message, "upgrade the gateway") {
+		t.Fatalf("message is not actionable for a newer client: %q", he.Message)
+	}
+}
+
+// hello_ok must advertise the gateway's protocol version so an agent can tell
+// it is behind.
+func TestHelloOKAdvertisesProtocolVersion(t *testing.T) {
+	s := newStack(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	a, err := dialAgent(t, ctx, s.gatewayWS, s.token, "vers", nopHandler())
+	if err != nil {
+		t.Fatalf("dial agent: %v", err)
+	}
+	defer a.close()
+
+	if a.hello.ProtocolVersion != tunnelproto.Version {
+		t.Fatalf("hello_ok protocol_version = %d, want %d", a.hello.ProtocolVersion, tunnelproto.Version)
+	}
 }
 
 func nopHandler() http.Handler {
