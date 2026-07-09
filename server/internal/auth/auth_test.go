@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/siliconcolony/tunl/server/internal/config"
-	"github.com/siliconcolony/tunl/server/internal/core"
+	"github.com/anomaly-sh/rift/server/internal/config"
+	"github.com/anomaly-sh/rift/server/internal/core"
 )
 
 // fakeTokenStore is an in-memory core.TokenStore keyed by hash. Only the
@@ -42,14 +42,14 @@ func (s *fakeTokenStore) TouchLastUsed(context.Context, string, time.Time) error
 }
 
 func TestHashTokenIsStableHexSHA256(t *testing.T) {
-	h := HashToken("tunl_abc")
+	h := HashToken("rift_abc")
 	if len(h) != 64 {
 		t.Fatalf("hash length = %d, want 64 hex chars", len(h))
 	}
-	if h != HashToken("tunl_abc") {
+	if h != HashToken("rift_abc") {
 		t.Fatal("hash is not deterministic")
 	}
-	if h == HashToken("tunl_abd") {
+	if h == HashToken("rift_abd") {
 		t.Fatal("distinct inputs produced the same hash")
 	}
 }
@@ -91,7 +91,7 @@ func TestAuthenticate(t *testing.T) {
 		wantID    string
 	}{
 		{"missing prefix", "nope_" + valid[len(TokenPrefix):], true, ""},
-		{"unknown token", "tunl_deadbeef", true, ""},
+		{"unknown token", "rift_deadbeef", true, ""},
 		{"revoked token", revoked, true, ""},
 		{"expired token", expired, true, ""},
 		{"valid token", valid, false, "1"},
@@ -168,7 +168,7 @@ func TestEqualConstantTime(t *testing.T) {
 }
 
 func TestAdminGuard(t *testing.T) {
-	const expected = "tunl_admin_secret"
+	const expected = "rift_admin_secret"
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})

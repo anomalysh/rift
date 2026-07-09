@@ -1,7 +1,7 @@
 // Command-line argument parser. Produces a discriminated union so the caller
 // handles run/help/version/error without any partial or ambiguous state.
 //
-//   tunl <protocol> <port> [subdomain] [flags]
+//   rift <protocol> <port> [subdomain] [flags]
 
 import {
   LOG_LEVELS,
@@ -163,14 +163,14 @@ function applyValueFlag(
 
 /** Usage text for `--help`. */
 export function usageText(): string {
-  return `tunl — expose a local port through the tunl gateway
+  return `rift — expose a local port through the rift gateway
 
 USAGE
-  tunl <protocol> <port> [subdomain] [flags]
+  rift <protocol> <port> [subdomain] [flags]
 
 EXAMPLES
-  tunl http 3000                 open a tunnel with a random subdomain
-  tunl http 3000 myapp           request the subdomain "myapp"
+  rift http 3000                 open a tunnel with a random subdomain
+  rift http 3000 myapp           request the subdomain "myapp"
 
 ARGUMENTS
   <protocol>   application protocol to tunnel (supported: ${SUPPORTED_PROTOCOLS.join(", ")})
@@ -178,15 +178,15 @@ ARGUMENTS
   [subdomain]  desired subdomain; the gateway picks one at random if omitted
 
 FLAGS
-  --token <t>        gateway auth token        (env ${"TUNL_TOKEN"})
-  --server <url>     gateway ws/wss URL        (env ${"TUNL_SERVER"})
-  --host <host>      local host to forward to  (env ${"TUNL_HOST"}, default 127.0.0.1)
+  --token <t>        gateway auth token        (env ${"RIFT_TOKEN"})
+  --server <url>     gateway ws/wss URL        (env ${"RIFT_SERVER"})
+  --host <host>      local host to forward to  (env ${"RIFT_HOST"}, default 127.0.0.1)
   --log-level <lvl>  ${LOG_LEVELS.join(" | ")}
   --insecure         skip TLS certificate verification (wss only)
   --version, -v      print version and exit
   --help, -h         print this help and exit
 
 CONFIG
-  Precedence (highest first): flags > env vars > ~/.config/tunl/config.json > defaults.
-  token and server have no default; one must be supplied or tunl exits with an error.`;
+  Precedence (highest first): flags > env vars > ~/.config/rift/config.json > defaults.
+  token and server have no default; one must be supplied or rift exits with an error.`;
 }

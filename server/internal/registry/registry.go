@@ -10,8 +10,8 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/siliconcolony/tunl/server/internal/config"
-	"github.com/siliconcolony/tunl/server/internal/core"
+	"github.com/anomaly-sh/rift/server/internal/config"
+	"github.com/anomaly-sh/rift/server/internal/core"
 )
 
 // New builds the registry implied by cfg: local-only, or Redis-backed.

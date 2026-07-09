@@ -4,7 +4,7 @@ package config
 // exactly once; nothing else in the codebase may spell an env var inline.
 const (
 	// EnvPrefix namespaces every variable this server reads.
-	EnvPrefix = "TUNL_"
+	EnvPrefix = "RIFT_"
 
 	KeyEnv    = EnvPrefix + "ENV"
 	KeyNodeID = EnvPrefix + "NODE_ID"
@@ -110,8 +110,8 @@ const (
 	HeaderForwardedHost  = "X-Forwarded-Host"
 	HeaderRealIP         = "X-Real-IP"
 	HeaderAuthorization  = "Authorization"
-	HeaderTunlSubdomain  = "X-Tunl-Subdomain"
-	HeaderTunlRequestID  = "X-Tunl-Request-Id"
-	HeaderTunlPeerToken  = "X-Tunl-Peer-Token"
+	HeaderRiftSubdomain  = "X-Rift-Subdomain"
+	HeaderRiftRequestID  = "X-Rift-Request-Id"
+	HeaderRiftPeerToken  = "X-Rift-Peer-Token"
 	BearerPrefix         = "Bearer "
 )

@@ -8,8 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/siliconcolony/tunl/server/internal/config"
-	"github.com/siliconcolony/tunl/server/internal/core"
+	"github.com/anomaly-sh/rift/server/internal/config"
+	"github.com/anomaly-sh/rift/server/internal/core"
 )
 
 // DB owns the connection pool and hands out the storage-port implementations.

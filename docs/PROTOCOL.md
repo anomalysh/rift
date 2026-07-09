@@ -1,4 +1,4 @@
-# tunl wire protocol v1
+# rift wire protocol v1
 
 The tunnel agent (CLI) and the tunnel gateway (server) speak a binary framing
 protocol over a single WebSocket connection. One WebSocket connection carries
@@ -15,7 +15,7 @@ together, and `PROTOCOL_VERSION` must be bumped on any breaking change.
 * WebSocket, **binary** messages only. Text messages are a protocol violation.
 * One WebSocket message == exactly one frame. No frame spans messages.
 * The agent dials the gateway at `GET {gateway_url}` with
-  `Sec-WebSocket-Protocol: tunl.v1`.
+  `Sec-WebSocket-Protocol: rift.v1`.
 
 ## Frame layout
 
@@ -76,7 +76,7 @@ data frame before it has replied to `hello`.
 ```json
 {
   "protocol_version": 1,
-  "token": "tunl_...",
+  "token": "rift_...",
   "protocol": "http",
   "subdomain": "myapp",
   "local_port": 3000,
@@ -93,8 +93,8 @@ data frame before it has replied to `hello`.
 {
   "tunnel_id": "01J...",
   "subdomain": "myapp",
-  "hostname": "myapp.tunl.siliconcolony.dev",
-  "url": "https://myapp.tunl.siliconcolony.dev",
+  "hostname": "myapp.rift.anomaly.sh",
+  "url": "https://myapp.rift.anomaly.sh",
   "heartbeat_interval_ms": 15000
 }
 ```
@@ -135,7 +135,7 @@ Reasons: `server_shutdown`, `token_revoked`, `heartbeat_timeout`,
 `replaced` (same subdomain claimed by a newer connection).
 
 The gateway re-checks each tunnel's token every
-`TUNL_TOKEN_REVALIDATE_INTERVAL`. Revoking or expiring a token therefore
+`RIFT_TOKEN_REVALIDATE_INTERVAL`. Revoking or expiring a token therefore
 tears down the tunnels it already opened, within that interval, rather than
 only preventing new ones. An agent that receives `token_revoked` must not
 reconnect.
@@ -165,7 +165,7 @@ Either side may send `RESET` at any time to abort a stream. After `RESET` or
   "method": "POST",
   "path": "/v1/items?page=2",
   "headers": { "content-type": ["application/json"] },
-  "host": "myapp.tunl.siliconcolony.dev",
+  "host": "myapp.rift.anomaly.sh",
   "scheme": "https",
   "remote_addr": "203.0.113.9",
   "has_body": true

@@ -1,4 +1,4 @@
-// Package auth mints, hashes and verifies tunl API tokens, and guards the
+// Package auth mints, hashes and verifies rift API tokens, and guards the
 // admin API with a shared bearer token. It depends only on core and config;
 // it never imports a store implementation.
 package auth
@@ -14,14 +14,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/siliconcolony/tunl/server/internal/config"
-	"github.com/siliconcolony/tunl/server/internal/core"
+	"github.com/anomaly-sh/rift/server/internal/config"
+	"github.com/anomaly-sh/rift/server/internal/core"
 )
 
 const (
-	// TokenPrefix marks a string as a tunl token for provenance and lets us
+	// TokenPrefix marks a string as a rift token for provenance and lets us
 	// reject obviously-malformed credentials before any store lookup.
-	TokenPrefix = "tunl_"
+	TokenPrefix = "rift_"
 	// TokenEntropyBytes is the randomness behind each token. 32 bytes is a
 	// 256-bit secret: not brute-forceable, which is what makes HashToken safe.
 	TokenEntropyBytes = 32
@@ -103,7 +103,7 @@ func AdminGuard(expected string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		presented, ok := BearerFromHeader(r.Header.Get(config.HeaderAuthorization))
 		if !ok || !EqualConstantTime(presented, expected) {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="tunl admin"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="rift admin"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

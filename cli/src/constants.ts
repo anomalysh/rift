@@ -13,7 +13,7 @@ export const VERSION = "0.1.0";
 export const PROTOCOL_VERSION = 1;
 
 /** WebSocket subprotocol both peers negotiate (tunnelproto.Subprotocol). */
-export const SUBPROTOCOL = "tunl.v1";
+export const SUBPROTOCOL = "rift.v1";
 
 /** Fixed frame header length: type(1) + stream_id(8) + length(4). */
 export const HEADER_SIZE = 13;
@@ -107,10 +107,10 @@ export type LogLevel = (typeof LOG_LEVELS)[number];
 
 /** Environment variable names read during configuration resolution. */
 export const ENV = {
-  TOKEN: "TUNL_TOKEN",
-  SERVER: "TUNL_SERVER",
-  HOST: "TUNL_HOST",
-  LOG_LEVEL: "TUNL_LOG_LEVEL",
+  TOKEN: "RIFT_TOKEN",
+  SERVER: "RIFT_SERVER",
+  HOST: "RIFT_HOST",
+  LOG_LEVEL: "RIFT_LOG_LEVEL",
   XDG_CONFIG_HOME: "XDG_CONFIG_HOME",
   HOME: "HOME",
 } as const;
@@ -125,7 +125,7 @@ export const DEFAULTS = {
 } as const satisfies { HOST: string; LOG_LEVEL: LogLevel };
 
 /** Config file location relative to the XDG config home. */
-export const CONFIG_DIR_NAME = "tunl";
+export const CONFIG_DIR_NAME = "rift";
 export const CONFIG_FILE_NAME = "config.json";
 /** Fallback config home under $HOME when XDG_CONFIG_HOME is unset. */
 export const XDG_CONFIG_FALLBACK = ".config";

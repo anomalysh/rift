@@ -1,5 +1,5 @@
 // Leveled logger. Diagnostics go to stderr so that stdout carries only the
-// tunnel URL banner, keeping `tunl ... | something` pipelines clean.
+// tunnel URL banner, keeping `rift ... | something` pipelines clean.
 
 import { LOG_LEVELS, type LogLevel } from "./constants.ts";
 

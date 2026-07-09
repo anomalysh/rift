@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Shared helpers for the tunl operator scripts. This file is SOURCED, not
+# Shared helpers for the rift operator scripts. This file is SOURCED, not
 # executed; keep it side-effect free at source time apart from the definitions
 # below. Sourcing scripts are expected to run under `set -euo pipefail`.
 
 # Absolute path to the tools/ directory (this file lives in tools/lib/).
-TUNL_TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RIFT_TOOLS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # --- logging (always to stderr so stdout carries only real output) ----------
-_tunl_log() { printf '%s %s\n' "$1" "$2" >&2; }
-log_info()  { _tunl_log "[info] " "$*"; }
-log_warn()  { _tunl_log "[warn] " "$*"; }
-log_error() { _tunl_log "[error]" "$*"; }
+_rift_log() { printf '%s %s\n' "$1" "$2" >&2; }
+log_info()  { _rift_log "[info] " "$*"; }
+log_warn()  { _rift_log "[warn] " "$*"; }
+log_error() { _rift_log "[error]" "$*"; }
 die()       { log_error "$*"; exit 1; }
 
 # require_cmd CMD...  — abort unless every command is on PATH.
@@ -46,8 +46,8 @@ is_true() {
 	esac
 }
 
-# tunl_ssh_key_path — path to the managed deploy key (may not exist yet).
-tunl_ssh_key_path() { printf '%s/.ssh/id_ed25519' "$TUNL_TOOLS_DIR"; }
+# rift_ssh_key_path — path to the managed deploy key (may not exist yet).
+rift_ssh_key_path() { printf '%s/.ssh/id_ed25519' "$RIFT_TOOLS_DIR"; }
 
 # Shared ssh/scp options.
 #   accept-new records an unknown host key on first contact but still refuses a
@@ -55,7 +55,7 @@ tunl_ssh_key_path() { printf '%s/.ssh/id_ed25519' "$TUNL_TOOLS_DIR"; }
 #   deploy session from being dropped by an idle NAT.
 # Consumed by the scripts that source this file, hence "unused" here.
 # shellcheck disable=SC2034
-TUNL_SSH_OPTS=(
+RIFT_SSH_OPTS=(
 	-o ConnectTimeout=15
 	-o StrictHostKeyChecking=accept-new
 	-o ServerAliveInterval=30

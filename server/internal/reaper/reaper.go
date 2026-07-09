@@ -10,8 +10,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/siliconcolony/tunl/server/internal/config"
-	"github.com/siliconcolony/tunl/server/internal/core"
+	"github.com/anomaly-sh/rift/server/internal/config"
+	"github.com/anomaly-sh/rift/server/internal/core"
 )
 
 // Reaper periodically collects stale tunnels.

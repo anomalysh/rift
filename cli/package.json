@@ -1,13 +1,13 @@
 {
-  "name": "tunl",
+  "name": "rift",
   "version": "0.1.0",
   "description": "Fully-typed Bun/TypeScript single-binary ngrok-style tunnel agent.",
   "type": "module",
   "bin": {
-    "tunl": "./dist/tunl"
+    "rift": "./dist/rift"
   },
   "scripts": {
-    "build": "bun build --compile --minify --sourcemap ./src/index.ts --outfile dist/tunl",
+    "build": "bun build --compile --minify --sourcemap ./src/index.ts --outfile dist/rift",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },

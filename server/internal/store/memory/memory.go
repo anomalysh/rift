@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/siliconcolony/tunl/server/internal/core"
+	"github.com/anomaly-sh/rift/server/internal/core"
 )
 
 // Store implements core.TokenStore, core.ReservationStore and core.TunnelStore.

@@ -9,7 +9,7 @@ import {
   type PartialConfig,
 } from "../src/config.ts";
 
-const CONFIG_PATH = "/home/user/.config/tunl/config.json";
+const CONFIG_PATH = "/home/user/.config/rift/config.json";
 
 function resolve(input: {
   flags?: FlagConfig;
@@ -28,7 +28,7 @@ describe("precedence: flag > env > file > default", () => {
   test("flag beats env beats file for token", () => {
     const cfg = resolve({
       flags: { token: "flag-tok" },
-      env: { TUNL_TOKEN: "env-tok", TUNL_SERVER: "wss://s" },
+      env: { RIFT_TOKEN: "env-tok", RIFT_SERVER: "wss://s" },
       file: { token: "file-tok" },
     });
     expect(cfg.token).toBe("flag-tok");
@@ -36,7 +36,7 @@ describe("precedence: flag > env > file > default", () => {
 
   test("env beats file when no flag", () => {
     const cfg = resolve({
-      env: { TUNL_TOKEN: "env-tok", TUNL_SERVER: "env-srv" },
+      env: { RIFT_TOKEN: "env-tok", RIFT_SERVER: "env-srv" },
       file: { token: "file-tok", server: "file-srv" },
     });
     expect(cfg.token).toBe("env-tok");
@@ -45,7 +45,7 @@ describe("precedence: flag > env > file > default", () => {
 
   test("file beats default for host and logLevel", () => {
     const cfg = resolve({
-      env: { TUNL_TOKEN: "t", TUNL_SERVER: "s" },
+      env: { RIFT_TOKEN: "t", RIFT_SERVER: "s" },
       file: { host: "10.0.0.1", logLevel: "warn" },
     });
     expect(cfg.host).toBe("10.0.0.1");
@@ -60,12 +60,12 @@ describe("precedence: flag > env > file > default", () => {
 
   test("host precedence across all four layers", () => {
     const layered = {
-      env: { TUNL_TOKEN: "t", TUNL_SERVER: "s", TUNL_HOST: "env-host" },
+      env: { RIFT_TOKEN: "t", RIFT_SERVER: "s", RIFT_HOST: "env-host" },
       file: { host: "file-host" },
     };
     expect(resolve({ ...layered, flags: { host: "flag-host" } }).host).toBe("flag-host");
     expect(resolve(layered).host).toBe("env-host");
-    expect(resolve({ file: layered.file, env: { TUNL_TOKEN: "t", TUNL_SERVER: "s" } }).host).toBe(
+    expect(resolve({ file: layered.file, env: { RIFT_TOKEN: "t", RIFT_SERVER: "s" } }).host).toBe(
       "file-host",
     );
   });
@@ -78,61 +78,61 @@ describe("precedence: flag > env > file > default", () => {
 
 describe("missing required settings", () => {
   test("missing token throws a clear ConfigError", () => {
-    expect(() => resolve({ env: { TUNL_SERVER: "s" } })).toThrow(ConfigError);
+    expect(() => resolve({ env: { RIFT_SERVER: "s" } })).toThrow(ConfigError);
     try {
-      resolve({ env: { TUNL_SERVER: "s" } });
+      resolve({ env: { RIFT_SERVER: "s" } });
     } catch (err) {
       expect(err).toBeInstanceOf(ConfigError);
       expect((err as ConfigError).message).toContain("token");
-      expect((err as ConfigError).message).toContain("TUNL_TOKEN");
+      expect((err as ConfigError).message).toContain("RIFT_TOKEN");
       expect((err as ConfigError).message).toContain(CONFIG_PATH);
     }
   });
 
   test("missing server throws a clear ConfigError", () => {
     try {
-      resolve({ env: { TUNL_TOKEN: "t" } });
+      resolve({ env: { RIFT_TOKEN: "t" } });
       throw new Error("expected ConfigError");
     } catch (err) {
       expect(err).toBeInstanceOf(ConfigError);
       expect((err as ConfigError).message).toContain("server");
-      expect((err as ConfigError).message).toContain("TUNL_SERVER");
+      expect((err as ConfigError).message).toContain("RIFT_SERVER");
     }
   });
 
   test("empty string env values are treated as unset", () => {
-    expect(() => resolve({ env: { TUNL_TOKEN: "", TUNL_SERVER: "s" } })).toThrow(ConfigError);
+    expect(() => resolve({ env: { RIFT_TOKEN: "", RIFT_SERVER: "s" } })).toThrow(ConfigError);
   });
 });
 
 describe("env validation", () => {
-  test("invalid TUNL_LOG_LEVEL is rejected", () => {
+  test("invalid RIFT_LOG_LEVEL is rejected", () => {
     expect(() =>
-      resolve({ env: { TUNL_TOKEN: "t", TUNL_SERVER: "s", TUNL_LOG_LEVEL: "loud" } }),
+      resolve({ env: { RIFT_TOKEN: "t", RIFT_SERVER: "s", RIFT_LOG_LEVEL: "loud" } }),
     ).toThrow(ConfigError);
   });
 
-  test("valid TUNL_LOG_LEVEL is honoured", () => {
+  test("valid RIFT_LOG_LEVEL is honoured", () => {
     expect(
-      resolve({ env: { TUNL_TOKEN: "t", TUNL_SERVER: "s", TUNL_LOG_LEVEL: "error" } }).logLevel,
+      resolve({ env: { RIFT_TOKEN: "t", RIFT_SERVER: "s", RIFT_LOG_LEVEL: "error" } }).logLevel,
     ).toBe("error");
   });
 });
 
 describe("configFilePath", () => {
   test("honours XDG_CONFIG_HOME", () => {
-    expect(configFilePath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/tunl/config.json");
+    expect(configFilePath({ XDG_CONFIG_HOME: "/xdg" })).toBe("/xdg/rift/config.json");
   });
 
   test("falls back to HOME/.config", () => {
     expect(configFilePath({ HOME: "/home/user" })).toBe(
-      "/home/user/.config/tunl/config.json",
+      "/home/user/.config/rift/config.json",
     );
   });
 
   test("XDG_CONFIG_HOME wins over HOME", () => {
     expect(configFilePath({ XDG_CONFIG_HOME: "/xdg", HOME: "/home/user" })).toBe(
-      "/xdg/tunl/config.json",
+      "/xdg/rift/config.json",
     );
   });
 });

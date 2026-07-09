@@ -1,4 +1,4 @@
-// Package tunnelproto implements the tunl wire protocol v1.
+// Package tunnelproto implements the rift wire protocol v1.
 //
 // It is the single source of truth for framing on the Go side and mirrors
 // cli/src/protocol.ts. See docs/PROTOCOL.md — any change here is a change to
@@ -16,7 +16,7 @@ import (
 const Version = 1
 
 // Subprotocol is the WebSocket subprotocol both peers negotiate.
-const Subprotocol = "tunl.v1"
+const Subprotocol = "rift.v1"
 
 // FrameType discriminates the frame payload. Values are stable and must never
 // be reused for a different meaning.

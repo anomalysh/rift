@@ -4,13 +4,13 @@
 *.exe
 
 # Go
-server/tunld
+server/riftd
 server/bin/
 
 # Bun / Node
 node_modules/
 cli/dist/
-cli/tunl
+cli/rift
 *.tsbuildinfo
 
 # Env & secrets

@@ -31,7 +31,7 @@ const (
 	DefaultRedisEnabled = false
 	DefaultRedisAddr    = "127.0.0.1:6379"
 	DefaultRedisDB      = 0
-	DefaultRedisPrefix  = "tunl:"
+	DefaultRedisPrefix  = "rift:"
 
 	DefaultPublicScheme = SchemeHTTPS
 
@@ -70,7 +70,7 @@ var DefaultSubdomainBlocklist = []string{
 	"status", "health", "metrics", "internal", "gateway",
 	"support", "help", "docs", "blog", "test", "staging", "dev",
 	"root", "system", "security", "abuse", "postmaster", "webmaster",
-	"tunl", "tunnel", "localhost",
+	"rift", "tunnel", "localhost",
 }
 
 // Environment names.

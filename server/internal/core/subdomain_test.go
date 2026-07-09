@@ -78,20 +78,20 @@ func TestGenerateSubdomainSatisfiesRules(t *testing.T) {
 }
 
 func TestSubdomainFromHost(t *testing.T) {
-	const base = "tunl.siliconcolony.dev"
+	const base = "rift.anomaly.sh"
 	cases := []struct {
 		host string
 		want string
 		ok   bool
 	}{
-		{"demo.tunl.siliconcolony.dev", "demo", true},
-		{"demo.tunl.siliconcolony.dev:443", "demo", true},
-		{"DEMO.TUNL.SiliconColony.dev", "demo", true},
-		{"demo.tunl.siliconcolony.dev.", "demo", true}, // trailing root dot
-		{"tunl.siliconcolony.dev", "", false},          // apex has no label
-		{"a.b.tunl.siliconcolony.dev", "", false},      // nested label is not a tunnel
-		{"demo.evil.dev", "", false},                   // wrong base domain
-		{"eviltunl.siliconcolony.dev", "", false},      // suffix must be dot-anchored
+		{"demo.rift.anomaly.sh", "demo", true},
+		{"demo.rift.anomaly.sh:443", "demo", true},
+		{"DEMO.Rift.Anomaly.SH", "demo", true},
+		{"demo.rift.anomaly.sh.", "demo", true}, // trailing root dot
+		{"rift.anomaly.sh", "", false},          // apex has no label
+		{"a.b.rift.anomaly.sh", "", false},      // nested label is not a tunnel
+		{"demo.evil.dev", "", false},            // wrong base domain
+		{"evilrift.anomaly.sh", "", false},      // suffix must be dot-anchored
 		{"", "", false},
 	}
 	for _, tc := range cases {
@@ -103,7 +103,7 @@ func TestSubdomainFromHost(t *testing.T) {
 }
 
 func TestHostname(t *testing.T) {
-	if got := Hostname("demo", "tunl.example.com"); got != "demo.tunl.example.com" {
+	if got := Hostname("demo", "rift.example.com"); got != "demo.rift.example.com" {
 		t.Fatalf("Hostname = %q", got)
 	}
 }

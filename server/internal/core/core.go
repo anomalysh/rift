@@ -1,4 +1,4 @@
-// Package core holds the tunl domain model and the ports (interfaces) that
+// Package core holds the rift domain model and the ports (interfaces) that
 // adapters implement. It depends on nothing but the standard library.
 //
 // Boundary rule: every other internal package may import core; core imports

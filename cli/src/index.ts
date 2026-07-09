@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// tunl entrypoint: parse args, resolve configuration, run the tunnel agent,
+// rift entrypoint: parse args, resolve configuration, run the tunnel agent,
 // and translate outcomes into process exit codes (see constants.ts EXIT).
 
 import { parseArgs, usageText } from "./args.ts";
@@ -48,7 +48,7 @@ async function main(): Promise<void> {
       process.exit(EXIT.OK);
       break;
     case "error":
-      fail(`tunl: ${parsed.message}\nRun 'tunl --help' for usage.`, EXIT.USAGE);
+      fail(`rift: ${parsed.message}\nRun 'rift --help' for usage.`, EXIT.USAGE);
       break;
     case "run":
       break;

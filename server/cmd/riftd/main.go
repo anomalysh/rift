@@ -1,4 +1,4 @@
-// Command tunld is the tunl gateway: it terminates agent WebSocket
+// Command riftd is the rift gateway: it terminates agent WebSocket
 // connections, serves public traffic for *.BASE_DOMAIN, and exposes an admin
 // API on a separate, non-public listener.
 package main
@@ -15,14 +15,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/siliconcolony/tunl/server/internal/adminapi"
-	"github.com/siliconcolony/tunl/server/internal/config"
-	"github.com/siliconcolony/tunl/server/internal/gateway"
-	"github.com/siliconcolony/tunl/server/internal/ingress"
-	"github.com/siliconcolony/tunl/server/internal/observability"
-	"github.com/siliconcolony/tunl/server/internal/reaper"
-	"github.com/siliconcolony/tunl/server/internal/registry"
-	"github.com/siliconcolony/tunl/server/internal/store/postgres"
+	"github.com/anomaly-sh/rift/server/internal/adminapi"
+	"github.com/anomaly-sh/rift/server/internal/config"
+	"github.com/anomaly-sh/rift/server/internal/gateway"
+	"github.com/anomaly-sh/rift/server/internal/ingress"
+	"github.com/anomaly-sh/rift/server/internal/observability"
+	"github.com/anomaly-sh/rift/server/internal/reaper"
+	"github.com/anomaly-sh/rift/server/internal/registry"
+	"github.com/anomaly-sh/rift/server/internal/store/postgres"
 )
 
 // shutdownGrace bounds how long in-flight public requests may finish before
@@ -32,7 +32,7 @@ const shutdownGrace = 20 * time.Second
 func main() {
 	if err := run(); err != nil {
 		// The logger may not exist yet when config loading fails.
-		fmt.Fprintf(os.Stderr, "tunld: %v\n", err)
+		fmt.Fprintf(os.Stderr, "riftd: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -142,7 +142,7 @@ func run() error {
 		}()
 	}
 
-	logger.Info("tunld ready",
+	logger.Info("riftd ready",
 		slog.String("base_domain", cfg.Tunnel.BaseDomain),
 		slog.String("gateway_path", cfg.Gateway.Path),
 		slog.Bool("redis", cfg.Redis.Enabled),
@@ -193,5 +193,5 @@ func shutdown(logger *slog.Logger, servers []*namedServer, gw *gateway.Gateway) 
 			logger.Warn("gateway did not drain cleanly", slog.Any("error", err))
 		}
 	}
-	logger.Info("tunld stopped")
+	logger.Info("riftd stopped")
 }

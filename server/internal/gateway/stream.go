@@ -5,8 +5,8 @@ import (
 	"io"
 	"sync"
 
-	"github.com/siliconcolony/tunl/server/internal/core"
-	"github.com/siliconcolony/tunl/server/internal/tunnelproto"
+	"github.com/anomaly-sh/rift/server/internal/core"
+	"github.com/anomaly-sh/rift/server/internal/tunnelproto"
 )
 
 // errSessionClosed means the tunnel died with the stream in flight.

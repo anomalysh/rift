@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/siliconcolony/tunl/server/internal/core"
+	"github.com/anomaly-sh/rift/server/internal/core"
 )
 
 // Local is the in-memory subdomain -> session map for this process.

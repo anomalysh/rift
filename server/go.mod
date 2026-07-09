@@ -1,4 +1,4 @@
-module github.com/siliconcolony/tunl/server
+module github.com/anomaly-sh/rift/server
 
 go 1.21
 

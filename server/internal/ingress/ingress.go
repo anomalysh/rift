@@ -15,9 +15,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/siliconcolony/tunl/server/internal/config"
-	"github.com/siliconcolony/tunl/server/internal/core"
-	"github.com/siliconcolony/tunl/server/internal/tunnelproto"
+	"github.com/anomaly-sh/rift/server/internal/config"
+	"github.com/anomaly-sh/rift/server/internal/core"
+	"github.com/anomaly-sh/rift/server/internal/tunnelproto"
 )
 
 // copyBufferSize is the chunk size used when streaming a tunnel response to
@@ -131,7 +131,7 @@ func (i *Ingress) handleTLSAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// A reserved subdomain gets a certificate before its agent connects, so
-	// the first request after `tunl http 3000 myapp` is not delayed by an
+	// the first request after `rift http 3000 myapp` is not delayed by an
 	// ACME round trip.
 	if _, err := i.reservations.Get(ctx, sub); err == nil {
 		w.WriteHeader(http.StatusOK)
@@ -184,9 +184,9 @@ func (i *Ingress) handleInternalProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	sub := r.Header.Get(config.HeaderTunlSubdomain)
+	sub := r.Header.Get(config.HeaderRiftSubdomain)
 	if sub == "" {
-		http.Error(w, "missing "+config.HeaderTunlSubdomain, http.StatusBadRequest)
+		http.Error(w, "missing "+config.HeaderRiftSubdomain, http.StatusBadRequest)
 		return
 	}
 	sess, found := i.registry.Lookup(r.Context(), sub)

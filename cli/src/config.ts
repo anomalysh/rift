@@ -2,8 +2,8 @@
 //
 // Precedence, highest wins:
 //   1. CLI flags / positional args
-//   2. environment variables (TUNL_TOKEN, TUNL_SERVER, TUNL_HOST, TUNL_LOG_LEVEL)
-//   3. config file ~/.config/tunl/config.json  (honours XDG_CONFIG_HOME)
+//   2. environment variables (RIFT_TOKEN, RIFT_SERVER, RIFT_HOST, RIFT_LOG_LEVEL)
+//   3. config file ~/.config/rift/config.json  (honours XDG_CONFIG_HOME)
 //   4. built-in defaults (host, log level only)
 //
 // `token` and `server` have no default: a missing one is a clear, actionable

@@ -10,14 +10,14 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/siliconcolony/tunl/server/internal/store/migrations"
+	"github.com/anomaly-sh/rift/server/internal/store/migrations"
 )
 
 // migrationLockKey scopes the session-level advisory lock the runner holds
 // while migrating. Its value is arbitrary but must never change, or two
 // releases built at different times would use different keys and fail to
 // exclude each other.
-const migrationLockKey int64 = 0x74756e6c6d696700 // "tunlmig\0"
+const migrationLockKey int64 = 0x74756e6c6d696700 // "riftmig\0"
 
 // migration is one parsed SQL file: its numeric version, source filename and body.
 type migration struct {
@@ -81,7 +81,7 @@ func versionFromName(name string) (int64, error) {
 }
 
 // runMigrations applies pending migrations idempotently. It serialises
-// concurrent tunld instances with a Postgres advisory lock so two processes
+// concurrent riftd instances with a Postgres advisory lock so two processes
 // starting together cannot both try to apply the same file.
 func runMigrations(ctx context.Context, pool *pgxpool.Pool) (err error) {
 	migs, err := parseMigrations(migrations.FS)

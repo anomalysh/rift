@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/siliconcolony/tunl/server/internal/config"
+	"github.com/anomaly-sh/rift/server/internal/config"
 )
 
 // forwardToPeer relays the request to the node whose agent holds the subdomain.
@@ -27,8 +27,8 @@ func (i *Ingress) forwardToPeer(w http.ResponseWriter, r *http.Request, nodeURL,
 	outbound.Header = r.Header.Clone()
 	outbound.Host = r.Host
 	outbound.ContentLength = r.ContentLength
-	outbound.Header.Set(config.HeaderTunlSubdomain, sub)
-	outbound.Header.Set(config.HeaderTunlPeerToken, i.cfg.Cluster.PeerSecret)
+	outbound.Header.Set(config.HeaderRiftSubdomain, sub)
+	outbound.Header.Set(config.HeaderRiftPeerToken, i.cfg.Cluster.PeerSecret)
 	outbound.Header.Set(config.HeaderForwardedHost, r.Host)
 	outbound.Header.Set(config.HeaderForwardedProto, i.cfg.Tunnel.PublicScheme)
 	outbound.Header.Set(config.HeaderRealIP, i.clientIP(r))
@@ -60,7 +60,7 @@ func authenticatePeer(r *http.Request, secret string) bool {
 	if secret == "" {
 		return false
 	}
-	got := r.Header.Get(config.HeaderTunlPeerToken)
+	got := r.Header.Get(config.HeaderRiftPeerToken)
 	return subtle.ConstantTimeCompare([]byte(got), []byte(secret)) == 1
 }
 

@@ -1,4 +1,4 @@
-# tunl operator Makefile. Run `make` (or `make help`) for the target list.
+# rift operator Makefile. Run `make` (or `make help`) for the target list.
 SHELL := bash
 .DEFAULT_GOAL := help
 
@@ -15,11 +15,11 @@ LOAD_ENV := set -a; [ -f .env ] && . ./.env; set +a;
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z0-9_-]+:.*##/{printf "  \033[36m%-14s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
 
-build-server: ## Build the tunld server binary (server/tunld)
-	cd server && CGO_ENABLED=0 go build -o tunld ./cmd/tunld
+build-server: ## Build the riftd server binary (server/riftd)
+	cd server && CGO_ENABLED=0 go build -o riftd ./cmd/riftd
 
 build-cli: ## Build the CLI single-binary image (deploy/Dockerfile.cli)
-	docker build -f deploy/Dockerfile.cli -t tunl-cli:local .
+	docker build -f deploy/Dockerfile.cli -t rift-cli:local .
 
 test: ## Run server tests
 	cd server && go test ./...
@@ -39,9 +39,9 @@ down: ## Stop the local dev stack and remove its containers
 logs: ## Follow logs from the local dev stack
 	$(COMPOSE) logs -f
 
-migrate: ## Apply DB migrations (tunld runs them on start; ensures pg is up, recreates tunld)
+migrate: ## Apply DB migrations (riftd runs them on start; ensures pg is up, recreates riftd)
 	$(COMPOSE) up -d postgres
-	$(COMPOSE) up -d --force-recreate tunld
+	$(COMPOSE) up -d --force-recreate riftd
 
 deploy: ## Build & deploy the stack to the VPS (ARGS=--dry-run to preview)
 	@$(LOAD_ENV) bash tools/remote-deploy.sh $(ARGS)

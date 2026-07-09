@@ -9,7 +9,7 @@ usage() {
 	cat >&2 <<'EOF'
 Usage: tools/scp.sh [--pull] [-r|--recursive] SRC DST
 
-Copy files to/from the tunl VPS using the same auth logic as tools/ssh.sh.
+Copy files to/from the rift VPS using the same auth logic as tools/ssh.sh.
   push (default): copy local SRC -> VPS:DST
   --pull:         copy VPS:SRC  -> local DST
 
@@ -17,10 +17,10 @@ SRC and DST are plain paths; the VPS user@host is supplied from the environment,
 so do NOT prefix them with user@host:.
 
 Environment:
-  TUNL_VPS_HOST      (required) VPS hostname or IP
-  TUNL_VPS_USER      SSH user            (default: root)
-  TUNL_VPS_PORT      SSH port            (default: 22)
-  TUNL_VPS_PASSWORD  (required only when no key exists yet)
+  RIFT_VPS_HOST      (required) VPS hostname or IP
+  RIFT_VPS_USER      SSH user            (default: root)
+  RIFT_VPS_PORT      SSH port            (default: 22)
+  RIFT_VPS_PASSWORD  (required only when no key exists yet)
 EOF
 }
 
@@ -56,27 +56,27 @@ src="${positionals[0]}"
 dst="${positionals[1]}"
 
 require_cmd scp
-require_env TUNL_VPS_HOST
+require_env RIFT_VPS_HOST
 
-host="$TUNL_VPS_HOST"
-user="${TUNL_VPS_USER:-root}"
-port="${TUNL_VPS_PORT:-22}"
+host="$RIFT_VPS_HOST"
+user="${RIFT_VPS_USER:-root}"
+port="${RIFT_VPS_PORT:-22}"
 
 # scp uses uppercase -P for the port.
-scp_args=("${TUNL_SSH_OPTS[@]}" -P "$port")
+scp_args=("${RIFT_SSH_OPTS[@]}" -P "$port")
 if [ "$recursive" = true ]; then
 	scp_args+=(-r)
 fi
 
-key="$(tunl_ssh_key_path)"
+key="$(rift_ssh_key_path)"
 if [ -f "$key" ]; then
 	scp_args+=(-i "$key" -o IdentitiesOnly=yes -o PasswordAuthentication=no)
 	cmd=(scp "${scp_args[@]}")
 else
 	# See tools/ssh.sh for why this is `sshpass -e` (env) and never `-p` (argv).
 	require_cmd sshpass
-	require_env TUNL_VPS_PASSWORD
-	export SSHPASS="$TUNL_VPS_PASSWORD"
+	require_env RIFT_VPS_PASSWORD
+	export SSHPASS="$RIFT_VPS_PASSWORD"
 	scp_args+=(-o PubkeyAuthentication=no)
 	cmd=(sshpass -e scp "${scp_args[@]}")
 fi

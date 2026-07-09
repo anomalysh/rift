@@ -11,7 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/siliconcolony/tunl/server/internal/tunnelproto"
+	"github.com/anomaly-sh/rift/server/internal/tunnelproto"
 )
 
 // testAgent is a minimal, correct implementation of the agent side of the

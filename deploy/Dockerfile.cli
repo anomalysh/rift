@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 
-# Builds the tunl CLI into a single self-contained executable with Bun's
+# Builds the rift CLI into a single self-contained executable with Bun's
 # compiler. Build context is the repo root; the CLI sources live under cli/.
-#   docker build -f deploy/Dockerfile.cli -t tunl-cli:local .
+#   docker build -f deploy/Dockerfile.cli -t rift-cli:local .
 
 # --- build ------------------------------------------------------------------
 FROM oven/bun:1 AS build
@@ -13,11 +13,11 @@ RUN bun install
 
 # `bun build --compile` bakes the Bun runtime and all sources into one binary.
 # Assumes the CLI entrypoint is cli/src/index.ts (adjust if the CLI differs).
-RUN bun build ./src/index.ts --compile --minify --outfile /out/tunl
+RUN bun build ./src/index.ts --compile --minify --outfile /out/rift
 
 # --- runtime ----------------------------------------------------------------
 FROM debian:12-slim AS runtime
-RUN useradd -r -u 10001 tunl
-COPY --from=build /out/tunl /usr/local/bin/tunl
-USER tunl
-ENTRYPOINT ["tunl"]
+RUN useradd -r -u 10001 rift
+COPY --from=build /out/rift /usr/local/bin/rift
+USER rift
+ENTRYPOINT ["rift"]

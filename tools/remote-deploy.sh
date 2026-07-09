@@ -7,13 +7,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 SSH="$SCRIPT_DIR/ssh.sh"
 
-REMOTE_DIR="/opt/tunl"
+REMOTE_DIR="/opt/rift"
 
 usage() {
 	cat >&2 <<EOF
 Usage: tools/remote-deploy.sh [--dry-run]
 
-Deploy the tunl stack to the VPS. Idempotent.
+Deploy the rift stack to the VPS. Idempotent.
   1. Ships server/ and deploy/ to $REMOTE_DIR (tar over ssh, preserving layout
      so compose's build context '..' resolves to $REMOTE_DIR on the VPS).
   2. Runs: docker compose -f docker-compose.yml -f docker-compose.prod.yml
@@ -26,8 +26,8 @@ never part of the tarball, so it is preserved across deploys.
 Options:
   --dry-run   Print the actions without touching the VPS.
 
-Environment: TUNL_VPS_HOST (required), TUNL_VPS_USER, TUNL_VPS_PORT, and either
-tools/.ssh/id_ed25519 (preferred) or TUNL_VPS_PASSWORD.
+Environment: RIFT_VPS_HOST (required), RIFT_VPS_USER, RIFT_VPS_PORT, and either
+tools/.ssh/id_ed25519 (preferred) or RIFT_VPS_PASSWORD.
 EOF
 }
 
@@ -43,9 +43,9 @@ case "${1:-}" in
 esac
 
 require_cmd ssh tar
-require_env TUNL_VPS_HOST
+require_env RIFT_VPS_HOST
 
-log_info "target: ${TUNL_VPS_USER:-root}@$TUNL_VPS_HOST:$REMOTE_DIR (dry-run=$dry_run)"
+log_info "target: ${RIFT_VPS_USER:-root}@$RIFT_VPS_HOST:$REMOTE_DIR (dry-run=$dry_run)"
 
 # 1. Ensure the remote layout exists.
 if [ "$dry_run" = true ]; then
@@ -70,7 +70,7 @@ tar_cmd=(tar -C "$REPO_ROOT"
 	--exclude='deploy/caddy/data'
 	--exclude='deploy/caddy/config'
 	--exclude='deploy/.env'
-	--exclude='server/tunld'
+	--exclude='server/riftd'
 	--exclude='server/bin'
 	-czf - server deploy)
 

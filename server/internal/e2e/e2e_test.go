@@ -19,17 +19,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/siliconcolony/tunl/server/internal/auth"
-	"github.com/siliconcolony/tunl/server/internal/config"
-	"github.com/siliconcolony/tunl/server/internal/core"
-	"github.com/siliconcolony/tunl/server/internal/gateway"
-	"github.com/siliconcolony/tunl/server/internal/ingress"
-	"github.com/siliconcolony/tunl/server/internal/registry"
-	"github.com/siliconcolony/tunl/server/internal/store/memory"
-	"github.com/siliconcolony/tunl/server/internal/tunnelproto"
+	"github.com/anomaly-sh/rift/server/internal/auth"
+	"github.com/anomaly-sh/rift/server/internal/config"
+	"github.com/anomaly-sh/rift/server/internal/core"
+	"github.com/anomaly-sh/rift/server/internal/gateway"
+	"github.com/anomaly-sh/rift/server/internal/ingress"
+	"github.com/anomaly-sh/rift/server/internal/registry"
+	"github.com/anomaly-sh/rift/server/internal/store/memory"
+	"github.com/anomaly-sh/rift/server/internal/tunnelproto"
 )
 
-const testBaseDomain = "tunl.example.test"
+const testBaseDomain = "rift.example.test"
 
 type stack struct {
 	cfg        *config.Config
@@ -104,9 +104,9 @@ func newStack(t *testing.T, tune func(*config.Config)) *stack {
 		tune(cfg)
 	}
 
-	// TUNL_TEST_DEBUG=1 surfaces server logs when a test is being diagnosed.
+	// RIFT_TEST_DEBUG=1 surfaces server logs when a test is being diagnosed.
 	var logSink io.Writer = io.Discard
-	if os.Getenv("TUNL_TEST_DEBUG") != "" {
+	if os.Getenv("RIFT_TEST_DEBUG") != "" {
 		logSink = os.Stderr
 	}
 	logger := slog.New(slog.NewTextHandler(logSink, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -367,7 +367,7 @@ func TestInvalidTokenIsRejected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := dialAgent(t, ctx, s.gatewayWS, "tunl_notarealtoken", "demo", nopHandler())
+	_, err := dialAgent(t, ctx, s.gatewayWS, "rift_notarealtoken", "demo", nopHandler())
 	var rej *handshakeRejection
 	if !asRejection(err, &rej) {
 		t.Fatalf("got %v, want a handshake rejection", err)
@@ -453,18 +453,18 @@ func TestTunnelLimitIsEnforcedAcrossSubdomains(t *testing.T) {
 	// The token's stored MaxTunnels was set from the original config, so
 	// override it to exercise the limit path.
 	if err := s.store.Tokens().Create(ctx, &core.Token{
-		ID: "limited", Name: "limited", TokenHash: auth.HashToken("tunl_limitedtoken"), MaxTunnels: 1, CreatedAt: time.Now(),
+		ID: "limited", Name: "limited", TokenHash: auth.HashToken("rift_limitedtoken"), MaxTunnels: 1, CreatedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	first, err := dialAgent(t, ctx, s.gatewayWS, "tunl_limitedtoken", "one", nopHandler())
+	first, err := dialAgent(t, ctx, s.gatewayWS, "rift_limitedtoken", "one", nopHandler())
 	if err != nil {
 		t.Fatalf("first dial: %v", err)
 	}
 	defer first.close()
 
-	_, err = dialAgent(t, ctx, s.gatewayWS, "tunl_limitedtoken", "two", nopHandler())
+	_, err = dialAgent(t, ctx, s.gatewayWS, "rift_limitedtoken", "two", nopHandler())
 	var rej *handshakeRejection
 	if !asRejection(err, &rej) {
 		t.Fatalf("got %v, want a handshake rejection", err)
@@ -598,7 +598,7 @@ func TestExpiredTokenClosesItsLiveTunnels(t *testing.T) {
 	defer cancel()
 
 	expiring := core.MustNewID(time.Now())
-	const secret = "tunl_expiringtokensecretvalue00000"
+	const secret = "rift_expiringtokensecretvalue00000"
 	future := time.Now().Add(700 * time.Millisecond)
 	if err := s.store.Tokens().Create(ctx, &core.Token{
 		ID: expiring, Name: "expiring", TokenHash: auth.HashToken(secret),

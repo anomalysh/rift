@@ -5,7 +5,7 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/siliconcolony/tunl/server/internal/config"
+	"github.com/anomaly-sh/rift/server/internal/config"
 )
 
 // NewLogger builds the process logger described by cfg.

@@ -7,19 +7,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/siliconcolony/tunl/server/internal/config"
-	"github.com/siliconcolony/tunl/server/internal/core"
-	"github.com/siliconcolony/tunl/server/internal/store/migrations"
+	"github.com/anomaly-sh/rift/server/internal/config"
+	"github.com/anomaly-sh/rift/server/internal/core"
+	"github.com/anomaly-sh/rift/server/internal/store/migrations"
 )
 
-// testDB opens a pool against TUNL_TEST_POSTGRES_DSN, migrates, and truncates so
+// testDB opens a pool against RIFT_TEST_POSTGRES_DSN, migrates, and truncates so
 // each test starts from a clean, deterministic state. It skips when the DSN is
 // unset so `go test ./...` stays green without a database.
 func testDB(t *testing.T) *DB {
 	t.Helper()
-	dsn := os.Getenv("TUNL_TEST_POSTGRES_DSN")
+	dsn := os.Getenv("RIFT_TEST_POSTGRES_DSN")
 	if dsn == "" {
-		t.Skip("set TUNL_TEST_POSTGRES_DSN to run postgres store tests")
+		t.Skip("set RIFT_TEST_POSTGRES_DSN to run postgres store tests")
 	}
 
 	ctx := context.Background()

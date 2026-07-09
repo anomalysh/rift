@@ -1,12 +1,12 @@
-# tunl
+# rift
 
 A self-hosted ngrok: expose a local port on a public HTTPS URL under a domain
 you own.
 
 ```console
-$ tunl http 3000 myapp
+$ rift http 3000 myapp
 
-  tunl  https://myapp.tunl.example.com
+  rift  https://myapp.rift.example.com
     ->  http://127.0.0.1:3000
 ```
 
@@ -19,15 +19,15 @@ The agent is a single Bun binary.
 ```
      public client                  your laptop
           |                              |
-     https://myapp.tunl.example.com      |  tunl http 3000 myapp
+     https://myapp.rift.example.com      |  rift http 3000 myapp
           |                              |
           v                              v
-   +-------------+               wss://gateway.tunl.example.com
+   +-------------+               wss://gateway.rift.example.com
    |    Caddy    |  <--------------------+
    |  :80 :443   |     (one WebSocket per tunnel, frames multiplexed)
    +------+------+
           | :8080 ingress          +-------------+
-          +----------------------> |    tunld    | :8081 gateway
+          +----------------------> |    riftd    | :8081 gateway
                                    |             | :8082 admin (never public)
                                    +------+------+
                                           |
@@ -36,12 +36,12 @@ The agent is a single Bun binary.
                                    +-------------+    multi-node routing)
 ```
 
-* **Caddy** terminates TLS and reverse-proxies to tunld. Certificates are issued
-  **on demand**, authorized one hostname at a time by tunld.
-* **tunld** runs three listeners: the public ingress, the agent gateway, and an
+* **Caddy** terminates TLS and reverse-proxies to riftd. Certificates are issued
+  **on demand**, authorized one hostname at a time by riftd.
+* **riftd** runs three listeners: the public ingress, the agent gateway, and an
   admin API that is never exposed.
 * **PostgreSQL** is the authority on which subdomain is occupied by whom.
-* **Redis** is optional. Without it tunl runs single-node, which is the default.
+* **Redis** is optional. Without it rift runs single-node, which is the default.
 
 ## Repository layout
 
@@ -55,7 +55,7 @@ The agent is a single Bun binary.
 | `server/internal/adminapi`  | Token and reservation management                     |
 | `server/internal/store`     | PostgreSQL adapter, migrations, in-memory adapter     |
 | `server/internal/e2e`       | Integration tests: real gateway + real agent          |
-| `cli/`                      | The Bun agent (`tunl`)                               |
+| `cli/`                      | The Bun agent (`rift`)                               |
 | `deploy/`                   | Caddyfile, Dockerfiles, compose stacks               |
 | `tools/`                    | Operator scripts (ssh, deploy, mint-token)           |
 
@@ -77,9 +77,9 @@ The ones with no default, because no sane default exists:
 
 | Variable            | Meaning                                        |
 | ------------------- | ---------------------------------------------- |
-| `TUNL_BASE_DOMAIN`  | Tunnels are served at `<subdomain>.<this>`      |
-| `TUNL_POSTGRES_DSN` | Database connection string                      |
-| `TUNL_ADMIN_TOKEN`  | Bearer token for the admin API (≥32 chars in production) |
+| `RIFT_BASE_DOMAIN`  | Tunnels are served at `<subdomain>.<this>`      |
+| `RIFT_POSTGRES_DSN` | Database connection string                      |
+| `RIFT_ADMIN_TOKEN`  | Bearer token for the admin API (≥32 chars in production) |
 
 ## Running locally
 
@@ -87,14 +87,14 @@ No public DNS, so there is no TLS and you address tunnels with a `Host` header.
 
 ```console
 $ cp .env.example .env            # then fill in the required values
-$ make up                         # postgres + tunld via docker compose
-$ cd cli && bun install && bun run build && cd ..   # produces cli/dist/tunl
+$ make up                         # postgres + riftd via docker compose
+$ cd cli && bun install && bun run build && cd ..   # produces cli/dist/rift
 
 # mint a token; the admin API listens on :8082 locally
-$ TUNL_ADMIN_TOKEN=<your admin token> tools/mint-token.sh laptop
+$ RIFT_ADMIN_TOKEN=<your admin token> tools/mint-token.sh laptop
 
-$ ./cli/dist/tunl http 3000 demo --token tunl_... --server ws://127.0.0.1:8081/tunnel
-$ curl -H 'Host: demo.tunl.localtest' http://127.0.0.1:8080/
+$ ./cli/dist/rift http 3000 demo --token rift_... --server ws://127.0.0.1:8081/tunnel
+$ curl -H 'Host: demo.rift.localtest' http://127.0.0.1:8080/
 ```
 
 `make help` lists the rest. `make build-cli` builds the CLI inside Docker
@@ -108,7 +108,7 @@ $ cd cli && bun test
 ```
 
 The Postgres store tests run against a real database when you point
-`TUNL_TEST_POSTGRES_DSN` at one, and skip otherwise, so `go test ./...` stays
+`RIFT_TEST_POSTGRES_DSN` at one, and skip otherwise, so `go test ./...` stays
 green on a laptop with nothing installed.
 
 ## Deploying
@@ -116,15 +116,15 @@ green on a laptop with nothing installed.
 DNS must already resolve every label to the host:
 
 ```
-A     *.tunl.example.com  ->  <server ipv4>
-AAAA  *.tunl.example.com  ->  <server ipv6>
+A     *.rift.example.com  ->  <server ipv4>
+AAAA  *.rift.example.com  ->  <server ipv6>
 ```
 
 Then:
 
 ```console
 $ tools/ssh-provision-key.sh                       # key auth, then disable passwords
-$ tools/scp.sh .env /opt/tunl/deploy/.env          # secrets live only here
+$ tools/scp.sh .env /opt/rift/deploy/.env          # secrets live only here
 $ tools/remote-deploy.sh
 ```
 
@@ -134,7 +134,7 @@ Secrets are read from the environment at runtime. `.env` is gitignored and
 ### About TLS
 
 Wildcard certificates require a DNS-01 challenge, which needs DNS provider API
-credentials. tunl does not assume you have them. Instead Caddy issues a
+credentials. rift does not assume you have them. Instead Caddy issues a
 certificate **on demand**, the first time a hostname is requested, validated
 over HTTP-01. This works because the wildcard A/AAAA records already point every
 label at the host.
@@ -142,13 +142,13 @@ label at the host.
 On-demand TLS without an authorization endpoint is an open certificate-issuance
 relay: anyone who points a hostname at your IP could make you request
 certificates on their behalf and burn your Let's Encrypt rate limit. Caddy is
-therefore configured to `ask` tunld before issuing, and tunld approves only:
+therefore configured to `ask` riftd before issuing, and riftd approves only:
 
 1. a subdomain with a live tunnel,
 2. a subdomain someone has reserved, and
-3. `TUNL_GATEWAY_HOSTNAME` itself.
+3. `RIFT_GATEWAY_HOSTNAME` itself.
 
-If you set `TUNL_GATEWAY_HOSTNAME` in Caddy's environment but not tunld's, the
+If you set `RIFT_GATEWAY_HOSTNAME` in Caddy's environment but not riftd's, the
 gateway gets no certificate and every agent connection fails at the handshake.
 The two must agree.
 
@@ -170,7 +170,7 @@ A token's plaintext appears in the create response and nowhere else, ever.
 Only its SHA-256 hash is stored.
 
 Revoking a token tears down the tunnels it already opened, within
-`TUNL_TOKEN_REVALIDATE_INTERVAL` — it does not merely stop it opening new ones.
+`RIFT_TOKEN_REVALIDATE_INTERVAL` — it does not merely stop it opening new ones.
 
 ## Design notes
 
@@ -179,7 +179,7 @@ Things that are easy to get wrong, and why they are the way they are.
 **Subdomain claims are leases, not locks.** A tunnel row in Postgres is a claim
 on a subdomain. A gateway that crashes without releasing its rows would hold
 those subdomains forever, so a reaper collects rows whose agents stopped
-heartbeating. On boot, tunld also clears the rows its own previous run left
+heartbeating. On boot, riftd also clears the rows its own previous run left
 behind, returning those subdomains immediately.
 
 **Heartbeats are application-level.** WebSocket ping/pong is answered by

@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/siliconcolony/tunl/server/internal/auth"
-	"github.com/siliconcolony/tunl/server/internal/config"
-	"github.com/siliconcolony/tunl/server/internal/core"
+	"github.com/anomaly-sh/rift/server/internal/auth"
+	"github.com/anomaly-sh/rift/server/internal/config"
+	"github.com/anomaly-sh/rift/server/internal/core"
 )
 
 // maxBodyBytes caps admin request bodies. Admin payloads are a few small JSON

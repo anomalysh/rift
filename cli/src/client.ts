@@ -259,7 +259,7 @@ export class TunnelClient {
       `tunnel established: ${ok.url} (tunnel ${ok.tunnel_id})`,
     );
     this.logger.banner(
-      `\n  tunl  ${ok.url}\n    ->  http://${this.config.host}:${this.port}\n`,
+      `\n  rift  ${ok.url}\n    ->  http://${this.config.host}:${this.port}\n`,
     );
     this.startHeartbeat(ok.heartbeat_interval_ms);
   }

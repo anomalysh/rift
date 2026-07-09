@@ -13,7 +13,7 @@ COPY server/ ./
 
 # Fully static binary: CGO off means no dynamic loader is needed at runtime,
 # which is what keeps the image small and portable across base images.
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/tunld ./cmd/tunld
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/riftd ./cmd/riftd
 
 # --- runtime ----------------------------------------------------------------
 # Alpine (not distroless) so the image ships busybox wget for the HEALTHCHECK
@@ -21,21 +21,21 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/tunld .
 FROM alpine:3.19 AS runtime
 
 RUN apk add --no-cache ca-certificates \
- && adduser -D -H -u 10001 tunl
+ && adduser -D -H -u 10001 rift
 
-COPY --from=build /out/tunld /usr/local/bin/tunld
+COPY --from=build /out/riftd /usr/local/bin/riftd
 
 # Run unprivileged.
-USER tunl
+USER rift
 
 # ingress / gateway / admin. Whether any of these is published to the host is
 # decided by compose, not here.
 EXPOSE 8080 8081 8082
 
 # Liveness probe on the ingress health route (RouteHealth = /healthz). The port
-# matches the default TUNL_INGRESS_ADDR (:8080); keep them in sync if you change
+# matches the default RIFT_INGRESS_ADDR (:8080); keep them in sync if you change
 # it. Runs as the non-root user against the container-local listener.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 	CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
 
-ENTRYPOINT ["tunld"]
+ENTRYPOINT ["riftd"]

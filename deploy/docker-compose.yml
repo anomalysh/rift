@@ -1,26 +1,26 @@
-# tunl local development stack.
+# rift local development stack.
 #
-# There is no Caddy and no public DNS locally, so tunld's ports are published
+# There is no Caddy and no public DNS locally, so riftd's ports are published
 # straight to the host and you reach a tunnel by sending the Host header
 # yourself, e.g.:
-#     curl -H 'Host: myapp.tunl.siliconcolony.dev' http://127.0.0.1:8080/
+#     curl -H 'Host: myapp.rift.anomaly.sh' http://127.0.0.1:8080/
 #
 # Production layers deploy/docker-compose.prod.yml on top of this file, which
-# adds Caddy, stops publishing tunld's ports, and sets restart policies.
-name: tunl
+# adds Caddy, stops publishing riftd's ports, and sets restart policies.
+name: rift
 
 services:
   postgres:
     image: postgres:16-alpine
     environment:
       # Local throwaway credentials for the dev database only — NOT production.
-      POSTGRES_USER: ${POSTGRES_USER:-tunl}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tunl}
-      POSTGRES_DB: ${POSTGRES_DB:-tunl}
+      POSTGRES_USER: ${POSTGRES_USER:-rift}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rift}
+      POSTGRES_DB: ${POSTGRES_DB:-rift}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tunl} -d ${POSTGRES_DB:-tunl}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rift} -d ${POSTGRES_DB:-rift}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -28,8 +28,8 @@ services:
   redis:
     image: redis:7-alpine
     # Optional multi-node routing backend, off by default. Enable it with
-    # `docker compose --profile redis up` AND set TUNL_REDIS_ENABLED=true so
-    # tunld actually connects (TUNL_REDIS_ENABLED defaults to false).
+    # `docker compose --profile redis up` AND set RIFT_REDIS_ENABLED=true so
+    # riftd actually connects (RIFT_REDIS_ENABLED defaults to false).
     profiles: ["redis"]
     command: ["redis-server", "--save", "", "--appendonly", "no"]
     healthcheck:
@@ -38,35 +38,35 @@ services:
       timeout: 3s
       retries: 10
 
-  tunld:
+  riftd:
     build:
       # Context is the repo root so the build can reach server/; the same
-      # relative layout exists on the VPS (/opt/tunl) after remote-deploy.
+      # relative layout exists on the VPS (/opt/rift) after remote-deploy.
       context: ..
       dockerfile: deploy/Dockerfile
     environment:
       # --- required ---
       # Local dev gets a working default DSN pointed at the postgres service.
-      TUNL_POSTGRES_DSN: ${TUNL_POSTGRES_DSN:-postgres://tunl:tunl@postgres:5432/tunl?sslmode=disable}
-      TUNL_BASE_DOMAIN: ${TUNL_BASE_DOMAIN:-tunl.siliconcolony.dev}
+      RIFT_POSTGRES_DSN: ${RIFT_POSTGRES_DSN:-postgres://rift:rift@postgres:5432/rift?sslmode=disable}
+      RIFT_BASE_DOMAIN: ${RIFT_BASE_DOMAIN:-rift.anomaly.sh}
       # Dev-only throwaway admin token; production must set a >=32 char secret.
-      TUNL_ADMIN_TOKEN: ${TUNL_ADMIN_TOKEN:-dev-admin-token-change-me-please}
+      RIFT_ADMIN_TOKEN: ${RIFT_ADMIN_TOKEN:-dev-admin-token-change-me-please}
       # --- environment / listeners ---
-      TUNL_ENV: ${TUNL_ENV:-development}
-      TUNL_LOG_LEVEL: ${TUNL_LOG_LEVEL:-info}
-      TUNL_LOG_FORMAT: ${TUNL_LOG_FORMAT:-json}
-      TUNL_INGRESS_ADDR: ${TUNL_INGRESS_ADDR:-:8080}
-      TUNL_GATEWAY_ADDR: ${TUNL_GATEWAY_ADDR:-:8081}
+      RIFT_ENV: ${RIFT_ENV:-development}
+      RIFT_LOG_LEVEL: ${RIFT_LOG_LEVEL:-info}
+      RIFT_LOG_FORMAT: ${RIFT_LOG_FORMAT:-json}
+      RIFT_INGRESS_ADDR: ${RIFT_INGRESS_ADDR:-:8080}
+      RIFT_GATEWAY_ADDR: ${RIFT_GATEWAY_ADDR:-:8081}
       # Read by the TLS-ask endpoint so Caddy may issue a certificate for the
       # hostname agents dial. Empty in local dev, where there is no TLS.
-      TUNL_GATEWAY_HOSTNAME: ${TUNL_GATEWAY_HOSTNAME:-}
-      TUNL_ADMIN_ADDR: ${TUNL_ADMIN_ADDR:-:8082}
-      # --- redis (only consulted when TUNL_REDIS_ENABLED=true + --profile redis) ---
-      TUNL_REDIS_ENABLED: ${TUNL_REDIS_ENABLED:-false}
-      TUNL_REDIS_ADDR: ${TUNL_REDIS_ADDR:-redis:6379}
-      TUNL_REDIS_PASSWORD: ${TUNL_REDIS_PASSWORD:-}
-      # Required only for multi-node (TUNL_REDIS_ENABLED=true); empty otherwise.
-      TUNL_PEER_SECRET: ${TUNL_PEER_SECRET:-}
+      RIFT_GATEWAY_HOSTNAME: ${RIFT_GATEWAY_HOSTNAME:-}
+      RIFT_ADMIN_ADDR: ${RIFT_ADMIN_ADDR:-:8082}
+      # --- redis (only consulted when RIFT_REDIS_ENABLED=true + --profile redis) ---
+      RIFT_REDIS_ENABLED: ${RIFT_REDIS_ENABLED:-false}
+      RIFT_REDIS_ADDR: ${RIFT_REDIS_ADDR:-redis:6379}
+      RIFT_REDIS_PASSWORD: ${RIFT_REDIS_PASSWORD:-}
+      # Required only for multi-node (RIFT_REDIS_ENABLED=true); empty otherwise.
+      RIFT_PEER_SECRET: ${RIFT_PEER_SECRET:-}
     ports:
       # Local only. The prod override clears these with `ports: !reset []`.
       - "8080:8080" # ingress

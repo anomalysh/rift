@@ -14,11 +14,11 @@ Create an admin API token named NAME and print the plaintext token to stdout.
 The admin API is NOT publicly exposed, so run this on the VPS itself or over an
 SSH tunnel, e.g.:
     tools/ssh.sh -L 8082:127.0.0.1:8082   # in another terminal
-    TUNL_ADMIN_URL=http://127.0.0.1:8082 tools/mint-token.sh my-laptop
+    RIFT_ADMIN_URL=http://127.0.0.1:8082 tools/mint-token.sh my-laptop
 
 Environment:
-  TUNL_ADMIN_URL    Admin API base URL   (default: http://127.0.0.1:8082)
-  TUNL_ADMIN_TOKEN  (required) bearer token authenticating the admin caller
+  RIFT_ADMIN_URL    Admin API base URL   (default: http://127.0.0.1:8082)
+  RIFT_ADMIN_TOKEN  (required) bearer token authenticating the admin caller
 EOF
 }
 
@@ -34,9 +34,9 @@ esac
 name="$1"
 
 require_cmd curl
-require_env TUNL_ADMIN_TOKEN
+require_env RIFT_ADMIN_TOKEN
 
-base="${TUNL_ADMIN_URL:-http://127.0.0.1:8082}"
+base="${RIFT_ADMIN_URL:-http://127.0.0.1:8082}"
 url="${base%/}/v1/tokens"
 
 # Build the JSON body safely (jq escapes NAME; the fallback assumes a simple name).
@@ -48,9 +48,9 @@ fi
 
 log_info "creating token '$name' via $url"
 resp="$(curl -fsS -X POST "$url" \
-	-H "Authorization: Bearer $TUNL_ADMIN_TOKEN" \
+	-H "Authorization: Bearer $RIFT_ADMIN_TOKEN" \
 	-H "Content-Type: application/json" \
-	-d "$body")" || die "admin API request failed (is the admin listener reachable and TUNL_ADMIN_TOKEN correct?)"
+	-d "$body")" || die "admin API request failed (is the admin listener reachable and RIFT_ADMIN_TOKEN correct?)"
 
 # Print the plaintext token. The exact JSON field is resolved leniently since
 # the server response shape is owned by another component.

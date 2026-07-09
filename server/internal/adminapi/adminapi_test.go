@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/siliconcolony/tunl/server/internal/config"
-	"github.com/siliconcolony/tunl/server/internal/core"
+	"github.com/anomaly-sh/rift/server/internal/config"
+	"github.com/anomaly-sh/rift/server/internal/core"
 )
 
-const adminToken = "tunl_admin_super_secret_value"
+const adminToken = "rift_admin_super_secret_value"
 
 // --- in-memory fakes ----------------------------------------------------
 
@@ -228,8 +228,8 @@ func TestCreateTokenReturnsPlaintextOnceAndListNeverDoes(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create response: %v", err)
 	}
-	if !strings.HasPrefix(created.Token, "tunl_") {
-		t.Fatalf("create response token %q lacks tunl_ prefix", created.Token)
+	if !strings.HasPrefix(created.Token, "rift_") {
+		t.Fatalf("create response token %q lacks rift_ prefix", created.Token)
 	}
 	if created.ID == "" || created.Name != "ci" {
 		t.Fatalf("unexpected create response: %+v", created)

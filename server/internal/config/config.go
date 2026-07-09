@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/siliconcolony/tunl/server/internal/core"
+	"github.com/anomaly-sh/rift/server/internal/core"
 )
 
 // Config is the fully validated server configuration.
@@ -59,7 +59,7 @@ type Ingress struct {
 // Gateway is the WebSocket listener that tunnel agents dial.
 type Gateway struct {
 	Addr string
-	// Hostname is the public name agents dial (e.g. gateway.tunl.example.com).
+	// Hostname is the public name agents dial (e.g. gateway.rift.example.com).
 	// It is not used for routing; the TLS-ask endpoint authorizes a
 	// certificate for it, since it is not a tunnel subdomain and would
 	// otherwise be refused.
@@ -286,7 +286,7 @@ func (c *Config) validate(l *loader) {
 
 	if base := c.Tunnel.BaseDomain; base != "" {
 		if !strings.Contains(base, ".") || strings.HasPrefix(base, ".") || strings.HasSuffix(base, ".") {
-			l.fail(KeyBaseDomain, fmt.Errorf("expected a fully qualified domain such as tunl.example.com, got %q", base))
+			l.fail(KeyBaseDomain, fmt.Errorf("expected a fully qualified domain such as rift.example.com, got %q", base))
 		}
 		if strings.ContainsAny(base, "/:") {
 			l.fail(KeyBaseDomain, fmt.Errorf("must be a bare domain without scheme or port, got %q", base))

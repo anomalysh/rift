@@ -39,7 +39,7 @@ func MustNewID(now time.Time) string {
 }
 
 // NewSecret returns n bytes of randomness encoded as an unpadded base32
-// string, prefixed for provenance (e.g. "tunl_").
+// string, prefixed for provenance (e.g. "rift_").
 func NewSecret(prefix string, n int) (string, error) {
 	if n < 16 {
 		return "", fmt.Errorf("core: secret needs at least 16 bytes of entropy, got %d", n)

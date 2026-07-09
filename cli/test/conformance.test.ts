@@ -4,7 +4,7 @@
 //
 // The expected hex strings below were produced by running the Go encoder
 // (tunnelproto.Encode / EncodeControl / EncodeJSONFrame) via a throwaway
-// program that imports github.com/siliconcolony/tunl/server/internal/tunnelproto.
+// program that imports github.com/anomaly-sh/rift/server/internal/tunnelproto.
 // If the wire format changes, regenerate these against Go — do not hand-edit.
 
 import { describe, expect, test } from "bun:test";
@@ -34,7 +34,7 @@ describe("conformance with Go tunnelproto encoder", () => {
     ctrl_ping:
       "0100000000000000000000002e7b2274797065223a2270696e67222c227061796c6f6164223a7b227473223a313733363338303830303030307d7d",
     ctrl_hello:
-      "010000000000000000000000987b2274797065223a2268656c6c6f222c227061796c6f6164223a7b2270726f746f636f6c5f76657273696f6e223a312c22746f6b656e223a2274756e6c5f736563726574222c2270726f746f636f6c223a2268747470222c22737562646f6d61696e223a226d79617070222c226c6f63616c5f706f7274223a333030302c22636c69656e745f76657273696f6e223a22302e312e30227d7d",
+      "010000000000000000000000987b2274797065223a2268656c6c6f222c227061796c6f6164223a7b2270726f746f636f6c5f76657273696f6e223a312c22746f6b656e223a22726966745f736563726574222c2270726f746f636f6c223a2268747470222c22737562646f6d61696e223a226d79617070222c226c6f63616c5f706f7274223a333030302c22636c69656e745f76657273696f6e223a22302e312e30227d7d",
     res_head:
       "200000000000000003000000557b22737461747573223a3230302c2268656164657273223a7b22636f6e74656e742d6c656e677468223a5b2232225d2c22636f6e74656e742d74797065223a5b226170706c69636174696f6e2f6a736f6e225d7d7d",
     reset:
@@ -76,7 +76,7 @@ describe("conformance with Go tunnelproto encoder", () => {
   test("CONTROL hello with all fields (field order matches Go struct)", () => {
     const hello: Hello = {
       protocol_version: 1,
-      token: "tunl_secret",
+      token: "rift_secret",
       protocol: "http",
       subdomain: "myapp",
       local_port: 3000,
