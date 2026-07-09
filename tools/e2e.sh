@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=tools/lib/preflight.sh
+. "$SCRIPT_DIR/lib/preflight.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 COMPOSE_FILE="$REPO_ROOT/deploy/docker-compose.e2e.yml"
@@ -68,7 +70,14 @@ while [ "$#" -gt 0 ]; do
 done
 [ "${#modes[@]}" -gt 0 ] || modes=(internal self)
 
-require_cmd docker curl openssl python3
+# Building three images and running two TLS modes is not free. Refuse before
+# writing anything rather than dying halfway through a docker build with a
+# truncated layer in the cache.
+readonly E2E_MIN_DISK_MB=3072
+readonly E2E_MIN_MEM_MB=1024
+
+require_cmd curl openssl python3
+require_docker
 
 TMPDIR_E2E="$(mktemp -d)"
 UPSTREAM_PID=""
@@ -301,6 +310,11 @@ assert_routing() {
 	check "gateway hostname is reachable" \
 		"$(status_of "gateway.$BASE_DOMAIN" "/healthz")" "200"
 
+	# Liveness says the process runs; readiness says it can reach Postgres.
+	check "readiness probe is green with a live database" \
+		"$(compose exec -T riftd wget -q -S -O /dev/null http://127.0.0.1:8080/readyz 2>&1 |
+			sed -n 's|.*HTTP/1.1 \([0-9]*\).*|\1|p' | head -1)" "200"
+
 	local echoed
 	echoed="$(path=/echo rcurl "hello.$BASE_DOMAIN" -X POST --data-binary 'e2e-payload')"
 	check "request body round-trips" "$echoed" "e2e-payload"
@@ -423,6 +437,71 @@ if [ ! -x "$REPO_ROOT/cli/dist/rift" ]; then
 	log_info "building the rift CLI"
 	(cd "$REPO_ROOT/cli" && bun install --silent && bun run build) >/dev/null
 fi
+
+# The guards themselves are part of what this harness tests: a resource check
+# that cannot fail is decoration.
+assert_preflight_guards() {
+	printf '\n=== preflight guards ===\n'
+
+	if ( require_memory 999999999 "an impossible build" ) >/dev/null 2>&1; then
+		printf '    FAIL  require_memory did not refuse an impossible requirement\n'
+		fail=$((fail + 1))
+	else
+		printf '    ok    require_memory refuses an impossible requirement\n'
+		pass=$((pass + 1))
+	fi
+
+	if ( require_disk_free 999999999 "$REPO_ROOT" "an impossible build" ) >/dev/null 2>&1; then
+		printf '    FAIL  require_disk_free did not refuse an impossible requirement\n'
+		fail=$((fail + 1))
+	else
+		printf '    ok    require_disk_free refuses an impossible requirement\n'
+		pass=$((pass + 1))
+	fi
+
+	# An oversized artifact must be caught before it is shipped anywhere.
+	local big="$TMPDIR_E2E/oversized.bin"
+	head -c 2097152 /dev/zero >"$big"
+	if ( require_file_smaller_than "$big" 1 "a test artifact" ) >/dev/null 2>&1; then
+		printf '    FAIL  require_file_smaller_than passed a 2 MiB file against a 1 MiB limit\n'
+		fail=$((fail + 1))
+	else
+		printf '    ok    require_file_smaller_than refuses an oversized artifact\n'
+		pass=$((pass + 1))
+	fi
+	if ( require_file_smaller_than "$big" 8 "a test artifact" ) >/dev/null 2>&1; then
+		printf '    ok    require_file_smaller_than accepts a file under its limit\n'
+		pass=$((pass + 1))
+	else
+		printf '    FAIL  require_file_smaller_than rejected a file under its limit\n'
+		fail=$((fail + 1))
+	fi
+	rm -f "$big"
+
+	# A missing file is a failure, not a silent pass.
+	if ( require_file_smaller_than "$TMPDIR_E2E/does-not-exist" 1 "a missing artifact" ) >/dev/null 2>&1; then
+		printf '    FAIL  require_file_smaller_than passed a nonexistent file\n'
+		fail=$((fail + 1))
+	else
+		printf '    ok    require_file_smaller_than refuses a missing artifact\n'
+		pass=$((pass + 1))
+	fi
+
+	# The documented escape hatch must actually work, or operators will patch
+	# the library instead of setting the variable.
+	if ( RIFT_SKIP_PREFLIGHT=1 require_memory 999999999 "an impossible build" ) >/dev/null 2>&1; then
+		printf '    ok    RIFT_SKIP_PREFLIGHT=1 bypasses the guards\n'
+		pass=$((pass + 1))
+	else
+		printf '    FAIL  RIFT_SKIP_PREFLIGHT=1 did not bypass the guards\n'
+		fail=$((fail + 1))
+	fi
+}
+
+preflight_report "$(preflight_docker_root)"
+require_memory "$E2E_MIN_MEM_MB" "the e2e stack"
+require_docker_disk "$E2E_MIN_DISK_MB" "the e2e image builds"
+assert_preflight_guards
 
 for mode in "${modes[@]}"; do
 	run_mode "$mode"

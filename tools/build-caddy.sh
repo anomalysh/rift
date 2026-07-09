@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=tools/lib/preflight.sh
+. "$SCRIPT_DIR/lib/preflight.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 DEFAULT_PLUGINS="github.com/caddy-dns/rfc2136 github.com/caddy-dns/acmedns"
@@ -73,7 +75,22 @@ if [ -f "$REPO_ROOT/.env" ]; then
 	set +a
 fi
 
-require_cmd docker
+require_docker
+
+# Compiling Caddy with plugins is a Go build: it links a ~50 MB binary and
+# wants roughly 2 GiB while doing it. Out of memory, the linker is OOM-killed
+# and Docker leaves a corrupt layer in the build cache; out of disk, the layer
+# is truncated. Both surface as unrelated errors thousands of lines later.
+readonly CADDY_BUILD_MIN_MEM_MB=2048
+readonly CADDY_BUILD_MIN_DISK_MB=4096
+readonly CADDY_BUILD_MIN_CPUS=2
+
+if [ "$dry_run" != true ]; then
+	preflight_report "$(preflight_docker_root)"
+	require_memory "$CADDY_BUILD_MIN_MEM_MB" "compiling Caddy"
+	require_docker_disk "$CADDY_BUILD_MIN_DISK_MB" "the Caddy image build"
+	require_cpus "$CADDY_BUILD_MIN_CPUS" "compiling Caddy"
+fi
 
 plugins="${RIFT_CADDY_DNS_PLUGINS:-$DEFAULT_PLUGINS}"
 caddy_version="${RIFT_CADDY_VERSION:-2}"
