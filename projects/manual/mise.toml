@@ -1,5 +1,5 @@
 # Tasks for the documentation site (Astro). Run from the repo root as
-# `mise //projects/docs-site:build`, or `mise :build` from inside this directory.
+# `mise //projects/manual:build`, or `mise :build` from inside this directory.
 # The build installs dependencies, so it needs the network and is not sandboxed.
 [tasks.build]
 description = "Build the documentation site"

@@ -16,7 +16,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/deploy/docker-compose.recovery.yml"
 PROJECT="rift-recovery"
 CADDY_VOLUME="${PROJECT}_caddy_data"
-MIGRATIONS_DIR="$REPO_ROOT/server/internal/store/migrations"
+MIGRATIONS_DIR="$REPO_ROOT/projects/server/internal/store/migrations"
 ALPINE="alpine:3.20"
 
 # Paths of the seeded fake certificate material, relative to the volume root.

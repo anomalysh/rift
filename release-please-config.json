@@ -11,7 +11,7 @@
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         { "type": "json", "path": "projects/cli/package.json", "jsonpath": "$.version" },
-        { "type": "json", "path": "projects/docs-site/package.json", "jsonpath": "$.version" }
+        { "type": "json", "path": "projects/manual/package.json", "jsonpath": "$.version" }
       ]
     }
   },

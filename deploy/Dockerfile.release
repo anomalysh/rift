@@ -21,7 +21,6 @@ WORKDIR /src
 # completions), and the release tooling. Copying a narrow context keeps the
 # build cache stable across unrelated repo changes.
 COPY projects/cli/ ./projects/cli/
-COPY packaging/ ./packaging/
 COPY tools/ ./tools/
 
 RUN cd projects/cli && bun install

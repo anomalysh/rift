@@ -1,19 +1,15 @@
-# Build artifacts
+# Root-level ignores shared across the whole repo. Stack-specific ignores live in
+# each project's own .gitignore (projects/*/.gitignore), sourced from that
+# stack's canonical default (bun init, github/gitignore Go, the Astro template).
+
+# Release artifacts (tools/release.sh -> dist/release/<version>)
 /dist/
-/bin/
-*.exe
 
-# Go
-projects/server/riftd
-projects/server/bin/
+# Generated docs — the man page and shell completions are regenerated from the
+# CLI spec (make gen-docs / the release pipeline); never committed.
+/packaging/
 
-# Bun / Node
-node_modules/
-projects/cli/dist/
-projects/cli/rift
-*.tsbuildinfo
-
-# Env & secrets
+# Env & secrets (repo-wide; never commit real values)
 .env
 .env.*
 !.env.example
@@ -28,7 +24,7 @@ tools/.ssh/
 .vscode/
 *.swp
 
-# Local state
+# Deploy runtime state
 deploy/caddy/data/
 deploy/caddy/config/
 
@@ -39,8 +35,3 @@ deploy/caddy/config/
 /backups/
 rift-*-db.dump
 rift-*-caddy.tar.gz
-
-# Docs site build output
-projects/docs-site/node_modules/
-projects/docs-site/dist/
-projects/docs-site/.astro/

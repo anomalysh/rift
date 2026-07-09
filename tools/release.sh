@@ -12,7 +12,7 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/lib/common.sh"
 
-CLI_DIR="$REPO_DIR/cli"
+CLI_DIR="$REPO_DIR/projects/cli"
 PKG_DIR="$REPO_DIR/packaging"
 MAN_PAGE="$PKG_DIR/man/rift.1"
 COMPLETIONS_DIR="$PKG_DIR/completions"
@@ -82,8 +82,7 @@ main() {
 
 	require_cmd bun sha256sum tar zip
 	[ -f "$ENTRY" ] || die "entrypoint not found: $ENTRY"
-	[ -f "$MAN_PAGE" ] || die "man page not found: $MAN_PAGE"
-	[ -d "$COMPLETIONS_DIR" ] || die "completions dir not found: $COMPLETIONS_DIR"
+	# The man page and completions are generated (regen_docs), not committed.
 
 	[ -n "$version" ] || version="$(pkg_version)"
 	[ -n "$version" ] || die "could not determine version"
@@ -148,6 +147,8 @@ main() {
 # binary rather than a hand-edited copy that drifts.
 regen_docs() {
 	log_info "regenerating man page and completions from the CLI spec"
+	# packaging/ is generated, not committed, so create it fresh each run.
+	mkdir -p "$(dirname "$MAN_PAGE")" "$COMPLETIONS_DIR"
 	bun "$ENTRY" man >"$MAN_PAGE"
 	local sh
 	for sh in bash zsh fish; do

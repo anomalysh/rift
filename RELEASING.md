@@ -14,7 +14,7 @@ from Conventional Commit messages. You do not tag by hand.
    `chore(main): release 0.2.0`. That PR:
    - computes the next version from the commits since the last release
      (`fix:` → patch, `feat:` → minor, breaking → minor while below 1.0),
-   - bumps the version in `projects/cli/package.json` and `projects/docs-site/package.json`,
+   - bumps the version in `projects/cli/package.json` and `projects/manual/package.json`,
    - writes the changelog into `CHANGELOG.md`.
 
 3. When you're ready to ship, **merge the release PR**. release-please then

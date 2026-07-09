@@ -6,7 +6,7 @@ monorepo_root = true
 
 [monorepo]
 # Single-level globs are allowed here, but the layout is small enough to list.
-config_roots = ["projects/cli", "projects/server", "projects/docs-site"]
+config_roots = ["projects/cli", "projects/server", "projects/manual"]
 
 [tools]
 # Pin the toolchain so local builds match CI and the server Docker image, and

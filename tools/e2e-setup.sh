@@ -79,7 +79,7 @@ no() {
 RIFTD_BIN="$WORK/riftd"
 build_validator() {
 	log_info "building riftd (the real config validator)..."
-	if ( cd "$REPO_ROOT/server" && CGO_ENABLED=0 go build -o "$RIFTD_BIN" ./cmd/riftd ) >/dev/null 2>&1; then
+	if ( cd "$REPO_ROOT/projects/server" && CGO_ENABLED=0 go build -o "$RIFTD_BIN" ./cmd/riftd ) >/dev/null 2>&1; then
 		log_info "built from the working tree"
 		return 0
 	fi

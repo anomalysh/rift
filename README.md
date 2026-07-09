@@ -57,7 +57,7 @@ The agent is a single Bun binary.
 | `projects/server/internal/store`       | PostgreSQL adapter, migrations, in-memory adapter    |
 | `projects/server/internal/e2e`         | Integration tests: real gateway + real agent         |
 | `projects/cli/`                        | The Bun agent (`rift`)                               |
-| `projects/docs-site/`                  | The documentation site (Astro)                       |
+| `projects/manual/`                     | The manual / documentation site (Astro)              |
 | `deploy/`                              | Caddyfile, Dockerfiles, compose stacks               |
 | `tools/`                               | Operator scripts (ssh, deploy, mint-token)           |
 
@@ -90,12 +90,12 @@ No public DNS, so there is no TLS and you address tunnels with a `Host` header.
 ```console
 $ cp .env.example .env            # then fill in the required values
 $ make up                         # postgres + riftd via docker compose
- projects/cli && bun install && bun run build && cd ../..   # produces projects/cli/dist/rift
+$ cd projects/cli && bun install && bun run build && cd ../..   # produces projects/cli/dist/rift
 
 # mint a token; the admin API listens on :8082 locally
 $ RIFT_ADMIN_TOKEN=<your admin token> tools/mint-token.sh laptop
 
-$ ./cli/dist/rift http 3000 demo --token rift_... --server ws://127.0.0.1:8081/tunnel
+$ ./projects/cli/dist/rift http 3000 demo --token rift_... --server ws://127.0.0.1:8081/tunnel
 $ curl -H 'Host: demo.rift.localtest' http://127.0.0.1:8080/
 ```
 
@@ -105,8 +105,8 @@ instead, if you would rather not install Bun.
 Run the tests:
 
 ```console
-$ cd server && go test ./...          # postgres tests skip without a database
-$ cd cli && bun test
+$ cd projects/server && go test ./...          # postgres tests skip without a database
+$ cd projects/cli && bun test
 $ make e2e                            # the whole stack in Docker, over real TLS
 ```
 

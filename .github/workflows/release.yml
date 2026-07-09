@@ -26,7 +26,7 @@ jobs:
           bun-version: 1.3.12
 
       - name: Install, typecheck, test
-        working-directory: cli
+        working-directory: projects/cli
         run: |
           bun install --frozen-lockfile
           bun run typecheck

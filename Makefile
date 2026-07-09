@@ -38,6 +38,7 @@ release-docker: ## Reproducible release build in a pinned Bun container -> dist/
 	bash tools/release-docker.sh $(ARGS)
 
 gen-docs: ## Regenerate the man page + shell completions from the CLI spec
+	mkdir -p packaging/man packaging/completions
 	cd projects/cli && bun src/index.ts man > ../../packaging/man/rift.1
 	cd projects/cli && for sh in bash zsh fish; do bun src/index.ts completions $$sh > ../../packaging/completions/rift.$$sh; done
 
@@ -104,8 +105,8 @@ publish-images: ## Build (ARGS=--push to publish) the ghcr container images
 	bash tools/publish-images.sh $(ARGS)
 
 # --- docs --------------------------------------------------------------------
-docs: ## Build the documentation site (projects/docs-site/)
-	cd projects/docs-site && bun install && bun run build
+docs: ## Build the documentation site (projects/manual/)
+	cd projects/manual && bun install && bun run build
 
 # --- isolated test harnesses (Docker, hermetic) -----------------------------
 e2e-recovery: ## Prove backup/restore in a throwaway Docker stack (ARGS=--keep)

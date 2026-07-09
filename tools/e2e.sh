@@ -780,7 +780,7 @@ assert_admin_is_guarded() {
 if [ ! -x "$REPO_ROOT/projects/cli/dist/rift" ]; then
 	require_cmd bun
 	log_info "building the rift CLI"
-	(cd "$REPO_ROOT/cli" && bun install --silent && bun run build) >/dev/null
+	(cd "$REPO_ROOT/projects/cli" && bun install --silent && bun run build) >/dev/null
 fi
 
 # The guards themselves are part of what this harness tests: a resource check

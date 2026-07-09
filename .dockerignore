@@ -8,7 +8,7 @@ dist
 node_modules
 **/node_modules
 projects/cli/node_modules
-projects/docs-site/node_modules
+projects/manual/node_modules
 .env
 **/.env
 *.log
