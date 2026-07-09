@@ -1,0 +1,126 @@
+---
+title: Quickstart
+description: Bring up a local rift stack, mint a token, open a tunnel, and hit the URL.
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+This walks through the shortest path to a working tunnel: bring up the local
+development stack, mint a token, open a tunnel, and reach your local app through
+the gateway. It needs Docker and a checkout of the repository; no public DNS and
+no TLS are involved, so you address the tunnel with a `Host` header instead of a
+browser.
+
+<Aside type="note">
+	The local stack has **no Caddy and no public DNS**. It publishes riftd's
+	ports straight to the host, and you reach a tunnel by sending its hostname in
+	the `Host` header. To serve real HTTPS URLs to the internet, see
+	[Deploying to a server](/guides/deploying/).
+</Aside>
+
+<Steps>
+
+1. **Start the stack.** From the repository root, bring up Postgres and riftd:
+
+   ```sh
+   make up
+   ```
+
+   This runs `docker compose -f deploy/docker-compose.yml up -d --build`. riftd's
+   ingress listens on `:8080`, the agent gateway on `:8081`, and the admin API on
+   `:8082`. The development stack sets `RIFT_BASE_DOMAIN` to `rift.anomaly.sh` by
+   default and a throwaway admin token; override either in a `.env` file if you
+   like.
+
+2. **Build the agent.** Compile the CLI to `cli/dist/rift`:
+
+   ```sh
+   cd cli && bun install && bun run build && cd ..
+   ```
+
+3. **Mint a token.** The admin API is not public, so reach it on the host. The
+   development admin token is `dev-admin-token-change-me-please` unless you
+   changed it:
+
+   ```sh
+   RIFT_ADMIN_TOKEN=dev-admin-token-change-me-please tools/mint-token.sh laptop
+   ```
+
+   This prints a single line beginning with `rift_`. That plaintext is shown
+   **once and never again** — only its SHA-256 hash is stored — so copy it now.
+
+4. **Run something to expose.** Any local HTTP server will do. For example:
+
+   ```sh
+   python3 -m http.server 3000
+   ```
+
+5. **Open the tunnel.** In another terminal, point the agent at your local port,
+   ask for the subdomain `demo`, and dial the local gateway over `ws://`:
+
+   ```sh
+   ./cli/dist/rift http 3000 demo \
+     --token rift_your_token_here \
+     --server ws://127.0.0.1:8081/tunnel
+   ```
+
+   The agent prints the tunnel URL banner to stdout and streams diagnostics to
+   stderr.
+
+6. **Hit the URL.** There is no DNS locally, so send the tunnel's hostname as a
+   `Host` header to the ingress port:
+
+   ```sh
+   curl -H 'Host: demo.rift.anomaly.sh' http://127.0.0.1:8080/
+   ```
+
+   You should see the response from your local server on port 3000.
+
+</Steps>
+
+## Against a real deployment
+
+Once you have a gateway deployed with public DNS and TLS, the flow is the same
+minus the `Host`-header workaround. Point `--server` at the gateway's WebSocket
+URL and let the printed HTTPS URL resolve normally:
+
+```sh
+rift http 3000 myapp \
+  --token rift_your_token_here \
+  --server wss://gateway.example.com/tunnel
+```
+
+```console
+  rift  https://myapp.example.com
+    ->  http://127.0.0.1:3000
+```
+
+You can store the token and server so you do not repeat them every time. rift
+resolves settings from flags, then environment variables, then a config file:
+
+<Tabs>
+	<TabItem label="Environment">
+		```sh
+		export RIFT_TOKEN=rift_your_token_here
+		export RIFT_SERVER=wss://gateway.example.com/tunnel
+		rift http 3000 myapp
+		```
+	</TabItem>
+	<TabItem label="Config file">
+		`~/.config/rift/config.json`:
+
+		```json
+		{
+		  "token": "rift_your_token_here",
+		  "server": "wss://gateway.example.com/tunnel"
+		}
+		```
+
+		```sh
+		rift http 3000 myapp
+		```
+	</TabItem>
+</Tabs>
+
+See [Configuration](/getting-started/configuration/) for the full precedence
+rules, and the [CLI reference](/reference/cli/) for every flag.

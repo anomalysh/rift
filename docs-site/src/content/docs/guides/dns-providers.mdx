@@ -1,0 +1,152 @@
+---
+title: DNS-01 providers
+description: The bundled DNS-01 solver snippets, the environment variables each one reads, and how to add a provider and rebuild Caddy.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The `dns01` [TLS mode](/guides/tls-modes/) proves the ACME DNS-01 challenge by
+writing a TXT record into your zone, which is what lets Caddy obtain a wildcard
+certificate for `*.<base-domain>`. Caddy's DNS solvers are **compile-time
+modules**, so a provider works only if its plugin was built into the Caddy image.
+
+rift ships one snippet per provider under `deploy/caddy/dns/`.
+`RIFT_ACME_DNS_PROVIDER` selects which snippet is imported, so only the chosen
+provider's environment variables need values.
+
+<Aside type="caution" title="Never commit a credential">
+	Every variable on this page is a secret or points at one. Set them only in
+	your untracked `.env`, never in `.env.example` or any committed file.
+</Aside>
+
+## Building an image with a provider
+
+The default Caddy image (`caddy:2-alpine`) ships **no** DNS plugins, so `dns01`
+always requires a custom image. `tools/build-caddy.sh` compiles one from the
+module paths in `RIFT_CADDY_DNS_PLUGINS`:
+
+```sh
+echo 'RIFT_CADDY_DNS_PLUGINS=github.com/caddy-dns/rfc2136' >> .env
+make build-caddy ARGS=--validate
+```
+
+The default plugin set, when `RIFT_CADDY_DNS_PLUGINS` is unset, is
+`github.com/caddy-dns/rfc2136 github.com/caddy-dns/acmedns` (space-separated).
+`--validate` parses every `deploy/caddy/dns/*.caddy` snippet against the built
+binary, catching a missing plugin or a wrong key before you deploy. If a plugin
+is absent, Caddy refuses to start with:
+
+```
+module not registered: dns.providers.<name>
+```
+
+`build-caddy.sh` accepts `--validate`, `--push` (ship the image to
+`RIFT_VPS_HOST` over SSH, since compiling Caddy wants more memory than a small
+VPS has), `--image NAME`, and `--dry-run`. After building, point
+`RIFT_CADDY_IMAGE` at the tag it prints and redeploy.
+
+## Bundled providers
+
+| Provider       | `RIFT_ACME_DNS_PROVIDER` | Plugin module                     | Credential variables |
+| -------------- | ------------------------ | --------------------------------- | -------------------- |
+| RFC 2136 (TSIG)| `rfc2136`                | `github.com/caddy-dns/rfc2136`    | see below            |
+| acme-dns       | `acmedns`                | `github.com/caddy-dns/acmedns`    | see below            |
+| PowerDNS       | `powerdns`               | `github.com/caddy-dns/powerdns`   | see below            |
+| Cloudflare     | `cloudflare`             | `github.com/caddy-dns/cloudflare` | see below            |
+| DigitalOcean   | `digitalocean`           | `github.com/caddy-dns/digitalocean`| see below           |
+| Linode         | `linode`                 | `github.com/caddy-dns/linode`     | see below            |
+
+For a self-hosted zone, `rfc2136` or `acmedns` are the ones to reach for: they
+grant the narrowest access. The single-token providers hand Caddy broad DNS
+write access, so scope the token as tightly as the provider allows.
+
+### rfc2136 — dynamic DNS update (TSIG)
+
+The standard way to let an automated client write a single record into a
+self-hosted BIND, Knot or PowerDNS zone without granting it an HTTP API. A TSIG
+key authenticates the update.
+
+| Variable                 | Meaning                                    |
+| ------------------------ | ------------------------------------------ |
+| `RIFT_DNS_SERVER`        | authoritative server `host:port`, e.g. `ns1.example.com:53` |
+| `RIFT_DNS_TSIG_KEY_NAME` | TSIG key name, e.g. `rift-acme.`           |
+| `RIFT_DNS_TSIG_KEY_ALG`  | TSIG algorithm, e.g. `hmac-sha256`         |
+| `RIFT_DNS_TSIG_KEY`      | the TSIG key secret                        |
+
+### acmedns — CNAME delegation
+
+`_acme-challenge.<base-domain>` is CNAMEd to a small acme-dns instance that holds
+nothing but challenge records, so these credentials cannot touch your real zone.
+This is the smallest blast radius available: a compromised rift host still cannot
+rewrite your DNS.
+
+| Variable                  | Meaning                                     |
+| ------------------------- | ------------------------------------------- |
+| `RIFT_ACMEDNS_SERVER_URL` | the acme-dns server URL                     |
+| `RIFT_ACMEDNS_USERNAME`   | acme-dns account username                   |
+| `RIFT_ACMEDNS_PASSWORD`   | acme-dns account password                   |
+| `RIFT_ACMEDNS_SUBDOMAIN`  | acme-dns subdomain for this account         |
+
+### powerdns — Authoritative HTTP API
+
+Uses the PowerDNS Authoritative HTTP API. The API key grants zone write access
+over HTTP; prefer `rfc2136` or `acmedns` if you can.
+
+| Variable               | Meaning                                        |
+| ---------------------- | ---------------------------------------------- |
+| `RIFT_PDNS_SERVER_URL` | PowerDNS API base URL, e.g. `http://127.0.0.1:8081` |
+| `RIFT_PDNS_API_TOKEN`  | PowerDNS API key                               |
+| `RIFT_PDNS_SERVER_ID`  | server id, usually `localhost`                 |
+
+### cloudflare
+
+A single API token. Scope it to `Zone:DNS:Edit` on the target zone only.
+
+| Variable             | Meaning                                          |
+| -------------------- | ------------------------------------------------ |
+| `RIFT_DNS_API_TOKEN` | Cloudflare API token with `Zone:DNS:Edit`        |
+
+### digitalocean
+
+A single API token with account-wide DNS write access; scope it if your account
+allows.
+
+| Variable             | Meaning                                          |
+| -------------------- | ------------------------------------------------ |
+| `RIFT_DNS_API_TOKEN` | DigitalOcean API token with DNS write access     |
+
+### linode
+
+| Variable                  | Meaning                                     |
+| ------------------------- | ------------------------------------------- |
+| `RIFT_DNS_API_TOKEN`      | Linode token with `Domains: Read/Write`     |
+| `RIFT_LINODE_API_VERSION` | Linode API version, e.g. `v4`               |
+
+## Adding a provider that is not bundled
+
+<Aside type="note">
+	The bundled snippets cover common providers, but any Caddy DNS module works.
+</Aside>
+
+1. Create `deploy/caddy/dns/<name>.caddy` using the `acme_dns` syntax from that
+   plugin's README. The file name is the value you will set for
+   `RIFT_ACME_DNS_PROVIDER`.
+2. Add the plugin's Go module path to `RIFT_CADDY_DNS_PLUGINS`.
+3. Run `tools/build-caddy.sh --validate` to confirm the snippet parses against a
+   binary that actually includes the plugin, then deploy the new image.
+
+## Pointing ACME at your own CA
+
+`RIFT_ACME_CA_PROFILE=internal-ca` points the ACME modes at a private ACME server
+— step-ca, Boulder, Vault, or Pebble in tests — instead of Let's Encrypt. It
+selects `deploy/caddy/acme/internal-ca.caddy`, which reads:
+
+| Variable             | Meaning                                                        |
+| -------------------- | ------------------------------------------------------------- |
+| `RIFT_ACME_CA_URL`   | the ACME directory URL of your CA                             |
+| `RIFT_ACME_CA_ROOT`  | PEM that signs the ACME **server's own** HTTPS certificate    |
+
+`RIFT_ACME_CA_ROOT` is not the root that signs your leaf certificates — it is
+what lets Caddy talk to the directory endpoint at all. Clients still need to
+trust the root that signs the leaves. The default profile is `public`
+(Let's Encrypt), which needs no configuration.

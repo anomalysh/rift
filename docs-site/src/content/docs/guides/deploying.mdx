@@ -1,0 +1,143 @@
+---
+title: Deploying to a server
+description: Bring up a production rift gateway — DNS, secrets, the compose stacks, and the operator scripts.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+This deploys a full gateway: riftd, PostgreSQL, and a Caddy front end that
+terminates TLS. Production is the base compose file with
+`docker-compose.prod.yml` layered on top, which adds Caddy, **stops publishing
+riftd's ports**, and sets restart policies. Only Caddy publishes host ports
+(`80`, `443`, and `443/udp` for HTTP/3).
+
+## Prerequisites
+
+<Steps>
+
+1. **A host** with Docker and the Docker Compose plugin, reachable over SSH.
+
+2. **DNS.** A wildcard for your base domain must resolve to the host, so that
+   every tunnel subdomain reaches it:
+
+   ```text
+   A     *.rift.example.com   ->  <server ipv4>
+   AAAA  *.rift.example.com   ->  <server ipv6>
+   ```
+
+   The agent gateway needs its own name too — `RIFT_GATEWAY_HOSTNAME`, e.g.
+   `gateway.rift.example.com` — which the wildcard already covers.
+
+</Steps>
+
+## Configure secrets
+
+Copy the template and fill in the required values. `.env` is gitignored;
+`.env.example` contains no credential, only empty placeholders.
+
+```sh
+cp .env.example .env
+```
+
+At minimum, production requires:
+
+| Variable            | Why                                                            |
+| ------------------- | ------------------------------------------------------------- |
+| `RIFT_ENV`          | set to `production` (the prod overlay defaults it there)       |
+| `RIFT_BASE_DOMAIN`  | tunnels are served at `<subdomain>.<this>`                     |
+| `RIFT_POSTGRES_DSN` | database connection string (the password is a secret)         |
+| `RIFT_ADMIN_TOKEN`  | admin bearer token — **must be at least 32 characters** in production |
+| `RIFT_TLS_MODE`     | how Caddy obtains certificates — see [TLS modes](/guides/tls-modes/) |
+| `RIFT_GATEWAY_HOSTNAME` | the public name agents dial (`wss://<this>/tunnel`)        |
+| `RIFT_ACME_EMAIL`   | ACME account contact; the production Caddy fails to start if empty |
+
+<Aside type="caution" title="The gateway hostname must be blocklisted">
+	`RIFT_GATEWAY_HOSTNAME`'s first label (e.g. `gateway`) **must** also appear in
+	the subdomain blocklist, or an agent could claim it as a tunnel subdomain —
+	which would be silently unroutable and would hold a name that looks official.
+	`gateway` is in the built-in blocklist already; if you change the hostname,
+	add its label to `RIFT_SUBDOMAIN_BLOCKLIST`. See
+	[Reserved subdomains & tokens](/guides/subdomains-and-tokens/).
+</Aside>
+
+Every server variable is listed in the
+[Server configuration reference](/reference/server-config/). Values below the
+"Deployment-only settings" divider in `.env.example` (Caddy, the `tools/`
+scripts, VPS access) are read by Caddy and the scripts, not by riftd.
+
+## Deploy
+
+The `tools/` scripts drive an idempotent deploy over SSH. They read your VPS
+coordinates (`RIFT_VPS_HOST`, `RIFT_VPS_USER`, `RIFT_VPS_PORT`) from `.env`.
+
+<Steps>
+
+1. **Provision key-based SSH** and disable password auth:
+
+   ```sh
+   tools/ssh-provision-key.sh          # or: make provision-key
+   ```
+
+   This bootstraps key auth using `RIFT_VPS_PASSWORD`, then you disable password
+   login and rotate that password. Every deploy thereafter uses the generated
+   key at `tools/.ssh/id_ed25519`.
+
+2. **Ship the secrets file** to the host. It lives only there and is never part
+   of any deploy tarball, so it survives every redeploy:
+
+   ```sh
+   tools/scp.sh .env /opt/rift/deploy/.env
+   ```
+
+3. **Deploy the stack:**
+
+   ```sh
+   tools/remote-deploy.sh              # or: make deploy
+   ```
+
+   This ships `server/` and `deploy/` to `/opt/rift`, then runs from
+   `/opt/rift/deploy`:
+
+   ```sh
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+   ```
+
+   Finally it reloads Caddy. Add `--dry-run` to preview the actions without
+   touching the host.
+
+</Steps>
+
+<Aside type="caution" title="A bind-mounted Caddyfile is not reloaded by compose up">
+	Caddy's config is a bind mount, so `compose up` sees an unchanged service
+	spec and leaves Caddy running with its old configuration — a Caddyfile edit
+	would deploy silently and never take effect. `remote-deploy.sh` handles this
+	by running `caddy reload` after `compose up` (falling back to a container
+	restart if the admin API is unreachable). If you edit Caddy config by hand,
+	reload it yourself; see
+	[Troubleshooting](/operations/troubleshooting/#a-caddyfile-edit-did-not-take-effect).
+</Aside>
+
+## For `dns01`, build a Caddy image first
+
+Stock Caddy serves the `http01`, `self` and `internal` modes. `dns01` needs a
+DNS solver plugin compiled in. Build one, point `RIFT_CADDY_IMAGE` at it, then
+deploy:
+
+```sh
+make build-caddy ARGS=--validate
+# set RIFT_CADDY_IMAGE and RIFT_ACME_DNS_PROVIDER in .env, then:
+tools/scp.sh .env /opt/rift/deploy/.env
+tools/remote-deploy.sh
+```
+
+See [DNS-01 providers](/guides/dns-providers/) for the provider snippets and
+their credentials.
+
+## After deploying
+
+- Mint a token to hand to an agent. The admin API is not public, so reach it on
+  the host or over an SSH tunnel — see
+  [Reserved subdomains & tokens](/guides/subdomains-and-tokens/).
+- Confirm certificates: open a tunnel and load its URL. If you chose `http01`,
+  remember that a never-used subdomain will fail the TLS handshake rather than
+  return a 404 — that is [expected under `http01`](/guides/tls-modes/#why-an-unused-subdomain-fails-under-http01).

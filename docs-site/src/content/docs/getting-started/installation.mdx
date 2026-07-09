@@ -1,0 +1,149 @@
+---
+title: Installation
+description: Install the rift CLI with the curl installer, a checksum-verified manual download, or a build from source.
+---
+
+import { Tabs, TabItem, Steps, Aside } from '@astrojs/starlight/components';
+
+This page installs the **`rift` command-line agent** — the single binary you run
+on your laptop to open a tunnel. It does not set up a gateway; for that, see
+[Deploying to a server](/guides/deploying/).
+
+Prebuilt binaries are published for Linux (glibc and musl, x64 and arm64), macOS
+(x64 and arm64), and Windows (x64) on the GitHub releases page. Every release
+also ships a `SHA256SUMS` file, and **every installation path verifies the
+binary against it** before trusting it.
+
+## Install
+
+<Tabs>
+	<TabItem label="curl | sh">
+		The installer detects your OS, architecture and (on Linux) glibc vs musl,
+		downloads the matching binary from the latest release, verifies its
+		SHA-256 against the published `SHA256SUMS`, and installs it. On any
+		checksum mismatch it refuses to install.
+
+		```sh
+		curl -fsSL https://raw.githubusercontent.com/anomaly-sh/rift/main/tools/install.sh | sh
+		```
+
+		It installs to `/usr/local/bin` if that is writable, otherwise to
+		`~/.local/bin`. It **never runs `sudo` for you**: if the chosen directory
+		needs elevated rights, it stages the verified binary and prints the exact
+		`sudo install` command to finish.
+
+		Flags — pass them after `| sh -s --`:
+
+		```sh
+		curl -fsSL .../install.sh | sh -s -- --version 0.1.0 --dir "$HOME/.local/bin"
+		curl -fsSL .../install.sh | sh -s -- --dry-run   # print what would happen, change nothing
+		```
+
+		| Flag              | Meaning                                            |
+		| ----------------- | -------------------------------------------------- |
+		| `--version <v>`   | Install a specific version (default: latest).      |
+		| `--dir <path>`    | Install into `<path>` instead of the default.      |
+		| `--dry-run`       | Print the plan without downloading or installing.  |
+		| `-h`, `--help`    | Show help and exit.                                |
+
+		The same settings are also environment variables:
+
+		| Variable                | Default              | Purpose                            |
+		| ----------------------- | -------------------- | ---------------------------------- |
+		| `RIFT_INSTALL_VERSION`  | latest release       | install a specific version         |
+		| `RIFT_INSTALL_DIR`      | `/usr/local/bin` etc.| install into a specific directory  |
+		| `RIFT_INSTALL_REPO`     | `anomaly-sh/rift`    | source GitHub `owner/repo`         |
+		| `RIFT_INSTALL_BASE_URL` | GitHub releases URL  | mirror or custom download base     |
+	</TabItem>
+
+	<TabItem label="Manual + checksum">
+		Download the artifact for your platform and verify it before running it.
+
+		```sh
+		VERSION=0.1.0
+		BASE="https://github.com/anomaly-sh/rift/releases/download/v${VERSION}"
+		# Pick the artifact for your platform, e.g. rift-linux-x64,
+		# rift-linux-x64-musl, rift-darwin-arm64, rift-windows-x64.exe
+		ARTIFACT=rift-linux-x64
+
+		curl -fsSLO "${BASE}/${ARTIFACT}"
+		curl -fsSLO "${BASE}/SHA256SUMS"
+
+		# GNU coreutils: verify only the file you downloaded.
+		sha256sum --ignore-missing -c SHA256SUMS
+
+		# macOS has no sha256sum; compare manually —
+		#   grep " ${ARTIFACT}\$" SHA256SUMS | awk '{print $1}'
+		#   shasum -a 256 "${ARTIFACT}" | awk '{print $1}'
+
+		chmod +x "${ARTIFACT}"
+		sudo install -m 0755 "${ARTIFACT}" /usr/local/bin/rift
+		```
+
+		<Aside type="caution" title="Always verify the checksum">
+			Piping an unverified binary into a bin directory is a supply-chain
+			hole: a compromised mirror, a stale CDN or a man-in-the-middle could
+			serve a trojaned `rift`. The checksum step is the trust anchor — do
+			not skip it.
+		</Aside>
+
+		The `.tar.gz` / `.zip` archives additionally bundle the man page and
+		shell completions:
+
+		```sh
+		tar -xzf rift-linux-x64.tar.gz
+		cd rift-linux-x64
+
+		sudo install -m 0755 rift    /usr/local/bin/rift
+		sudo install -m 0644 rift.1  /usr/local/share/man/man1/rift.1   # man rift
+
+		# Completions (adjust to your shell's convention):
+		install -Dm 0644 completions/rift.bash ~/.local/share/bash-completion/completions/rift
+		install -Dm 0644 completions/rift.fish ~/.config/fish/completions/rift.fish
+		install -Dm 0644 completions/rift.zsh  ~/.local/share/zsh/site-functions/_rift
+		```
+	</TabItem>
+
+	<TabItem label="From source">
+		The agent is a Bun/TypeScript project. Building it requires
+		[Bun](https://bun.sh) 1.3 or newer.
+
+		```sh
+		git clone https://github.com/anomaly-sh/rift
+		cd rift/cli
+		bun install          # install dev dependencies
+		bun run build        # compile a standalone binary to ./dist/rift
+		```
+
+		`bun run build` produces a single self-contained executable at
+		`cli/dist/rift` with an embedded source map. You can also run straight
+		from source with `bun run src/index.ts`.
+
+		If you would rather not install Bun, `make build-cli` from the repo root
+		builds the CLI inside Docker instead.
+	</TabItem>
+</Tabs>
+
+## Verify the install
+
+<Steps>
+
+1. Confirm the binary runs and reports its version:
+
+   ```sh
+   rift --version
+   ```
+
+2. If your shell cannot find `rift`, the install directory is not on your
+   `PATH`. Add it, for example:
+
+   ```sh
+   export PATH="$HOME/.local/bin:$PATH"
+   ```
+
+</Steps>
+
+## Next
+
+You have the agent. To point it at a gateway and open a tunnel, continue to the
+[Quickstart](/getting-started/quickstart/).

@@ -1,0 +1,165 @@
+---
+title: TLS modes
+description: The four ways rift's Caddy front end obtains certificates, the coverage each gives, and why an unused subdomain fails under http01.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+How the Caddy reverse proxy in front of riftd obtains certificates is chosen by
+one variable, `RIFT_TLS_MODE`. It is the single most consequential decision in a
+rift deployment, because it decides what a visitor sees when they reach a
+subdomain that has **never served a tunnel** — a readable 404, or a broken TLS
+handshake.
+
+riftd reads `RIFT_TLS_MODE` too, even though Caddy is what uses it, and validates
+it at boot. A bad value, or in production an absent one, fails the whole stack at
+start-up rather than surfacing later as an unexplained handshake error.
+
+<Aside type="caution" title="Required in production, no fallback">
+	`RIFT_TLS_MODE` is **required in production**. An unset mode is a boot
+	failure, never a silent fallback. A silent fallback to an untrusted
+	certificate is the worst outcome available: the handshake succeeds, so
+	nothing looks broken, and the operator learns months later that clients have
+	been clicking through a warning. Development defaults to `internal`.
+</Aside>
+
+## The four modes
+
+| Mode       | Certificates from                | Unknown subdomain sees   | Publicly trusted | Needs                                   |
+| ---------- | -------------------------------- | ------------------------ | ---------------- | --------------------------------------- |
+| `dns01`    | ACME, DNS-01, one wildcard       | a readable 404           | yes              | DNS credentials + a solver plugin       |
+| `http01`   | ACME, HTTP-01, one per host      | **a TLS error**          | yes              | nothing (stock Caddy)                   |
+| `self`     | a certificate and key you supply | a readable 404           | no               | your own cert + key                     |
+| `internal` | Caddy's own CA                   | a readable 404           | no               | clients trusting your root              |
+
+"Publicly trusted" means a stock client accepts the certificate with no extra
+configuration. `dns01` and `http01` obtain certificates from a public ACME CA
+(Let's Encrypt by default); `self` and `internal` do not, so clients must trust
+your certificate or CA root or the handshake fails.
+
+- **`dns01`** obtains one wildcard certificate for `*.<base-domain>` over the
+  DNS-01 challenge. Every subdomain is then covered — live, reserved, or never
+  used — so an unknown tunnel answers with a 404 over valid TLS. It needs a DNS
+  provider (`RIFT_ACME_DNS_PROVIDER`) and a Caddy image built with that
+  provider's plugin. See [DNS-01 providers](/guides/dns-providers/).
+- **`http01`** issues a certificate per hostname, on first contact, over HTTP-01,
+  gated by riftd's TLS-ask endpoint. It needs no DNS credentials and runs on
+  stock Caddy — but a hostname that has never served a tunnel has no certificate
+  and cannot complete a TLS handshake at all.
+- **`self`** serves a certificate and key you supply (`RIFT_TLS_CERT_FILE` and
+  `RIFT_TLS_KEY_FILE`, both required). There is no ACME and no renewal: Caddy
+  will not fetch a replacement when it expires, it will simply serve an expired
+  certificate. Renewal is entirely your responsibility. Supply a wildcard to
+  cover unknown subdomains.
+- **`internal`** signs certificates with Caddy's own CA. Nothing is publicly
+  trusted; clients must trust the root at
+  `/data/caddy/pki/authorities/local/root.crt`. This mode issues a certificate
+  for every configured site including the wildcard, so its routing behaviour
+  matches `dns01` exactly. That makes it the faithful local stand-in for a
+  wildcard deployment, and it is what the e2e harness uses.
+
+## Why an unused subdomain fails under `http01`
+
+This is the whole reason `dns01` exists, and the thing most likely to confuse an
+operator who chose `http01` to avoid DNS credentials.
+
+Under `http01`, Caddy has no certificate for a hostname until that hostname is
+used for the first time. When a browser opens `https://neverused.example.com`,
+the TLS handshake happens **before** any HTTP request — so there is no
+certificate to present, the handshake cannot complete, and the browser shows:
+
+```
+ERR_SSL_PROTOCOL_ERROR
+```
+
+Not a 404 page: a 404 is an HTTP response, and TLS failed before HTTP could
+begin. Only a certificate that already covers the name can let the handshake
+succeed so the server can answer with a readable 404. A wildcard certificate is
+the only kind that covers a name before it is used, and **only DNS-01 can obtain
+a wildcard**. `self` and `internal` also cover unknown subdomains, because each
+serves a single certificate (a wildcard) across every site.
+
+<Aside type="caution" title="The http01 certificate gap">
+	If your users open tunnel URLs directly in a browser — including URLs for
+	subdomains whose tunnel is not currently connected — `http01` will show them
+	`ERR_SSL_PROTOCOL_ERROR`, not a 404. If that matters, use `dns01`. `http01`
+	is fine when every hostname that will ever be visited has served a live
+	tunnel at least once and its certificate is cached.
+</Aside>
+
+## Why the ask endpoint is mandatory under `http01`
+
+On-demand TLS mints a certificate the first time an unrecognised SNI arrives.
+Without an authorization step this is an **open certificate-issuance relay**:
+anyone who points a hostname at your IP could make you request certificates on
+their behalf and exhaust your ACME rate limit.
+
+So Caddy asks riftd before issuing, via the TLS-ask endpoint
+(`GET /internal/tls-ask?domain=<sni>`). riftd approves issuance only for:
+
+- a subdomain with a **live tunnel**,
+- a subdomain with an existing tunnel row,
+- an explicitly **reserved** subdomain (so the first request after
+  `rift http 3000 myapp` is not delayed by an ACME round trip),
+- the configured **gateway hostname**, which agents dial over TLS, and
+- the **base domain** itself, which a wildcard would not cover.
+
+Everything else is refused. See the
+[Admin API reference](/reference/admin-api/#tls-ask-authorization) for the exact
+status codes this endpoint returns.
+
+## Migrating from `http01` to `dns01`
+
+Moving to `dns01` closes the certificate gap by switching to a wildcard. Because
+Caddy's DNS solvers are compile-time modules, this requires building a Caddy
+image that includes your provider's plugin.
+
+<Steps>
+
+1. Choose a provider and record its module path. For a self-hosted zone,
+   `rfc2136` (TSIG dynamic update) or `acmedns` (CNAME delegation, smallest blast
+   radius) are the ones to reach for. See [DNS-01 providers](/guides/dns-providers/).
+
+2. Add the plugin to your `.env` and build a Caddy image that includes it:
+
+   ```sh
+   echo 'RIFT_CADDY_DNS_PLUGINS=github.com/caddy-dns/rfc2136' >> .env
+   make build-caddy ARGS=--validate     # compiles, then parses every dns/ snippet
+   ```
+
+   The build prints an image tag. `--validate` parses every provider snippet
+   against the built binary, catching a missing plugin or a bad snippet before
+   you deploy.
+
+3. Point the stack at the image, name the provider, set the mode, and supply the
+   provider's credentials in your untracked `.env`:
+
+   ```sh
+   RIFT_CADDY_IMAGE=rift-caddy:local
+   RIFT_TLS_MODE=dns01
+   RIFT_ACME_DNS_PROVIDER=rfc2136
+   # ...plus that provider's credential variables
+   ```
+
+4. Redeploy. Caddy obtains one wildcard certificate for `*.<base-domain>`, and
+   every subdomain — used or not — now completes the handshake.
+
+</Steps>
+
+<Aside type="tip">
+	`internal` gives you the same certificate coverage as `dns01` without any
+	ACME server, so you can rehearse a wildcard deployment locally: run the e2e
+	harness or the dev stack in `internal` mode and confirm an unknown subdomain
+	returns a 404 rather than a handshake error.
+</Aside>
+
+## One certificate path per site
+
+Each mode is a pair of snippets under `deploy/caddy/modes/` — a `*.global.caddy`
+and a `*.site.caddy` — and **every** Caddy site block imports the same site
+snippet. That uniformity is not cosmetic: a site that ended up on a different
+certificate path than its siblings once left the gateway hostname with no
+certificate at all. Caddy skips obtaining a start-up certificate for a name
+shadowed by an on-demand policy, yet refuses to obtain one lazily for a
+non-on-demand name, so the name falls into a gap and gets nothing. One
+consistent path for every site is what avoids that.

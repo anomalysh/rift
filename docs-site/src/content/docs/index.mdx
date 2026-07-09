@@ -1,0 +1,61 @@
+---
+title: rift
+description: Self-hosted, ngrok-style HTTP tunnels — expose a local port on a public HTTPS URL under a domain you own.
+template: splash
+hero:
+  tagline: A self-hosted ngrok. Expose a local port on a public HTTPS URL, under a domain you own, on infrastructure you run.
+  actions:
+    - text: Quickstart
+      link: /getting-started/quickstart/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/anomaly-sh/rift
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+```console
+$ rift http 3000 myapp
+
+  rift  https://myapp.rift.example.com
+    ->  http://127.0.0.1:3000
+```
+
+One command forwards `http://127.0.0.1:3000` to a public HTTPS URL. A Go gateway
+(`riftd`) terminates the agent's WebSocket connection and routes public traffic
+for `*.<base-domain>` into it; a Caddy instance in front handles wildcard TLS.
+The agent is a single Bun binary. Nothing runs on anyone else's servers.
+
+<CardGrid stagger>
+	<Card title="Get started" icon="rocket">
+		[Install the CLI](/getting-started/installation/), then
+		[open your first tunnel](/getting-started/quickstart/) against a running
+		gateway.
+	</Card>
+	<Card title="Choose a TLS mode" icon="approve-check">
+		The one decision that shapes the whole deployment.
+		[Four modes, one coverage table](/guides/tls-modes/), and why an unused
+		subdomain fails under `http01`.
+	</Card>
+	<Card title="Deploy a gateway" icon="setting">
+		[Bring up riftd, Postgres and Caddy](/guides/deploying/) with the compose
+		stacks and the operator scripts.
+	</Card>
+	<Card title="Reference" icon="open-book">
+		Every [CLI flag](/reference/cli/), every
+		[`RIFT_*` variable](/reference/server-config/), the
+		[admin API](/reference/admin-api/), and the
+		[wire protocol](/reference/protocol/).
+	</Card>
+</CardGrid>
+
+## What rift is, and is not
+
+rift tunnels **HTTP** and nothing else today. The wire protocol reserves room
+for TCP and TLS tunnelling, but this build does not implement them: `http` is
+the only accepted protocol. HTTP tunnels, token authentication, reserved
+subdomains, application-level heartbeats and automatic cleanup all work and are
+covered by tests. Multi-node routing via Redis is implemented but has only ever
+been exercised single-node.

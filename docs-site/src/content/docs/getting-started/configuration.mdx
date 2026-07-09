@@ -1,0 +1,85 @@
+---
+title: Configuration
+description: How the rift CLI resolves settings — flags, then environment variables, then a config file, then defaults.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The `rift` agent resolves each setting from four layers. **Higher layers win.**
+This lets you keep a token and server in a config file, override the log level
+with an environment variable for one shell, and override anything with a flag
+for one invocation.
+
+## Precedence
+
+| Precedence | Source                                       | Can provide                       |
+| ---------- | -------------------------------------------- | --------------------------------- |
+| 1 (highest)| CLI flags and positional arguments           | all settings                      |
+| 2          | environment variables                        | token, server, host, log level    |
+| 3          | config file `~/.config/rift/config.json`     | token, server, host, log level    |
+| 4 (lowest) | built-in defaults                            | host, log level only              |
+
+Each setting is resolved independently: a config-file `server` still applies
+even when you override only `token` with a flag.
+
+<Aside type="caution" title="token and server have no default">
+	If neither a flag, an environment variable, nor the config file supplies a
+	`token` and a `server`, rift exits with **exit code 1** and a message naming
+	exactly where to set the missing value. There is deliberately no default for
+	either — a missing one is an actionable error, not a silent misconfiguration.
+</Aside>
+
+## Settings
+
+| Setting     | Flag            | Env var          | Config key  | Default       |
+| ----------- | --------------- | ---------------- | ----------- | ------------- |
+| Token       | `--token`       | `RIFT_TOKEN`     | `token`     | none (required) |
+| Server URL  | `--server`      | `RIFT_SERVER`    | `server`    | none (required) |
+| Local host  | `--host`        | `RIFT_HOST`      | `host`      | `127.0.0.1`   |
+| Log level   | `--log-level`   | `RIFT_LOG_LEVEL` | `logLevel`  | `info`        |
+| Skip TLS verify | `--insecure` | —               | —           | `false`       |
+
+`--insecure` skips TLS certificate verification and applies only to `wss://`
+connections. It is a flag only: there is no environment variable or config-file
+key for it, so it can never be turned on by accident from an inherited
+environment.
+
+Log level is one of `debug`, `info`, `warn`, `error`, `silent`. An invalid level
+from any layer is a hard error.
+
+## Environment variables
+
+```sh
+export RIFT_TOKEN=rift_your_token_here
+export RIFT_SERVER=wss://gateway.example.com/tunnel
+export RIFT_HOST=127.0.0.1
+export RIFT_LOG_LEVEL=info
+```
+
+An environment variable that is set but empty is treated as unset, so it falls
+through to the next layer rather than blanking a config-file value.
+
+## Config file
+
+rift reads `~/.config/rift/config.json`. The location honours `XDG_CONFIG_HOME`:
+if it is set, the file is `$XDG_CONFIG_HOME/rift/config.json`; otherwise it falls
+back to `$HOME/.config/rift/config.json`.
+
+```json
+{
+  "token": "rift_your_token_here",
+  "server": "wss://gateway.example.com",
+  "host": "127.0.0.1",
+  "logLevel": "info"
+}
+```
+
+Only `token`, `server`, `host` and `logLevel` are read. **Unknown keys are
+ignored**, but an invalid type (for example a numeric `token`) or an unknown
+`logLevel` is a hard error that names the file. If the file does not exist, rift
+simply falls through to defaults.
+
+<Aside type="caution" title="Keep secrets out of shared files">
+	The `token` is a credential. Store the config file with restrictive
+	permissions, and never commit it to a repository.
+</Aside>

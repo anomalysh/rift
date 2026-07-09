@@ -1,0 +1,83 @@
+---
+title: Multi-node with Redis
+description: How rift routes across several gateway nodes with Redis, the variables it requires, and the single-node caveat.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+By default rift runs **single-node**: one riftd process owns every tunnel, and no
+Redis is involved. Enabling Redis lets several gateway nodes share a routing
+table, so a public request that lands on a node which does not hold the target
+tunnel is forwarded to the node that does.
+
+<Aside type="caution" title="Exercised single-node only">
+	Multi-node routing via Redis is implemented but has only ever been exercised
+	single-node. Treat it as unproven in production, test it thoroughly for your
+	topology, and prefer single-node unless you specifically need horizontal
+	scale.
+</Aside>
+
+## How routing works
+
+An agent's WebSocket connection is held by exactly one node. When a public
+request arrives:
+
+1. The node checks its **local** registry for a live session holding the
+   subdomain. If it has one, it proxies straight into the tunnel.
+2. Otherwise it asks Redis which node currently owns the subdomain. If that is a
+   **peer**, it forwards the request to the peer's internal proxy endpoint
+   (`/internal/proxy`), authenticated with the shared peer secret.
+3. The peer serves the request from its own local session. It **never forwards
+   onward**, so a stale Redis lease cannot create a routing loop — it returns
+   `503` instead, and the origin node surfaces that rather than a misleading 404.
+
+The internal proxy route is disabled entirely unless Redis is enabled.
+
+## Enabling it
+
+With the compose stacks, Redis lives behind a profile. Enable both the container
+and riftd's use of it:
+
+```sh
+docker compose --profile redis up -d      # start the redis service
+```
+
+Then set, in your `.env`:
+
+| Variable                | Required when multi-node | Purpose                                                    |
+| ----------------------- | ------------------------ | ---------------------------------------------------------- |
+| `RIFT_REDIS_ENABLED`    | set to `true`            | turns on multi-node routing (default `false`)              |
+| `RIFT_REDIS_ADDR`       | yes                      | Redis address (default `127.0.0.1:6379`; compose: `redis:6379`) |
+| `RIFT_NODE_ADVERTISE_URL` | yes                    | absolute URL peers use to reach **this** node's internal proxy, e.g. `http://10.0.0.4:8080` |
+| `RIFT_PEER_SECRET`      | yes, **≥32 characters**  | authenticates node-to-node forwarding                      |
+| `RIFT_NODE_ID`          | recommended              | stable identity so a restarted node reclaims its own tunnel rows |
+
+<Aside type="caution" title="Why the peer secret is mandatory">
+	Without a shared secret the internal proxy route would let anyone who can
+	reach the ingress port impersonate a peer node and reach any tunnel by name.
+	riftd refuses to boot with Redis enabled and a peer secret shorter than 32
+	characters. Set it only in your untracked `.env`.
+</Aside>
+
+Optional Redis tuning:
+
+| Variable             | Default   | Purpose                          |
+| -------------------- | --------- | -------------------------------- |
+| `RIFT_REDIS_PASSWORD`| (empty)   | Redis auth, if your Redis needs it |
+| `RIFT_REDIS_DB`      | `0`       | Redis logical database           |
+| `RIFT_REDIS_PREFIX`  | `rift:`   | key prefix for rift's keys       |
+
+## Node identity
+
+Each node should set a stable `RIFT_NODE_ID`. A node's tunnel rows in Postgres
+are tagged with its ID; on boot a node clears the rows its **own** previous run
+left behind, returning those subdomains immediately instead of waiting out a
+heartbeat timeout. A fresh random ID (the default) is correct for single-node,
+but in a cluster a node that changes ID on every restart cannot reclaim its own
+rows — so pin one per node.
+
+<Aside type="note">
+	`RIFT_NODE_ADVERTISE_URL` must be an absolute URL with a scheme and host that
+	other nodes can actually reach — a private-network address, not the public
+	name. riftd validates its shape at boot.
+</Aside>

@@ -1,0 +1,131 @@
+---
+title: Reserved subdomains & tokens
+description: Mint and revoke tokens, pin subdomains to a token, and understand rift's subdomain rules and blocklist.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Tokens authenticate agents; reservations pin a chosen subdomain to a token. Both
+are managed through the admin API, which is **never exposed publicly** — reach it
+on the host itself or over an SSH tunnel. This guide is the operator's view; the
+[Admin API reference](/reference/admin-api/) has the exact request and response
+shapes.
+
+## Tokens
+
+A token is a 256-bit secret. Its plaintext form starts with `rift_` and is shown
+**exactly once**, in the create response; only its SHA-256 hash is stored, so it
+can never be recovered — mislay it and you mint a new one.
+
+### Mint a token
+
+The convenience script wraps the admin API. Because the admin listener is not
+public, run it on the host or forward the port over SSH first:
+
+<Steps>
+
+1. Forward the admin port from the host (in a separate terminal):
+
+   ```sh
+   tools/ssh.sh -L 8082:127.0.0.1:8082
+   ```
+
+2. Mint a named token:
+
+   ```sh
+   RIFT_ADMIN_URL=http://127.0.0.1:8082 \
+   RIFT_ADMIN_TOKEN=your_admin_token \
+   tools/mint-token.sh my-laptop
+   ```
+
+   It prints one line beginning with `rift_`. Hand that to the agent via
+   `--token`, `RIFT_TOKEN`, or the config file.
+
+</Steps>
+
+Each token carries a `max_tunnels` limit — how many tunnels it may hold at once.
+It defaults to `RIFT_MAX_TUNNELS_PER_TOKEN` (5) when the create request omits it.
+A token can also carry an expiry; an expired token is rejected exactly like a
+revoked one.
+
+### Revoke a token
+
+```sh
+curl -X DELETE http://127.0.0.1:8082/v1/tokens/<token-id> \
+  -H "Authorization: Bearer your_admin_token"
+```
+
+<Aside type="caution" title="Revoking tears down live tunnels">
+	Revoking a token does not merely stop it opening **new** tunnels. Every live
+	tunnel re-checks that its token is still valid every
+	`RIFT_TOKEN_REVALIDATE_INTERVAL` (default 30s), so revoking or expiring a
+	token closes the tunnels it already opened, within that interval. That
+	interval is the upper bound on how long a leaked token keeps serving traffic
+	after you revoke it — lower it to react faster, at the cost of one database
+	read per tunnel per interval.
+</Aside>
+
+## Reservations
+
+A reservation pins a subdomain to a specific token, so that only that token can
+claim it and the name is held even when no agent is connected. Reserving also
+earns a certificate **before** the agent first connects: under `http01`, riftd
+authorizes issuance for a reserved subdomain, so the first request after
+`rift http 3000 myapp` is not delayed by an ACME round trip.
+
+```sh
+# Pin "myapp" to a token.
+curl -X POST http://127.0.0.1:8082/v1/reservations \
+  -H "Authorization: Bearer your_admin_token" \
+  -H "Content-Type: application/json" \
+  -d '{"subdomain":"myapp","token_id":"<token-id>","note":"prod webhook"}'
+
+# Release it.
+curl -X DELETE http://127.0.0.1:8082/v1/reservations/myapp \
+  -H "Authorization: Bearer your_admin_token"
+```
+
+## Subdomain rules
+
+Every requested subdomain is normalized (lowercased and trimmed) and then
+validated. The defaults, all overridable:
+
+| Rule                  | Variable                            | Default                                  |
+| --------------------- | ----------------------------------- | ---------------------------------------- |
+| Minimum length        | `RIFT_SUBDOMAIN_MIN_LENGTH`         | `3`                                      |
+| Maximum length        | `RIFT_SUBDOMAIN_MAX_LENGTH`         | `63` (the DNS label limit)               |
+| Allowed shape         | `RIFT_SUBDOMAIN_PATTERN`            | `^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$`      |
+| Generated length      | `RIFT_SUBDOMAIN_GENERATED_LENGTH`   | `10`                                     |
+| Generated alphabet    | `RIFT_SUBDOMAIN_GENERATED_ALPHABET` | `abcdefghjkmnpqrstuvwxyz23456789`        |
+
+The pattern allows lowercase alphanumerics with internal hyphens, no leading or
+trailing hyphen. When an agent requests no subdomain, the gateway generates one
+from the alphabet above — which deliberately omits ambiguous glyphs (`0`/`o`,
+`1`/`l`/`i`) so a generated name can be read aloud or copied off a terminal
+without transcription errors.
+
+### The blocklist
+
+A built-in blocklist protects labels that would shadow infrastructure or be
+mistaken for official endpoints. Claiming any of these fails the handshake with
+`subdomain_reserved`:
+
+```text
+www, api, admin, app, dashboard, console,
+mail, smtp, imap, pop, ns, ns1, ns2, dns,
+static, assets, cdn, img, images, media,
+auth, login, signup, account, billing, payment,
+status, health, metrics, internal, gateway,
+support, help, docs, blog, test, staging, dev,
+root, system, security, abuse, postmaster, webmaster,
+rift, tunnel, localhost
+```
+
+<Aside type="caution" title="RIFT_SUBDOMAIN_BLOCKLIST replaces the built-in list">
+	Setting `RIFT_SUBDOMAIN_BLOCKLIST` **replaces** the built-in list; it does not
+	add to it. If you set it, re-include every built-in label you still want
+	blocked — in particular your gateway hostname's first label (`gateway` by
+	default). Omitting it would let an agent claim that name as a tunnel, which
+	would be silently unroutable because Caddy matches the exact gateway host
+	before the wildcard.
+</Aside>
