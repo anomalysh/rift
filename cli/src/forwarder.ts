@@ -57,14 +57,23 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Build the outbound request headers, dropping hop-by-hop, host, length. */
+/**
+ * Build the outbound request headers, dropping hop-by-hop and `host`.
+ *
+ * `content-length` is deliberately preserved. The body is re-framed as a
+ * stream, and a stream without a declared length makes fetch fall back to
+ * `Transfer-Encoding: chunked`. Plenty of local development servers -- Python's
+ * http.server among them -- never implement chunked *request* decoding, and
+ * silently hand the application an empty body. Passing the length through keeps
+ * identity framing, which is also what the public client sent in the first
+ * place.
+ */
 function buildRequestHeaders(source: HeaderMap): Headers {
   const headers = new Headers();
   for (const [name, values] of Object.entries(source)) {
     const lower = name.toLowerCase();
     // `host` is the public hostname; fetch sets Host from the target URL.
-    // `content-length` is dropped because the body is re-framed as a stream.
-    if (isHopByHop(lower) || lower === "host" || lower === "content-length") {
+    if (isHopByHop(lower) || lower === "host") {
       continue;
     }
     for (const value of values) {
@@ -155,15 +164,20 @@ export class RequestStream {
 
   private async run(): Promise<void> {
     const url = `http://${this.deps.target.host}:${this.deps.target.port}${this.head.path}`;
+    const headers = buildRequestHeaders(this.head.headers);
     const init: FetchInit = {
       method: this.head.method,
-      headers: buildRequestHeaders(this.head.headers),
+      headers,
       redirect: "manual",
       signal: this.controller.signal,
     };
     if (this.bodyStream !== null) {
       init.body = this.bodyStream;
       init.duplex = "half";
+    } else {
+      // No body to send: a declared length would describe bytes that never
+      // arrive, and fetch would wait for them.
+      headers.delete("content-length");
     }
 
     try {
