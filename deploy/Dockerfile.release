@@ -20,11 +20,11 @@ WORKDIR /src
 # Only what the release needs: the CLI sources, the packaged extras (man page +
 # completions), and the release tooling. Copying a narrow context keeps the
 # build cache stable across unrelated repo changes.
-COPY cli/ ./cli/
+COPY projects/cli/ ./projects/cli/
 COPY packaging/ ./packaging/
 COPY tools/ ./tools/
 
-RUN cd cli && bun install
+RUN cd projects/cli && bun install
 
 # Build every target into /src/dist/release/<version>/. --clean makes the layer
 # deterministic regardless of any stale output copied in.

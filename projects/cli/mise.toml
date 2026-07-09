@@ -1,0 +1,25 @@
+# Tasks for the rift CLI (Bun/TypeScript). Run from the repo root as
+# `mise //projects/cli:<task>`, or `mise :<task>` from inside this directory.
+# Read-only, offline tasks are sandboxed: no network (blocks exfiltration or a
+# compromised dependency phoning home) and no filesystem writes.
+[tasks.lint]
+description = "Lint the CLI with biome"
+run = "bun run lint"
+deny_net = true
+deny_write = true
+
+[tasks.typecheck]
+description = "Type-check the CLI (tsc)"
+run = "bun run typecheck"
+deny_net = true
+deny_write = true
+
+[tasks.test]
+description = "Run the CLI test suite"
+run = "bun test"
+
+# The build writes dist/, so only the network is denied.
+[tasks.build]
+description = "Compile the CLI single binary"
+run = "bun run build"
+deny_net = true

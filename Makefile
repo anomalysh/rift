@@ -16,14 +16,14 @@ LOAD_ENV := set -a; [ -f .env ] && . ./.env; set +a;
 help: ## Show this help
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z0-9_-]+:.*##/{printf "  \033[36m%-14s\033[0m %s\n",$$1,$$2}' $(MAKEFILE_LIST)
 
-build-server: ## Build the riftd server binary (server/riftd)
-	cd server && CGO_ENABLED=0 go build -o riftd ./cmd/riftd
+build-server: ## Build the riftd server binary (projects/server/riftd)
+	cd projects/server && CGO_ENABLED=0 go build -o riftd ./cmd/riftd
 
 build-cli: ## Build the CLI single-binary image (deploy/Dockerfile.cli)
 	docker build -f deploy/Dockerfile.cli -t rift-cli:local .
 
 test: ## Run server tests
-	cd server && go test ./...
+	cd projects/server && go test ./...
 
 e2e: ## Full black-box e2e in Docker: real Caddy, real TLS, real CLI (ARGS=--mode internal)
 	bash tools/e2e.sh $(ARGS)
@@ -38,11 +38,11 @@ release-docker: ## Reproducible release build in a pinned Bun container -> dist/
 	bash tools/release-docker.sh $(ARGS)
 
 gen-docs: ## Regenerate the man page + shell completions from the CLI spec
-	cd cli && bun src/index.ts man > ../packaging/man/rift.1
-	cd cli && for sh in bash zsh fish; do bun src/index.ts completions $$sh > ../packaging/completions/rift.$$sh; done
+	cd projects/cli && bun src/index.ts man > ../../packaging/man/rift.1
+	cd projects/cli && for sh in bash zsh fish; do bun src/index.ts completions $$sh > ../../packaging/completions/rift.$$sh; done
 
 lint: ## Vet Go, syntax-check shell scripts, validate compose
-	cd server && go vet ./...
+	cd projects/server && go vet ./...
 	bash -n tools/*.sh tools/lib/*.sh
 	@command -v shellcheck >/dev/null 2>&1 && shellcheck tools/*.sh tools/lib/*.sh || echo "shellcheck not installed; skipped"
 	$(COMPOSE) config -q
@@ -104,8 +104,8 @@ publish-images: ## Build (ARGS=--push to publish) the ghcr container images
 	bash tools/publish-images.sh $(ARGS)
 
 # --- docs --------------------------------------------------------------------
-docs: ## Build the documentation site (docs-site/)
-	cd docs-site && bun install && bun run build
+docs: ## Build the documentation site (projects/docs-site/)
+	cd projects/docs-site && bun install && bun run build
 
 # --- isolated test harnesses (Docker, hermetic) -----------------------------
 e2e-recovery: ## Prove backup/restore in a throwaway Docker stack (ARGS=--keep)

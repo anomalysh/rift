@@ -4,8 +4,8 @@ The tunnel agent (CLI) and the tunnel gateway (server) speak a binary framing
 protocol over a single WebSocket connection. One WebSocket connection carries
 one tunnel, and multiplexes any number of concurrent proxied requests over it.
 
-This document is the **contract** between `server/internal/tunnelproto` (Go) and
-`cli/src/protocol.ts` (TypeScript). Both implementations must be changed
+This document is the **contract** between `projects/server/internal/tunnelproto` (Go) and
+`projects/cli/src/protocol.ts` (TypeScript). Both implementations must be changed
 together, and `PROTOCOL_VERSION` must be bumped on any breaking change.
 
     PROTOCOL_VERSION = 1

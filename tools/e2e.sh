@@ -387,7 +387,7 @@ run_mode() {
 	[ -n "$token" ] || die "could not mint a token"
 
 	log_info "connecting the rift CLI"
-	"$REPO_ROOT/cli/dist/rift" http "$UPSTREAM_PORT" hello \
+	"$REPO_ROOT/projects/cli/dist/rift" http "$UPSTREAM_PORT" hello \
 		--token "$token" \
 		--server "ws://127.0.0.1:${GATEWAY_PORT}/tunnel" \
 		>"$TMPDIR_E2E/cli.log" 2>&1 &
@@ -478,7 +478,7 @@ run_cluster() {
 
 	# Attach the agent to node 2. Public traffic will arrive at node 1.
 	log_info "attaching the agent to node 2 (gateway on $GATEWAY2_PORT)"
-	"$REPO_ROOT/cli/dist/rift" http "$UPSTREAM_PORT" hello \
+	"$REPO_ROOT/projects/cli/dist/rift" http "$UPSTREAM_PORT" hello \
 		--token "$token" \
 		--server "ws://127.0.0.1:${GATEWAY2_PORT}/tunnel" \
 		>"$TMPDIR_E2E/cli.log" 2>&1 &
@@ -777,7 +777,7 @@ assert_admin_is_guarded() {
 }
 
 # The CLI is the client under test; build it if it is missing or stale.
-if [ ! -x "$REPO_ROOT/cli/dist/rift" ]; then
+if [ ! -x "$REPO_ROOT/projects/cli/dist/rift" ]; then
 	require_cmd bun
 	log_info "building the rift CLI"
 	(cd "$REPO_ROOT/cli" && bun install --silent && bun run build) >/dev/null

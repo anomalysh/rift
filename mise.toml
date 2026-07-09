@@ -1,72 +1,45 @@
+# Monorepo root. Each project under projects/ carries its own mise.toml with the
+# tasks that belong to it; this file wires them together and pins the shared
+# toolchain. Run a project task from anywhere with `mise //projects/<p>:<task>`,
+# or `mise :<task>` from inside a project directory; `mise //...:test` fans out.
+monorepo_root = true
+
+[monorepo]
+# Single-level globs are allowed here, but the layout is small enough to list.
+config_roots = ["projects/cli", "projects/server", "projects/docs-site"]
+
 [tools]
-# Pin the Go toolchain so local builds match CI and the server Docker image, and
-# stay current with standard-library security fixes (see server/go.mod). Bumping
-# here should move alongside deploy/Dockerfile and .github/workflows/ci.yml.
+# Pin the toolchain so local builds match CI and the server Docker image, and
+# stay current with standard-library security fixes (see projects/server/go.mod).
+# Bumping here should move alongside deploy/Dockerfile and .github/workflows/ci.yml.
+# Shared at the root so every project inherits the same go/bun.
 go = "1.25"
 bun = "1.3.14"
 
-# Dev-workflow tasks: run with `mise run <name>` (or `mise <name>`), list with
-# `mise tasks`. Ops workflows (deploy, provision, backup, …) stay in the Makefile.
+# Aggregate tasks span projects, so they live at the root and depend on the
+# per-project tasks by absolute reference. Ops workflows (deploy, provision,
+# backup, …) stay in the Makefile.
+[tasks.check]
+description = "Lint, type-check, and test everything"
+depends = [
+  "//projects/cli:lint",
+  "//projects/cli:typecheck",
+  "//projects/cli:test",
+  "//projects/server:gofmt",
+  "//projects/server:vet",
+  "//projects/server:build",
+  "//projects/server:test",
+]
 
-# Read-only, offline tasks are sandboxed: no network (blocks exfiltration or a
-# compromised dependency phoning home) and no filesystem writes.
-[tasks."cli:lint"]
-description = "Lint the CLI with biome"
-dir = "cli"
-run = "bun run lint"
-deny_net = true
-deny_write = true
-
-[tasks."cli:typecheck"]
-description = "Type-check the CLI (tsc)"
-dir = "cli"
-run = "bun run typecheck"
-deny_net = true
-deny_write = true
-
-[tasks."cli:test"]
-description = "Run the CLI test suite"
-dir = "cli"
-run = "bun test"
-
-# Builds and vet write caches (dist, GOCACHE), so only the network is denied.
-[tasks."cli:build"]
-description = "Compile the CLI single binary"
-dir = "cli"
-run = "bun run build"
-deny_net = true
-
-[tasks."server:build"]
-description = "Build the server"
-dir = "server"
-run = "go build ./..."
-deny_net = true
-
-[tasks."server:vet"]
-description = "Vet the server"
-dir = "server"
-run = "go vet ./..."
-deny_net = true
-
-[tasks."server:gofmt"]
-description = "Fail on any gofmt drift"
-dir = "server"
-run = '''
-drift="$(gofmt -l .)"
-[ -z "$drift" ] || { printf 'gofmt drift:\n%s\n' "$drift" >&2; exit 1; }
-'''
-deny_net = true
-deny_write = true
-
-[tasks."server:test"]
-description = "Run the server test suite"
-dir = "server"
-run = "go test ./..."
-
-[tasks."server:vuln"]
-description = "Scan the server for known CVEs (govulncheck)"
-dir = "server"
-run = "go run golang.org/x/vuln/cmd/govulncheck@latest ./..."
+[tasks.pre-commit]
+description = "Fast checks run by the git pre-commit hook"
+depends = [
+  "//projects/cli:lint",
+  "//projects/cli:typecheck",
+  "//projects/cli:test",
+  "//projects/server:gofmt",
+  "//projects/server:vet",
+]
 
 [tasks.gen-docs]
 description = "Regenerate the man page and shell completions"
@@ -75,22 +48,6 @@ run = "make gen-docs"
 [tasks.e2e]
 description = "Full black-box e2e in Docker"
 run = "make e2e"
-
-[tasks.check]
-description = "Lint, type-check, and test everything"
-depends = [
-  "cli:lint",
-  "cli:typecheck",
-  "cli:test",
-  "server:gofmt",
-  "server:vet",
-  "server:build",
-  "server:test",
-]
-
-[tasks.pre-commit]
-description = "Fast checks run by the git pre-commit hook"
-depends = ["cli:lint", "cli:typecheck", "cli:test", "server:gofmt", "server:vet"]
 
 # .git/hooks is not tracked, so each clone installs the hook once with
 # `mise run install-hooks` (or `mise generate git-pre-commit --write`).

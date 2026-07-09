@@ -39,7 +39,7 @@ Cross-compile rift release artifacts, checksum them, and package archives into
 dist/release/<version>/.
 
 Options:
-  --version <v>   Override the release version (default: cli/package.json).
+  --version <v>   Override the release version (default: projects/cli/package.json).
   --clean         Remove the version output directory before building.
   -h, --help      Show this help and exit.
 
@@ -49,7 +49,7 @@ EOF
 }
 
 pkg_version() {
-	# cli/package.json is the single source of truth for the version.
+	# projects/cli/package.json is the single source of truth for the version.
 	(cd "$CLI_DIR" && bun --print "require('./package.json').version")
 }
 

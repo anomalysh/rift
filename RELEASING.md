@@ -14,7 +14,7 @@ from Conventional Commit messages. You do not tag by hand.
    `chore(main): release 0.2.0`. That PR:
    - computes the next version from the commits since the last release
      (`fix:` → patch, `feat:` → minor, breaking → minor while below 1.0),
-   - bumps the version in `cli/package.json` and `docs-site/package.json`,
+   - bumps the version in `projects/cli/package.json` and `projects/docs-site/package.json`,
    - writes the changelog into `CHANGELOG.md`.
 
 3. When you're ready to ship, **merge the release PR**. release-please then
@@ -26,7 +26,7 @@ from Conventional Commit messages. You do not tag by hand.
    - **publish.yml** builds and pushes the container images tagged `X.Y.Z`,
      `X.Y`, and `latest` to `ghcr.io/anomalysh`.
 
-The version in `cli/package.json` stays the single source of truth —
+The version in `projects/cli/package.json` stays the single source of truth —
 `tools/release.sh` reads it, and release-please keeps it in step with the tag.
 
 ## One-time setup: the release token

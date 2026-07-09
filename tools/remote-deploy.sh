@@ -14,7 +14,7 @@ usage() {
 Usage: tools/remote-deploy.sh [--dry-run]
 
 Deploy the rift stack to the VPS. Idempotent.
-  1. Ships server/ and deploy/ to $REMOTE_DIR (tar over ssh, preserving layout
+  1. Ships projects/server/ and deploy/ to $REMOTE_DIR (tar over ssh, preserving layout
      so compose's build context '..' resolves to $REMOTE_DIR on the VPS).
   2. Runs: docker compose -f docker-compose.yml -f docker-compose.prod.yml
            up -d --build   (from $REMOTE_DIR/deploy)
@@ -64,20 +64,20 @@ if [ "$dry_run" != true ]; then
 	fi
 fi
 
-# 3. Ship server/ and deploy/ (excluding local-only artifacts). The remote .env
+# 3. Ship projects/server/ and deploy/ (excluding local-only artifacts). The remote .env
 #    is not in our tree, so extraction overlays files without clobbering it.
 tar_cmd=(tar -C "$REPO_ROOT"
 	--exclude='deploy/caddy/data'
 	--exclude='deploy/caddy/config'
 	--exclude='deploy/.env'
-	--exclude='server/riftd'
-	--exclude='server/bin'
-	-czf - server deploy)
+	--exclude='projects/server/riftd'
+	--exclude='projects/server/bin'
+	-czf - projects/server deploy)
 
 if [ "$dry_run" = true ]; then
 	log_info "[dry-run] would run: ${tar_cmd[*]} | ssh 'tar -C $REMOTE_DIR -xzf -'"
 else
-	log_info "syncing server/ and deploy/ to $REMOTE_DIR"
+	log_info "syncing projects/server/ and deploy/ to $REMOTE_DIR"
 	"${tar_cmd[@]}" | "$SSH" "tar -C '$REMOTE_DIR' -xzf -"
 fi
 

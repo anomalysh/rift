@@ -4,12 +4,12 @@
 FROM golang:1.25-alpine AS build
 WORKDIR /src
 
-# The Go module lives under server/. Copy the manifests first so `go mod
+# The Go module lives under projects/server/. Copy the manifests first so `go mod
 # download` stays cached until dependencies actually change.
-COPY server/go.mod server/go.sum ./
+COPY projects/server/go.mod projects/server/go.sum ./
 RUN go mod download
 
-COPY server/ ./
+COPY projects/server/ ./
 
 # Fully static binary: CGO off means no dynamic loader is needed at runtime,
 # which is what keeps the image small and portable across base images.

@@ -7,10 +7,10 @@
 dist
 node_modules
 **/node_modules
-cli/node_modules
-docs-site/node_modules
+projects/cli/node_modules
+projects/docs-site/node_modules
 .env
 **/.env
 *.log
 tools/.ssh
-server/riftd
+projects/server/riftd

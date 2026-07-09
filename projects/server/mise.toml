@@ -1,0 +1,31 @@
+# Tasks for the riftd server (Go). Run from the repo root as
+# `mise //projects/server:<task>`, or `mise :<task>` from inside this directory.
+# gofmt and vet are read-only and offline, so they are fully sandboxed; build
+# and vet write the Go cache, so those only deny the network. test needs
+# localhost and vuln needs the module proxy, so neither is sandboxed.
+[tasks.build]
+description = "Build the server"
+run = "go build ./..."
+deny_net = true
+
+[tasks.vet]
+description = "Vet the server"
+run = "go vet ./..."
+deny_net = true
+
+[tasks.gofmt]
+description = "Fail on any gofmt drift"
+run = '''
+drift="$(gofmt -l .)"
+[ -z "$drift" ] || { printf 'gofmt drift:\n%s\n' "$drift" >&2; exit 1; }
+'''
+deny_net = true
+deny_write = true
+
+[tasks.test]
+description = "Run the server test suite"
+run = "go test ./..."
+
+[tasks.vuln]
+description = "Scan the server for known CVEs (govulncheck)"
+run = "go run golang.org/x/vuln/cmd/govulncheck@latest ./..."

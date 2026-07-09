@@ -38,7 +38,7 @@ jobs:
           --health-retries 10
     defaults:
       run:
-        working-directory: server
+        working-directory: projects/server
     steps:
       # Third-party actions are pinned to full commit SHAs (immutable) with the
       # human-readable version in a trailing comment, per supply-chain hardening.
@@ -58,7 +58,7 @@ jobs:
           path: |
             ~/.cache/go-build
             ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('server/go.sum') }}
+          key: ${{ runner.os }}-go-${{ hashFiles('projects/server/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
 
@@ -99,7 +99,7 @@ jobs:
     timeout-minutes: 10
     defaults:
       run:
-        working-directory: cli
+        working-directory: projects/cli
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -176,7 +176,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      # The harness builds the CLI from source when cli/dist/rift is absent.
+      # The harness builds the CLI from source when projects/cli/dist/rift is absent.
       - name: Set up Bun
         uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:

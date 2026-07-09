@@ -40,7 +40,7 @@ services:
 
   riftd:
     build:
-      # Context is the repo root so the build can reach server/; the same
+      # Context is the repo root so the build can reach projects/server/; the same
       # relative layout exists on the VPS (/opt/rift) after remote-deploy.
       context: ..
       dockerfile: deploy/Dockerfile

@@ -164,7 +164,7 @@ ask_secret() {
 	REPLY_VALUE="$val"
 }
 
-# --- validators (mirror server/internal/config so a written file always boots)
+# --- validators (mirror projects/server/internal/config so a written file always boots)
 v_env() { case "$(lc "$1")" in development | dev | d | production | prod | p) return 0 ;; *) return 1 ;; esac; }
 v_fqdn() {
 	local d="$1"

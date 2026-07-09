@@ -4,13 +4,13 @@
 *.exe
 
 # Go
-server/riftd
-server/bin/
+projects/server/riftd
+projects/server/bin/
 
 # Bun / Node
 node_modules/
-cli/dist/
-cli/rift
+projects/cli/dist/
+projects/cli/rift
 *.tsbuildinfo
 
 # Env & secrets
@@ -41,6 +41,6 @@ rift-*-db.dump
 rift-*-caddy.tar.gz
 
 # Docs site build output
-docs-site/node_modules/
-docs-site/dist/
-docs-site/.astro/
+projects/docs-site/node_modules/
+projects/docs-site/dist/
+projects/docs-site/.astro/
