@@ -8,35 +8,45 @@ bun = "1.3.14"
 # Dev-workflow tasks: run with `mise run <name>` (or `mise <name>`), list with
 # `mise tasks`. Ops workflows (deploy, provision, backup, …) stay in the Makefile.
 
+# Read-only, offline tasks are sandboxed: no network (blocks exfiltration or a
+# compromised dependency phoning home) and no filesystem writes.
 [tasks."cli:lint"]
 description = "Lint the CLI with biome"
 dir = "cli"
 run = "bun run lint"
+deny_net = true
+deny_write = true
 
 [tasks."cli:typecheck"]
 description = "Type-check the CLI (tsc)"
 dir = "cli"
 run = "bun run typecheck"
+deny_net = true
+deny_write = true
 
 [tasks."cli:test"]
 description = "Run the CLI test suite"
 dir = "cli"
 run = "bun test"
 
+# Builds and vet write caches (dist, GOCACHE), so only the network is denied.
 [tasks."cli:build"]
 description = "Compile the CLI single binary"
 dir = "cli"
 run = "bun run build"
+deny_net = true
 
 [tasks."server:build"]
 description = "Build the server"
 dir = "server"
 run = "go build ./..."
+deny_net = true
 
 [tasks."server:vet"]
 description = "Vet the server"
 dir = "server"
 run = "go vet ./..."
+deny_net = true
 
 [tasks."server:gofmt"]
 description = "Fail on any gofmt drift"
@@ -45,6 +55,8 @@ run = '''
 drift="$(gofmt -l .)"
 [ -z "$drift" ] || { printf 'gofmt drift:\n%s\n' "$drift" >&2; exit 1; }
 '''
+deny_net = true
+deny_write = true
 
 [tasks."server:test"]
 description = "Run the server test suite"
