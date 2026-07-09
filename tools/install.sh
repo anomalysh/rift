@@ -158,8 +158,13 @@ fi
 # ---- version resolution ----------------------------------------------------
 if [ -z "$VERSION" ]; then
 	api="https://api.github.com/repos/${REPO}/releases/latest"
-	VERSION="$(http_to_stdout "$api" | grep '"tag_name"' | head -n1 | cut -d'"' -f4 || true)"
-	[ -n "$VERSION" ] || err "could not determine the latest version; set RIFT_INSTALL_VERSION"
+	# Swallow curl's own 404 line; a missing "latest" release is an expected
+	# state (the repo simply has no published release yet), not a transport
+	# error worth showing the user.
+	VERSION="$(http_to_stdout "$api" 2>/dev/null | grep '"tag_name"' | head -n1 | cut -d'"' -f4 || true)"
+	if [ -z "$VERSION" ]; then
+		err "no published release found for ${REPO}. Either the project has not cut a release yet, or the API is unreachable. Install a specific version with: RIFT_INSTALL_VERSION=0.1.0 (or pass --version)."
+	fi
 fi
 VERSION="${VERSION#v}" # accept both 0.1.0 and v0.1.0
 TAG="v${VERSION}"

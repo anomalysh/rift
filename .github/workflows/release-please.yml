@@ -1,0 +1,41 @@
+name: release-please
+
+# Semver release automation. On every push to master, release-please reads the
+# Conventional Commit messages since the last release, computes the next version
+# (fix -> patch, feat -> minor, breaking -> minor while < 1.0), and opens or
+# updates a "release PR" that bumps the version and writes CHANGELOG.md. Merging
+# that PR creates the vX.Y.Z tag and GitHub release.
+#
+# That tag is what fires release.yml (binaries) and publish.yml (images) -- BUT
+# a tag pushed by the default GITHUB_TOKEN does not start other workflows (a
+# GitHub anti-recursion rule). So for the downstream builds to run, provide a
+# token that can:
+#
+#   1. create a fine-grained PAT with Contents: read/write on this repo, or a
+#      classic PAT with `repo` scope, and
+#   2. add it as the RELEASE_PLEASE_TOKEN repository secret:
+#        gh secret set RELEASE_PLEASE_TOKEN --body <token>
+#
+# With that secret present, releases are fully automatic end to end. Without it,
+# release-please still works (PR, version bump, changelog, tag, release), but
+# the binaries and images must be built by re-running those workflows manually.
+# See RELEASING.md.
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Run release-please
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
