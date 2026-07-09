@@ -70,7 +70,8 @@ done
 if [ -f "$REPO_ROOT/.env" ]; then
 	log_info "reading $REPO_ROOT/.env"
 	set -a
-	# shellcheck disable=SC1091 -- operator-supplied, not in the repo
+	# operator-supplied, not in the repo
+	# shellcheck disable=SC1091
 	. "$REPO_ROOT/.env"
 	set +a
 fi

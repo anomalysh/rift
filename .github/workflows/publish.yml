@@ -108,7 +108,7 @@ jobs:
           # branch build can never repoint :latest.
           flavor: |
             latest=false
-          # No LICENSE is declared in the repo yet; NOASSERTION is the SPDX
+          # Proprietary / all rights reserved; NOASSERTION is the SPDX
           # placeholder for "undetermined". Replace once a LICENSE lands.
           labels: |
             org.opencontainers.image.title=${{ matrix.title }}

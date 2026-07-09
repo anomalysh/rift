@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# `run` assigns its result var by name (indirect); shellcheck cannot trace it.
+# shellcheck disable=SC2154
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -124,8 +126,8 @@ check_contains() {
 }
 
 wait_for_tcp() {
-	local port="$1" what="$2" i
-	for i in $(seq 1 60); do
+	local port="$1" what="$2"
+	for _ in $(seq 1 60); do
 		if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
 			exec 3<&- 3>&-
 			return 0
@@ -145,8 +147,7 @@ mock_config() {
 mock_requests() { curl -fsS "$(mock_url)/_mock/requests"; }
 
 wait_for_mock() {
-	local i
-	for i in $(seq 1 30); do
+	for _ in $(seq 1 30); do
 		if curl -fsS "$(mock_url)/_mock/requests" >/dev/null 2>&1; then
 			return 0
 		fi

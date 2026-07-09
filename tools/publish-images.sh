@@ -18,7 +18,8 @@ DEFAULT_REGISTRY="ghcr.io/anomalysh"
 DEFAULT_TAG="local"
 # The default source URL and license baked into the images when not overridden.
 IMAGE_SOURCE_URL="https://github.com/anomalysh/rift"
-# No LICENSE is declared in the repo yet; NOASSERTION is the SPDX placeholder.
+# Proprietary / all rights reserved (package.json is UNLICENSED). NOASSERTION is
+# the SPDX value for "no open-source license asserted."
 IMAGE_LICENSES="NOASSERTION"
 
 # Compile exactly the DNS-01 providers that have a snippet under

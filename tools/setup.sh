@@ -10,7 +10,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/lib/common.sh"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # --- DNS-01 providers: exactly the snippets that exist under deploy/caddy/dns/.
 # Offering a provider with no snippet would generate a .env that Caddy cannot

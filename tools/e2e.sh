@@ -194,8 +194,8 @@ generate_self_cert() {
 }
 
 wait_for_tcp() {
-	local port="$1" what="$2" i
-	for i in $(seq 1 60); do
+	local port="$1" what="$2"
+	for _ in $(seq 1 60); do
 		if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
 			exec 3<&- 3>&-
 			return 0
@@ -224,8 +224,8 @@ prepare_pebble() {
 # Pebble mints a fresh issuing root on every start, so the trust anchor has to
 # be fetched at run time. Pinning one would silently test nothing.
 fetch_pebble_root() {
-	local net="${PROJECT}_default" i
-	for i in $(seq 1 30); do
+	local net="${PROJECT}_default"
+	for _ in $(seq 1 30); do
 		if docker run --rm --network "$net" \
 			-v "$TMPDIR_E2E/pebble:/p:ro" curlimages/curl:latest \
 			-s --max-time 5 --cacert /p/minica.pem https://pebble:15000/roots/0 \
@@ -251,8 +251,8 @@ ensure_caddy_dns_image() {
 }
 
 wait_for_tls() {
-	local host="$1" i
-	for i in $(seq 1 60); do
+	local host="$1"
+	for _ in $(seq 1 60); do
 		if echo | openssl s_client -connect "127.0.0.1:${HTTPS_PORT}" \
 			-servername "$host" 2>/dev/null | grep -q 'BEGIN CERTIFICATE'; then
 			return 0
@@ -343,8 +343,7 @@ run_mode() {
 	case "$mode" in
 	self) cp "$TMPDIR_E2E/certs/fullchain.pem" "$TMPDIR_E2E/ca.pem" ;;
 	internal)
-		local i
-		for i in $(seq 1 30); do
+		for _ in $(seq 1 30); do
 			if compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt \
 				>"$TMPDIR_E2E/ca.pem" 2>/dev/null && [ -s "$TMPDIR_E2E/ca.pem" ]; then
 				break
@@ -393,8 +392,7 @@ run_mode() {
 		>"$TMPDIR_E2E/cli.log" 2>&1 &
 	CLI_PID=$!
 
-	local i
-	for i in $(seq 1 30); do
+	for _ in $(seq 1 30); do
 		[ "$(status_of "hello.$BASE_DOMAIN")" = "200" ] && break
 		sleep 1
 	done
@@ -460,8 +458,7 @@ run_cluster() {
 	wait_for_tcp "$GATEWAY2_PORT" "riftd2 gateway"
 	wait_for_tcp "$HTTPS_PORT" "caddy"
 
-	local i
-	for i in $(seq 1 30); do
+	for _ in $(seq 1 30); do
 		if compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt \
 			>"$TMPDIR_E2E/ca.pem" 2>/dev/null && [ -s "$TMPDIR_E2E/ca.pem" ]; then
 			break
@@ -486,7 +483,7 @@ run_cluster() {
 		>"$TMPDIR_E2E/cli.log" 2>&1 &
 	CLI_PID=$!
 
-	for i in $(seq 1 30); do
+	for _ in $(seq 1 30); do
 		[ "$(status_of "hello.$BASE_DOMAIN")" = "200" ] && break
 		sleep 1
 	done
@@ -527,8 +524,7 @@ run_cluster() {
 	# 1 must not hang on the dead node: it invalidates the stale lease and, for
 	# this GET, answers promptly rather than after the full request timeout.
 	compose kill riftd2 >/dev/null 2>&1 || true
-	local t0 code elapsed
-	t0="$(compose exec -T redis redis-cli TIME 2>/dev/null | head -1 | tr -d '\r')"
+	local code
 	code="$(status_of "hello.$BASE_DOMAIN")"
 	if [ "$code" = "502" ] || [ "$code" = "404" ]; then
 		printf '    ok    a dead peer answers with an error, not a hang (%s)\n' "$code"
@@ -538,7 +534,7 @@ run_cluster() {
 		fail=$((fail + 1))
 	fi
 	# The stale lease must be gone: node 1 dropped its belief on the failed hop.
-	for i in $(seq 1 10); do
+	for _ in $(seq 1 10); do
 		lease="$(compose exec -T redis redis-cli --raw EXISTS "rift:route:hello" 2>/dev/null | tr -d '\r')"
 		[ "$lease" = "0" ] && break
 		sleep 1

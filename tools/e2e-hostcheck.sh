@@ -83,8 +83,7 @@ build_image() {
 }
 
 wait_container() {
-	local i
-	for i in $(seq 1 30); do
+	for _ in $(seq 1 30); do
 		if dexec true >/dev/null 2>&1; then return 0; fi
 		sleep 1
 	done

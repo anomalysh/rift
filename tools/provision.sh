@@ -140,7 +140,8 @@ ENV_FILE="${RIFT_ENV_FILE:-$REPO_ROOT/.env}"
 if [ -f "$ENV_FILE" ]; then
 	log_info "reading $ENV_FILE"
 	set -a
-	# shellcheck disable=SC1090 -- operator-supplied, not in the repo
+	# operator-supplied, not in the repo
+	# shellcheck disable=SC1090
 	. "$ENV_FILE"
 	set +a
 fi
@@ -178,7 +179,8 @@ load_provider() {
 		list="$(available_providers | paste -sd, - 2>/dev/null || true)"
 		die "unknown provider: $nm (available: ${list:-none})"
 	fi
-	# shellcheck disable=SC1090 -- path is validated above
+	# path is validated above
+	# shellcheck disable=SC1090
 	. "$file"
 }
 

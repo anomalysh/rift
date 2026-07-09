@@ -134,16 +134,19 @@ jobs:
           sudo apt-get install -y shellcheck
 
       - name: Syntax-check shell scripts
-        run: bash -n tools/*.sh tools/lib/*.sh
+        run: bash -n tools/*.sh tools/lib/*.sh tools/recovery/*.sh tools/providers/*.sh
 
       - name: Shellcheck
-        # tools/install.sh is POSIX sh (curl | sh installer); check it as sh so
-        # it is not flagged for legitimately avoiding bashisms. -x follows the
+        # --severity=warning keeps intentional idioms advisory: `cmd && x || true`
+        # (SC2015) and single-quoted snippets passed to a remote sh (SC2016) are
+        # deliberate, not bugs. Errors and warnings still fail the job.
+        # tools/install.sh is POSIX sh (the curl | sh installer); check it as sh
+        # so it is not flagged for legitimately avoiding bashisms. -x follows the
         # `. lib/common.sh` sources.
         run: |
-          bash_scripts="$(ls tools/*.sh tools/lib/*.sh | grep -v '^tools/install.sh$')"
-          shellcheck -x $bash_scripts
-          shellcheck -x -s sh tools/install.sh
+          bash_scripts="$(ls tools/*.sh tools/lib/*.sh tools/recovery/*.sh tools/providers/*.sh | grep -v '^tools/install.sh$')"
+          shellcheck -x --severity=warning $bash_scripts
+          shellcheck -x -s sh --severity=warning tools/install.sh
 
       - name: Validate compose (dev)
         run: docker compose -f deploy/docker-compose.yml config -q

@@ -1,5 +1,5 @@
 {
-  "name": "doc-style",
+  "name": "rift-docs",
   "type": "module",
   "version": "0.0.1",
   "scripts": {
@@ -13,5 +13,8 @@
     "@astrojs/starlight": "^0.41.3",
     "astro": "^7.0.2",
     "sharp": "^0.34.5"
-  }
+  },
+  "private": true,
+  "license": "UNLICENSED",
+  "author": "David Mydlarz"
 }

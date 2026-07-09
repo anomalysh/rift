@@ -67,6 +67,9 @@ RIFT_SSH_CONTROL_DIR="${RIFT_SSH_CONTROL_DIR:-$HOME/.ssh/rift-cm}"
 mkdir -p "$RIFT_SSH_CONTROL_DIR" 2>/dev/null || true
 chmod 700 "$RIFT_SSH_CONTROL_DIR" 2>/dev/null || true
 
+# Consumed by scripts that source this lib (ssh.sh, scp.sh, ...); shellcheck
+# cannot see that cross-file use.
+# shellcheck disable=SC2034
 RIFT_SSH_OPTS=(
 	-o ConnectTimeout=15
 	-o StrictHostKeyChecking=accept-new
