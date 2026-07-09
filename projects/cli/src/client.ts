@@ -330,6 +330,9 @@ export class TunnelClient {
         tunnelId: ok.tunnel_id,
       };
       this.logger.session?.(session);
+      // session() only paints the header panel; emit a scrolling log line too so
+      // the event log shows the connection landing (mirrors `reconnected` below).
+      this.logger.info(`connected: ${publicAddr}`);
     } else {
       this.logger.info(`reconnected: ${publicAddr}`);
     }
