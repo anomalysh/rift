@@ -41,6 +41,14 @@ type Registry interface {
 	// deployments always return ok=false.
 	LocatePeer(ctx context.Context, subdomain string) (nodeURL string, ok bool, err error)
 
+	// InvalidatePeer drops the routing belief that subdomain lives at nodeURL,
+	// but only if that is still what is recorded. It is called after a forward
+	// to nodeURL failed at the connection level: the node is gone and its
+	// lease is stale, so the next request should re-locate rather than repeat a
+	// doomed hop. A compare check avoids deleting a lease a reconnected agent
+	// has since republished. A local-only registry has nothing to invalidate.
+	InvalidatePeer(ctx context.Context, subdomain, nodeURL string) error
+
 	// Close releases any background resources.
 	Close() error
 }

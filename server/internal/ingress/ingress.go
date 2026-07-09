@@ -36,6 +36,10 @@ type Ingress struct {
 	// peers forwards to another node when Redis says it owns the subdomain.
 	peers *http.Client
 
+	// breaker stops forwarding to a peer node that has failed repeatedly, so a
+	// dead node costs one dial timeout rather than one per request.
+	breaker *breaker
+
 	trusted []netAddr
 
 	// ready reports whether this node's dependencies are usable. Nil means
@@ -79,6 +83,7 @@ func New(
 				ResponseHeaderTimeout: cfg.Tunnel.RequestTimeout,
 			},
 		},
+		breaker: newBreaker(),
 		trusted: parseTrusted(cfg.Ingress.TrustedProxyIPs),
 	}
 }

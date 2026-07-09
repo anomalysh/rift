@@ -133,6 +133,21 @@ func (d *distributed) LocatePeer(ctx context.Context, subdomain string) (string,
 	return nodeURL, true, nil
 }
 
+// InvalidatePeer removes subdomain's lease only if it still names nodeURL, so
+// forwarding to a node that has died drops the stale belief without racing a
+// reconnected agent that has already republished the lease elsewhere.
+func (d *distributed) InvalidatePeer(ctx context.Context, subdomain, nodeURL string) error {
+	// Never invalidate a subdomain this node itself serves; that is not a stale
+	// peer lease, it is our own.
+	if _, ok := d.Local.Lookup(ctx, subdomain); ok {
+		return nil
+	}
+	if err := compareAndDelete.Run(ctx, d.rdb, []string{d.key(subdomain)}, nodeURL).Err(); err != nil && !errors.Is(err, redis.Nil) {
+		return fmt.Errorf("registry: invalidate %q: %w", subdomain, err)
+	}
+	return nil
+}
+
 // refreshLeases renews every locally held lease before it expires.
 func (d *distributed) refreshLeases(ctx context.Context) {
 	defer close(d.done)

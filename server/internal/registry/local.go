@@ -65,6 +65,11 @@ func (l *Local) LocatePeer(context.Context, string) (string, bool, error) {
 	return "", false, nil
 }
 
+// InvalidatePeer is a no-op: a local-only registry publishes no leases.
+func (l *Local) InvalidatePeer(context.Context, string, string) error {
+	return nil
+}
+
 // Subdomains snapshots the attached subdomains. Used by the Redis lease
 // refresher and by diagnostics.
 func (l *Local) Subdomains() []string {

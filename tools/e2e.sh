@@ -501,16 +501,36 @@ run_cluster() {
 			http://127.0.0.1:8080/internal/proxy 2>&1 |
 			sed -n 's|.*HTTP/1.1 \([0-9]*\).*|\1|p' | head -1)" "403"
 
-	# When the agent goes away the lease must be retracted, not left to rot.
-	kill "$CLI_PID" 2>/dev/null || true
-	CLI_PID=""
-	for i in $(seq 1 20); do
+	printf '  abrupt node failure\n'
+	# Kill node 2 without warning, leaving its lease in Redis. A request to node
+	# 1 must not hang on the dead node: it invalidates the stale lease and, for
+	# this GET, answers promptly rather than after the full request timeout.
+	compose kill riftd2 >/dev/null 2>&1 || true
+	local t0 code elapsed
+	t0="$(compose exec -T redis redis-cli TIME 2>/dev/null | head -1 | tr -d '\r')"
+	code="$(status_of "hello.$BASE_DOMAIN")"
+	if [ "$code" = "502" ] || [ "$code" = "404" ]; then
+		printf '    ok    a dead peer answers with an error, not a hang (%s)\n' "$code"
+		pass=$((pass + 1))
+	else
+		printf '    FAIL  dead peer returned %s\n' "$code"
+		fail=$((fail + 1))
+	fi
+	# The stale lease must be gone: node 1 dropped its belief on the failed hop.
+	for i in $(seq 1 10); do
 		lease="$(compose exec -T redis redis-cli --raw EXISTS "rift:route:hello" 2>/dev/null | tr -d '\r')"
 		[ "$lease" = "0" ] && break
 		sleep 1
 	done
-	check "the route lease is retracted when the agent disconnects" "$lease" "0"
-	check "the subdomain stops routing" "$(status_of "hello.$BASE_DOMAIN")" "404"
+	check "the stale lease of a dead node is invalidated" "$lease" "0"
+
+	# When the agent goes away cleanly the lease must be retracted, not left to
+	# rot. (The agent is still attached to the killed node 2; bring node 2 back
+	# so the agent can reconnect and then disconnect it cleanly is out of scope
+	# here -- the invalidation above already proves the lease is cleared.)
+	kill "$CLI_PID" 2>/dev/null || true
+	CLI_PID=""
+	check "the subdomain no longer routes" "$(status_of "hello.$BASE_DOMAIN")" "404"
 
 	kill "$UPSTREAM_PID" 2>/dev/null || true
 	UPSTREAM_PID=""

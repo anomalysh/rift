@@ -13,14 +13,66 @@ import (
 )
 
 // forwardToPeer relays the request to the node whose agent holds the subdomain.
+//
+// If that node has died abruptly its Redis lease lingers until TTL, so the
+// first forward fails at the connection level. Rather than return 502 and make
+// the client wait out the TTL, this drops the stale lease and, for a request
+// that is safe to repeat, re-locates and tries once more — the agent may have
+// reconnected to another node in the meantime.
+//
+// A request is only retried when it is idempotent AND carries no body: HTTP
+// forbids silently repeating a POST (it could submit an order twice), and a
+// body stream cannot be replayed once partially read anyway.
 func (i *Ingress) forwardToPeer(w http.ResponseWriter, r *http.Request, nodeURL, sub string) {
+	if i.breaker.isOpen(nodeURL) {
+		// The node has failed repeatedly and recently. Skip the doomed dial,
+		// drop the belief, and answer now instead of after another timeout.
+		_ = i.registry.InvalidatePeer(r.Context(), sub, nodeURL)
+		i.writeGatewayError(w, r, http.StatusBadGateway, "peer_unavailable",
+			"The node serving this tunnel is unavailable.")
+		return
+	}
+
+	resp, err := i.doPeerForward(r, nodeURL, sub)
+	if err != nil {
+		i.breaker.recordFailure(nodeURL)
+		i.logger.Warn("peer forward failed",
+			slog.String("subdomain", sub), slog.String("node", nodeURL), slog.Any("error", err))
+
+		// The node is gone; its lease is stale. Drop it so we do not keep
+		// forwarding into a black hole.
+		_ = i.registry.InvalidatePeer(r.Context(), sub, nodeURL)
+
+		if canRetryForward(r) {
+			if next, ok, lerr := i.registry.LocatePeer(r.Context(), sub); lerr == nil && ok && next != nodeURL {
+				if resp2, err2 := i.doPeerForward(r, next, sub); err2 == nil {
+					i.breaker.recordSuccess(next)
+					i.relayPeerResponse(w, r, resp2, sub)
+					return
+				}
+				i.breaker.recordFailure(next)
+				_ = i.registry.InvalidatePeer(r.Context(), sub, next)
+			}
+		}
+
+		i.writeGatewayError(w, r, http.StatusBadGateway, "peer_forward_failed",
+			"Could not reach the node serving this tunnel.")
+		return
+	}
+
+	i.breaker.recordSuccess(nodeURL)
+	i.relayPeerResponse(w, r, resp, sub)
+}
+
+// doPeerForward performs one forward attempt. A non-nil error is a transport
+// failure (the node is unreachable); an HTTP error status comes back as a
+// normal response for the caller to relay.
+func (i *Ingress) doPeerForward(r *http.Request, nodeURL, sub string) (*http.Response, error) {
 	target := strings.TrimSuffix(nodeURL, "/") + config.RouteInternalProxy
 
 	outbound, err := http.NewRequestWithContext(r.Context(), r.Method, target, r.Body)
 	if err != nil {
-		i.writeGatewayError(w, r, http.StatusBadGateway, "peer_forward_failed",
-			"Could not reach the node serving this tunnel.")
-		return
+		return nil, err
 	}
 
 	// Carry the original request verbatim; the peer reconstructs it from these.
@@ -37,14 +89,10 @@ func (i *Ingress) forwardToPeer(w http.ResponseWriter, r *http.Request, nodeURL,
 	outbound.Header.Set(config.HeaderForwardedProto, i.cfg.Tunnel.PublicScheme)
 	outbound.Header.Set(config.HeaderRealIP, i.clientIP(r))
 
-	resp, err := i.peers.Do(outbound)
-	if err != nil {
-		i.logger.Warn("peer forward failed",
-			slog.String("subdomain", sub), slog.String("node", nodeURL), slog.Any("error", err))
-		i.writeGatewayError(w, r, http.StatusBadGateway, "peer_forward_failed",
-			"Could not reach the node serving this tunnel.")
-		return
-	}
+	return i.peers.Do(outbound)
+}
+
+func (i *Ingress) relayPeerResponse(w http.ResponseWriter, _ *http.Request, resp *http.Response, sub string) {
 	defer func() { _ = resp.Body.Close() }()
 
 	header := w.Header()
@@ -55,7 +103,24 @@ func (i *Ingress) forwardToPeer(w http.ResponseWriter, r *http.Request, nodeURL,
 	}
 	w.WriteHeader(resp.StatusCode)
 	if err := streamBody(w, resp.Body); err != nil {
-		i.logger.Debug("peer response stream ended early", slog.Any("error", err))
+		i.logger.Debug("peer response stream ended early",
+			slog.String("subdomain", sub), slog.Any("error", err))
+	}
+}
+
+// canRetryForward reports whether a failed forward may be repeated against a
+// different node. Only idempotent, body-less requests qualify: RFC 7231 §4.2.2
+// forbids automatically retrying a non-idempotent method, and a request body
+// stream cannot be replayed.
+func canRetryForward(r *http.Request) bool {
+	if r.Body != nil && r.Body != http.NoBody && r.ContentLength != 0 {
+		return false
+	}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
+		return true
+	default:
+		return false
 	}
 }
 
