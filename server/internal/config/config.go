@@ -58,7 +58,12 @@ type Ingress struct {
 
 // Gateway is the WebSocket listener that tunnel agents dial.
 type Gateway struct {
-	Addr             string
+	Addr string
+	// Hostname is the public name agents dial (e.g. gateway.tunl.example.com).
+	// It is not used for routing; the TLS-ask endpoint authorizes a
+	// certificate for it, since it is not a tunnel subdomain and would
+	// otherwise be refused.
+	Hostname         string
 	Path             string
 	HandshakeTimeout time.Duration
 	WriteTimeout     time.Duration
@@ -145,6 +150,7 @@ func Load() (*Config, error) {
 		},
 		Gateway: Gateway{
 			Addr:             l.str(KeyGatewayAddr, DefaultGatewayAddr),
+			Hostname:         core.NormalizeSubdomain(l.str(KeyGatewayHostname, "")),
 			Path:             l.str(KeyGatewayPath, DefaultGatewayPath),
 			HandshakeTimeout: l.duration(KeyGatewayHandshakeTimeout, DefaultGatewayHandshakeTimeout),
 			WriteTimeout:     l.duration(KeyGatewayWriteTimeout, DefaultGatewayWriteTimeout),

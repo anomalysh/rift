@@ -82,6 +82,7 @@ func newStack(t *testing.T, tune func(*config.Config)) *stack {
 		Env:    config.EnvDevelopment,
 		NodeID: "test-node",
 		Gateway: config.Gateway{
+			Hostname:         "gateway." + testBaseDomain,
 			Path:             "/tunnel",
 			HandshakeTimeout: 5 * time.Second,
 			WriteTimeout:     5 * time.Second,
@@ -523,6 +524,10 @@ func TestTLSAskAuthorizesOnlyLiveOrReservedSubdomains(t *testing.T) {
 		{"absent." + testBaseDomain, http.StatusNotFound},
 		{"attacker.example.com", http.StatusForbidden},
 		{"", http.StatusBadRequest},
+		// The gateway's own hostname is not a tunnel, but agents dial it over
+		// TLS. Refusing it leaves the gateway with no certificate at all.
+		{"gateway." + testBaseDomain, http.StatusOK},
+		{"GATEWAY." + strings.ToUpper(testBaseDomain), http.StatusOK},
 	}
 	for _, tc := range cases {
 		resp, err := s.client.Get(s.ingressURL + config.RouteTLSAsk + "?" + config.QueryParamDomain + "=" + tc.domain)

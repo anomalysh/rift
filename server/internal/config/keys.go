@@ -21,7 +21,10 @@ const (
 	KeyIngressTrustedProxyIPs = EnvPrefix + "INGRESS_TRUSTED_PROXY_IPS"
 
 	// Gateway: WebSocket endpoint that tunnel agents dial.
-	KeyGatewayAddr             = EnvPrefix + "GATEWAY_ADDR"
+	KeyGatewayAddr = EnvPrefix + "GATEWAY_ADDR"
+	// KeyGatewayHostname is the public hostname agents dial. The server needs
+	// it only so the TLS-ask endpoint can authorize a certificate for it.
+	KeyGatewayHostname         = EnvPrefix + "GATEWAY_HOSTNAME"
 	KeyGatewayPath             = EnvPrefix + "GATEWAY_PATH"
 	KeyGatewayHandshakeTimeout = EnvPrefix + "GATEWAY_HANDSHAKE_TIMEOUT"
 	KeyGatewayWriteTimeout     = EnvPrefix + "GATEWAY_WRITE_TIMEOUT"

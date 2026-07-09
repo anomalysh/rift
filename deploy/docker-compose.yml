@@ -57,6 +57,9 @@ services:
       TUNL_LOG_FORMAT: ${TUNL_LOG_FORMAT:-json}
       TUNL_INGRESS_ADDR: ${TUNL_INGRESS_ADDR:-:8080}
       TUNL_GATEWAY_ADDR: ${TUNL_GATEWAY_ADDR:-:8081}
+      # Read by the TLS-ask endpoint so Caddy may issue a certificate for the
+      # hostname agents dial. Empty in local dev, where there is no TLS.
+      TUNL_GATEWAY_HOSTNAME: ${TUNL_GATEWAY_HOSTNAME:-}
       TUNL_ADMIN_ADDR: ${TUNL_ADMIN_ADDR:-:8082}
       # --- redis (only consulted when TUNL_REDIS_ENABLED=true + --profile redis) ---
       TUNL_REDIS_ENABLED: ${TUNL_REDIS_ENABLED:-false}

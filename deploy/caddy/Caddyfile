@@ -53,11 +53,25 @@
 }
 
 # --- Agent gateway: wss://TUNL_GATEWAY_HOSTNAME -----------------------------
-# The CLI dials the gateway over TLS from the public internet, so the gateway
-# needs a normal managed certificate (not on-demand) on a dedicated hostname.
-# This is an exact-match site, so Caddy prefers it over the wildcard above even
-# when TUNL_GATEWAY_HOSTNAME is itself a label under TUNL_BASE_DOMAIN.
+# The CLI dials the gateway over TLS from the public internet.
 {$TUNL_GATEWAY_HOSTNAME} {
+	# on_demand is REQUIRED here, even though this is an exact-match site with
+	# a hostname we control, and omitting it silently yields NO CERTIFICATE AT
+	# ALL. TUNL_GATEWAY_HOSTNAME normally sits under TUNL_BASE_DOMAIN, so it is
+	# shadowed by the wildcard's on-demand automation policy. In that state
+	# Caddy skips obtaining a managed certificate at start-up, yet the
+	# handshake resolves the exact (non-on-demand) policy and so refuses to
+	# obtain one lazily either. The name falls between the two paths and every
+	# TLS connection fails with "no certificate available".
+	#
+	# Marking it on_demand puts it on one consistent path: tunld's `ask`
+	# endpoint authorises this exact hostname (TUNL_GATEWAY_HOSTNAME is read by
+	# the server for precisely that purpose), so the certificate is issued on
+	# the first dial and renewed normally thereafter.
+	tls {
+		on_demand
+	}
+
 	# Caddy upgrades WebSockets automatically. flush_interval -1 disables
 	# response buffering so the upgrade and every subsequent frame stream
 	# through immediately; together with the disabled server timeouts above a

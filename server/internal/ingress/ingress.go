@@ -99,6 +99,16 @@ func (i *Ingress) handleTLSAsk(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing domain", http.StatusBadRequest)
 		return
 	}
+	domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+
+	// The gateway's own hostname is not a tunnel subdomain, so the checks
+	// below would refuse it. It must be authorized explicitly: agents dial it
+	// over TLS, and it usually sits under the same wildcard as the tunnels,
+	// where Caddy will only ever issue its certificate on demand.
+	if i.cfg.Gateway.Hostname != "" && domain == i.cfg.Gateway.Hostname {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 
 	sub, ok := core.SubdomainFromHost(domain, i.cfg.Tunnel.BaseDomain)
 	if !ok {
