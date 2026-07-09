@@ -1,0 +1,37 @@
+# rift backup/restore recovery stack -- HERMETIC TEST FIXTURE, not for production.
+#
+# Driven exclusively by tools/e2e-recovery.sh. Do NOT `docker compose up` this by
+# hand: the harness applies the real schema, seeds known rows and a fake
+# certificate tree, then exercises tools/backup.sh and tools/restore.sh against
+# it and tears everything down.
+#
+# Everything here is disposable:
+#   * Postgres data lives on tmpfs, so it never outlives the container -- a stale
+#     volume between runs could let a restore assertion pass on old rows.
+#   * The credentials below are THROWAWAY test values, clearly not secrets.
+#   * No host ports are published; the stack talks only on its own default
+#     network. backup.sh/restore.sh reach Postgres via `docker compose exec`.
+name: rift-recovery
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      # Throwaway credentials for the disposable test database ONLY. Not a real
+      # secret and never used outside tools/e2e-recovery.sh.
+      POSTGRES_USER: rift
+      POSTGRES_PASSWORD: throwaway-recovery-password-not-a-secret
+      POSTGRES_DB: rift
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rift -d rift"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  # Same shape as production's caddy_data (issued TLS certificates + the ACME
+  # account key). Realised as the docker volume rift-recovery_caddy_data, which
+  # tools/e2e-recovery.sh seeds with a fake certificate tree before backing up.
+  caddy_data:
