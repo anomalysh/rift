@@ -83,6 +83,9 @@ func run() error {
 
 	gw := gateway.New(cfg, logger, db.Tokens(), db.Reservations(), db.Tunnels(), reg)
 	ing := ingress.New(cfg, logger, reg, db.Tunnels(), db.Reservations())
+	// A node that cannot reach Postgres cannot authorize a handshake or claim a
+	// subdomain. Readiness says so; liveness deliberately does not.
+	ing.SetReadyCheck(db.Ping)
 
 	gwMux := http.NewServeMux()
 	gwMux.Handle(cfg.Gateway.Path, gw.Handler())

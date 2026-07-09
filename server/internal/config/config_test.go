@@ -165,3 +165,34 @@ func mustFail(t *testing.T) error {
 	}
 	return err
 }
+
+// The built-in blocklist is a safety floor. An operator adding one label of
+// their own must not thereby unblock `gateway`, which Caddy routes to the agent
+// endpoint, or `api` and `www`, which look official.
+func TestSubdomainBlocklistExtendsRatherThanReplaces(t *testing.T) {
+	setMinimalEnv(t)
+	t.Setenv(KeySubdomainBlocklist, "internal-only, staging2")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, label := range []string{"gateway", "api", "www", "rift", "internal-only", "staging2"} {
+		if !cfg.SubdomainRules.IsBlocked(label) {
+			t.Errorf("%q should be blocked; the env list must add to the defaults, not replace them", label)
+		}
+	}
+}
+
+func TestSubdomainBlocklistDeduplicates(t *testing.T) {
+	setMinimalEnv(t)
+	t.Setenv(KeySubdomainBlocklist, "gateway,gateway,newone")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.SubdomainRules.IsBlocked("gateway") || !cfg.SubdomainRules.IsBlocked("newone") {
+		t.Fatal("expected both the duplicated default and the new label to be blocked")
+	}
+}

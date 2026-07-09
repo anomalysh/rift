@@ -262,7 +262,7 @@ func Load() (*Config, error) {
 		l.integer(KeySubdomainMinLength, DefaultSubdomainMinLength),
 		l.integer(KeySubdomainMaxLength, DefaultSubdomainMaxLength),
 		l.str(KeySubdomainPattern, DefaultSubdomainPattern),
-		l.csv(KeySubdomainBlocklist, DefaultSubdomainBlocklist),
+		l.csvAppend(KeySubdomainBlocklist, DefaultSubdomainBlocklist),
 		l.integer(KeySubdomainGenLength, DefaultSubdomainGenLength),
 		l.str(KeySubdomainGenAlphabet, DefaultSubdomainGenAlphabet),
 	)

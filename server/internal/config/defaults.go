@@ -60,8 +60,11 @@ const (
 	DefaultSubdomainGenAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
 )
 
-// DefaultSubdomainBlocklist protects labels that would shadow infrastructure
-// or be mistaken for official endpoints. Operators extend this via config.
+// DefaultSubdomainBlocklist protects labels that would shadow infrastructure or
+// be mistaken for official endpoints. RIFT_SUBDOMAIN_BLOCKLIST adds to this
+// list; it cannot remove from it. These entries are a safety floor, not a
+// suggestion: `gateway` in particular is routed to the agent endpoint by Caddy,
+// so a tunnel holding it would be both unreachable and misleading.
 var DefaultSubdomainBlocklist = []string{
 	"www", "api", "admin", "app", "dashboard", "console",
 	"mail", "smtp", "imap", "pop", "ns", "ns1", "ns2", "dns",

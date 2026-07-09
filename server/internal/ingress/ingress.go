@@ -36,7 +36,18 @@ type Ingress struct {
 	peers *http.Client
 
 	trusted []netAddr
+
+	// ready reports whether this node's dependencies are usable. Nil means
+	// "nothing to check", which is what the tests and a store-less build want.
+	ready ReadyFunc
 }
+
+// ReadyFunc reports whether a dependency is usable right now.
+type ReadyFunc func(context.Context) error
+
+// readyTimeout bounds the readiness probe. A probe that can hang is worse than
+// no probe: an orchestrator waits on it instead of restarting the process.
+const readyTimeout = 2 * time.Second
 
 type netAddr struct {
 	ip  net.IP
@@ -71,20 +82,55 @@ func New(
 	}
 }
 
-// Handler mounts the public routes plus the two internal endpoints Caddy and
-// peer nodes use.
+// SetReadyCheck installs the readiness probe's dependency check. Call it
+// before serving.
+func (i *Ingress) SetReadyCheck(fn ReadyFunc) { i.ready = fn }
+
+// Handler mounts the public routes plus the internal endpoints Caddy and peer
+// nodes use.
 func (i *Ingress) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc(config.RouteHealth, i.handleHealth)
+	mux.HandleFunc(config.RouteReady, i.handleReady)
 	mux.HandleFunc(config.RouteTLSAsk, i.handleTLSAsk)
 	mux.HandleFunc(config.RouteInternalProxy, i.handleInternalProxy)
 	mux.HandleFunc("/", i.handlePublic)
 	return mux
 }
 
+// handleHealth is liveness: the process is running and serving. It must never
+// consult a dependency, or a database blip would make an orchestrator kill a
+// healthy server.
 func (i *Ingress) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.WriteString(w, "ok\n")
+}
+
+// handleReady is readiness: this node can actually serve. It does consult the
+// database, because a node that cannot reach Postgres cannot authorize a
+// handshake or claim a subdomain, and should be taken out of rotation rather
+// than restarted.
+func (i *Ingress) handleReady(w http.ResponseWriter, r *http.Request) {
+	if i.ready == nil {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ready\n")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), readyTimeout)
+	defer cancel()
+
+	if err := i.ready(ctx); err != nil {
+		i.logger.Warn("readiness probe failed", slog.Any("error", err))
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		// The reason stays in the log; a probe response is not a place to
+		// describe internal topology to whoever can reach the port.
+		_, _ = io.WriteString(w, "not ready\n")
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, "ready\n")
 }
 
 // handleTLSAsk authorizes Caddy's on-demand certificate issuance.

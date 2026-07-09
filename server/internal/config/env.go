@@ -120,12 +120,47 @@ func (l *loader) duration(key string, def time.Duration) time.Duration {
 	return d
 }
 
-// csv splits a comma-separated list, trimming and dropping empties.
+// csv splits a comma-separated list, trimming and dropping empties. An unset
+// key yields def.
 func (l *loader) csv(key string, def []string) []string {
 	v, ok := lookup(key)
 	if !ok {
 		return def
 	}
+	return splitCSV(v)
+}
+
+// csvAppend returns base plus whatever the env var adds, deduplicated.
+//
+// Used for lists where the built-in entries are a safety floor rather than a
+// suggestion. The subdomain blocklist is the motivating case: an operator who
+// adds one label of their own must not thereby unblock `gateway`, `api` and
+// `www`, which would let an agent claim a hostname that looks official — or,
+// for `gateway`, one that Caddy routes to the agent endpoint.
+func (l *loader) csvAppend(key string, base []string) []string {
+	extra, ok := lookup(key)
+	if !ok {
+		return base
+	}
+
+	seen := make(map[string]struct{}, len(base))
+	out := make([]string, 0, len(base))
+	for _, v := range base {
+		if _, dup := seen[v]; !dup {
+			seen[v] = struct{}{}
+			out = append(out, v)
+		}
+	}
+	for _, v := range splitCSV(extra) {
+		if _, dup := seen[v]; !dup {
+			seen[v] = struct{}{}
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func splitCSV(v string) []string {
 	parts := strings.Split(v, ",")
 	out := make([]string, 0, len(parts))
 	for _, p := range parts {

@@ -34,6 +34,7 @@ const testBaseDomain = "rift.example.test"
 type stack struct {
 	cfg        *config.Config
 	store      *memory.Store
+	ingress    *ingress.Ingress
 	tokens     *flakyTokens
 	gatewayWS  string
 	ingressURL string
@@ -144,6 +145,7 @@ func newStack(t *testing.T, tune func(*config.Config)) *stack {
 	return &stack{
 		cfg:        cfg,
 		store:      store,
+		ingress:    ing,
 		tokens:     tokens,
 		gatewayWS:  "ws" + strings.TrimPrefix(gwSrv.URL, "http") + cfg.Gateway.Path,
 		ingressURL: ingSrv.URL,
@@ -652,6 +654,59 @@ func TestTokenRevalidationToleratesStoreFailure(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200 while the store is failing", resp.StatusCode)
+	}
+}
+
+// Liveness must not depend on the database; readiness must. Conflating them
+// makes an orchestrator kill a healthy process during a database blip.
+func TestHealthAndReadinessDifferOnDependencyFailure(t *testing.T) {
+	s := newStack(t, nil)
+
+	resp, err := s.client.Get(s.ingressURL + config.RouteHealth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("healthz = %d, want 200", resp.StatusCode)
+	}
+
+	// No check installed: ready by default.
+	resp, err = s.client.Get(s.ingressURL + config.RouteReady)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("readyz with no check = %d, want 200", resp.StatusCode)
+	}
+
+	s.ingress.SetReadyCheck(func(context.Context) error {
+		return errors.New("database is on fire")
+	})
+
+	resp, err = s.client.Get(s.ingressURL + config.RouteReady)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := readAll(t, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("readyz with a failing dependency = %d, want 503", resp.StatusCode)
+	}
+	// The probe must not describe internal topology to whoever can reach it.
+	if strings.Contains(body, "fire") {
+		t.Fatalf("readiness body leaked the underlying error: %q", body)
+	}
+
+	// Liveness stays green: the process is fine, its dependency is not.
+	resp, err = s.client.Get(s.ingressURL + config.RouteHealth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("healthz during a dependency failure = %d, want 200", resp.StatusCode)
 	}
 }
 
