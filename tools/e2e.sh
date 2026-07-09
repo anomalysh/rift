@@ -293,7 +293,7 @@ run_mode() {
 	export RIFT_ACME_CA_PROFILE="public" RIFT_ACME_CA_URL="" RIFT_ACME_CA_ROOT=""
 	export RIFT_ACME_DNS_PROVIDER=""
 	export RIFT_E2E_TSIG_NAME="" RIFT_E2E_TSIG_ALG="" RIFT_E2E_TSIG_KEY=""
-	export RIFT_E2E_ACME_RESOLVERS=""
+	export RIFT_E2E_ACME_RESOLVERS="" RIFT_E2E_ACME_RESOLVERS_PROFILE=""
 	export RIFT_E2E_REDIS_ENABLED="false" RIFT_E2E_PEER_SECRET="$PEER_SECRET"
 	unset RIFT_CADDY_IMAGE || true
 	export COMPOSE_PROFILES=""
@@ -325,6 +325,7 @@ run_mode() {
 			# at BIND. rift.localtest resolves nowhere else, exactly as an
 			# operator's internal-only view would not resolve their zone.
 			export RIFT_E2E_ACME_RESOLVERS="${RIFT_E2E_BIND_IP:-10.77.53.11}"
+			export RIFT_E2E_ACME_RESOLVERS_PROFILE="custom"
 		fi
 		;;
 	*) die "mode $mode is not supported by this harness (see --help)" ;;
