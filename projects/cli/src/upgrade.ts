@@ -67,10 +67,27 @@ export class UpgradeStream implements Stream {
   }
 
   private async connect(): Promise<void> {
+    const { host, port, tls } = this.deps.target;
     try {
       await Bun.connect({
-        hostname: this.deps.target.host,
-        port: this.deps.target.port,
+        hostname: host,
+        port,
+        // An https tunnel dials its local upgrade target over TLS, so a replayed
+        // HTTP/1.1 upgrade becomes wss to a local HTTPS server. ALPN is left at
+        // its default (no h2 advertised) because a connection upgrade requires
+        // HTTP/1.1. A self-signed dev cert skips verification when asked
+        // (target.insecure); SNI defaults to the target host. The key is spread
+        // in only when TLS is wanted: `tls?` excludes undefined under
+        // exactOptionalPropertyTypes, so an explicit `tls: undefined` is a type
+        // error, and a plain (non-https) tunnel wants no TLS at all.
+        ...(tls === true
+          ? {
+              tls: {
+                rejectUnauthorized: this.deps.target.insecure !== true,
+                serverName: this.deps.target.serverName ?? host,
+              },
+            }
+          : {}),
         socket: {
           open: (sock) => this.onOpen(sock),
           data: (_sock, data) => this.onData(data),

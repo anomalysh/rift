@@ -94,6 +94,16 @@ describe("precedence: flag > env > file > default", () => {
       resolve({ flags: { token: "t", server: "s", insecure: true } }).insecure,
     ).toBe(true);
   });
+
+  test("upstreamInsecure comes from flags and defaults to false", () => {
+    expect(
+      resolve({ flags: { token: "t", server: "s" } }).upstreamInsecure,
+    ).toBe(false);
+    expect(
+      resolve({ flags: { token: "t", server: "s", upstreamInsecure: true } })
+        .upstreamInsecure,
+    ).toBe(true);
+  });
 });
 
 describe("missing required settings", () => {

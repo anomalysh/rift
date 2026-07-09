@@ -33,6 +33,12 @@ export interface FrameSink {
 export interface ForwardTarget {
   readonly host: string;
   readonly port: number;
+  /** Dial the local upstream over TLS (an `https` tunnel). */
+  readonly tls?: boolean;
+  /** Skip certificate verification on that TLS dial (self-signed upstream). */
+  readonly insecure?: boolean;
+  /** SNI to present; defaults to the target host. */
+  readonly serverName?: string;
 }
 
 /**
@@ -60,10 +66,12 @@ export interface RequestStreamDeps {
 
 // The Fetch standard requires `duplex: "half"` when the request body is a
 // stream; the ambient RequestInit type does not declare it. `decompress` is a
-// Bun extension (see run() for why it is forced off).
+// Bun extension (see run() for why it is forced off); `tls` is another, used to
+// dial an HTTPS upstream (see run() when target.tls).
 interface FetchInit extends RequestInit {
   duplex?: "half";
   decompress?: boolean;
+  tls?: BunFetchRequestInitTLS;
 }
 
 function isHopByHop(name: string): boolean {
@@ -180,7 +188,9 @@ export class RequestStream implements Stream {
   }
 
   private async run(): Promise<void> {
-    const url = `http://${this.deps.target.host}:${this.deps.target.port}${this.head.path}`;
+    const { host, port, tls } = this.deps.target;
+    const scheme = tls === true ? "https" : "http";
+    const url = `${scheme}://${host}:${port}${this.head.path}`;
     const headers = buildRequestHeaders(this.head.headers);
     const init: FetchInit = {
       method: this.head.method,
@@ -197,6 +207,16 @@ export class RequestStream implements Stream {
       // real client asked it to -- exactly what a transparent proxy must do.
       decompress: false,
     };
+    if (tls === true) {
+      // Dial the local upstream over TLS. A dev HTTPS server is typically
+      // self-signed, so verification is skipped when asked (target.insecure);
+      // SNI defaults to the target host. A handshake or verify failure surfaces
+      // as the same upstream-error RESET as a refused dial (the catch below).
+      init.tls = {
+        rejectUnauthorized: this.deps.target.insecure !== true,
+        serverName: this.deps.target.serverName ?? host,
+      };
+    }
     if (this.bodyStream !== null) {
       init.body = this.bodyStream;
       init.duplex = "half";

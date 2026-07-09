@@ -37,6 +37,7 @@ export interface ResolvedConfig {
   readonly host: string;
   readonly logLevel: LogLevel;
   readonly insecure: boolean;
+  readonly upstreamInsecure: boolean;
 }
 
 /** A subset of settings, as loaded from a config file. */
@@ -117,6 +118,7 @@ export function resolveConfig(input: ResolveInput): ResolvedConfig {
     host,
     logLevel,
     insecure: flags.insecure ?? false,
+    upstreamInsecure: flags.upstreamInsecure ?? false,
   };
 }
 

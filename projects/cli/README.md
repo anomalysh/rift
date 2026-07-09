@@ -95,9 +95,13 @@ rift <protocol> <port> [subdomain] [flags]
 
 rift http 3000               # tunnel localhost:3000 with a random subdomain
 rift http 3000 myapp         # request the subdomain "myapp"
+rift https 8443              # tunnel a local HTTPS server (self-signed ok)
+rift tcp 5432                # forward a raw TCP port (e.g. Postgres)
 ```
 
-Only `http` is supported today. The port must be an integer in `1..65535`.
+The protocol is `http`, `https`, `tcp`, or `tls`. `https` is an `http` tunnel
+whose agent dials the local service over TLS — the public URL is still HTTPS.
+The port must be an integer in `1..65535`.
 
 The tunnel URL banner is printed to **stdout**; all diagnostics go to **stderr**,
 so `rift http 3000 | …` yields just the URL line.
@@ -111,6 +115,7 @@ so `rift http 3000 | …` yields just the URL line.
 | `--host <host>`   | local host to forward to (default `127.0.0.1`)      |
 | `--log-level <l>` | `debug` \| `info` \| `warn` \| `error` \| `silent`  |
 | `--insecure`      | skip TLS certificate verification (`wss` only)      |
+| `--upstream-insecure` | skip verification of the local HTTPS upstream's certificate |
 | `--version`, `-v` | print version and exit                              |
 | `--help`, `-h`    | print help and exit                                 |
 

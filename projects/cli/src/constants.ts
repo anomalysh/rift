@@ -98,10 +98,28 @@ export const ResetCode = {
 export type ResetCodeValue = (typeof ResetCode)[keyof typeof ResetCode];
 
 /** Application protocols this build tunnels. `http` is routed by subdomain;
- *  `tcp` is reached on a gateway-allocated port; `tls` is SNI-routed and passed
- *  through to a local service that terminates TLS. */
-export const SUPPORTED_PROTOCOLS = ["http", "tcp", "tls"] as const;
+ *  `https` forwards to a local HTTPS upstream (the edge still terminates TLS,
+ *  so it is `http` on the wire); `tcp` is reached on a gateway-allocated port;
+ *  `tls` is SNI-routed and passed through to a local service that terminates
+ *  TLS. */
+export const SUPPORTED_PROTOCOLS = ["http", "https", "tcp", "tls"] as const;
 export type SupportedProtocol = (typeof SUPPORTED_PROTOCOLS)[number];
+
+/** How each CLI protocol keyword is dialed: the value it carries on the wire and
+ *  whether the agent dials its local upstream over TLS. The keyword is a local
+ *  convenience — `https` and `http` are the same `http` tunnel to the gateway
+ *  (see docs/PROTOCOL.md), differing only in the upstream scheme — so deriving
+ *  both facts here keeps the wire value and the TLS intent from ever being
+ *  spelled inline. */
+export const PROTOCOL_DIALER = {
+  http: { wire: "http", upstreamTls: false },
+  https: { wire: "http", upstreamTls: true },
+  tcp: { wire: "tcp", upstreamTls: false },
+  tls: { wire: "tls", upstreamTls: false },
+} as const satisfies Record<
+  SupportedProtocol,
+  { wire: string; upstreamTls: boolean }
+>;
 
 /** Shells for which `rift completions <shell>` can emit a completion script. */
 export const COMPLETION_SHELLS = ["bash", "zsh", "fish"] as const;

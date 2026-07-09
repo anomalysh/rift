@@ -50,6 +50,15 @@ describe("valid invocations", () => {
     }
   });
 
+  test("--upstream-insecure is a boolean flag on the run form", () => {
+    const parsed = parseArgs(["https", "8443", "--upstream-insecure"]);
+    expect(parsed.kind).toBe("run");
+    if (parsed.kind === "run") {
+      expect(parsed.protocol).toBe("https");
+      expect(parsed.flags.upstreamInsecure).toBe(true);
+    }
+  });
+
   test("flags in --flag=value form", () => {
     const parsed = parseArgs([
       "http",
@@ -116,8 +125,8 @@ describe("bad protocol", () => {
     }
   });
 
-  test("accepts tcp and tls", () => {
-    for (const proto of ["tcp", "tls"] as const) {
+  test("accepts https, tcp and tls", () => {
+    for (const proto of ["https", "tcp", "tls"] as const) {
       const parsed = parseArgs([proto, "3000"]);
       expect(parsed.kind).toBe("run");
       if (parsed.kind === "run") {

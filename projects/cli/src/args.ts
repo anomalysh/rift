@@ -22,6 +22,7 @@ export interface FlagConfig {
   host?: string;
   logLevel?: LogLevel;
   insecure?: boolean;
+  upstreamInsecure?: boolean;
 }
 
 export type ParsedArgs =
@@ -92,6 +93,10 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     }
     if (arg === "--insecure") {
       flags.insecure = true;
+      continue;
+    }
+    if (arg === "--upstream-insecure") {
+      flags.upstreamInsecure = true;
       continue;
     }
 

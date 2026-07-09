@@ -99,22 +99,27 @@ $ ./projects/cli/dist/rift http 3000 demo --token rift_... --server ws://127.0.0
 $ curl -H 'Host: demo.rift.localtest' http://127.0.0.1:8080/
 ```
 
+Pick the protocol to match the local service: `rift http 3000` for a plain HTTP
+server, `rift https 8443` for one that only speaks HTTPS (self-signed is fine on
+loopback), `rift tcp 5432` for a raw TCP port, and `rift tls 8443` for a service
+that terminates its own TLS. Only the local dial differs — the public edge is
+always HTTPS.
+
 `make help` lists the rest. `make build-cli` builds the CLI inside Docker
 instead, if you would rather not install Bun.
 
 Run the tests:
 
 ```console
-$ cd projects/server && go test ./...          # postgres tests skip without a database
-$ cd projects/cli && bun test
-$ make e2e                            # the whole stack in Docker, over real TLS
+$ mise run ci                         # lint, type-check, build, test — both projects
+$ mise run e2e                        # the whole stack in Docker, over real TLS
 ```
 
 The Postgres store tests run against a real database when you point
-`RIFT_TEST_POSTGRES_DSN` at one, and skip otherwise, so `go test ./...` stays
+`RIFT_TEST_POSTGRES_DSN` at one, and skip otherwise, so the server tests stay
 green on a laptop with nothing installed.
 
-`make e2e` is the black-box suite: it brings up Postgres, riftd, and a real Caddy
+`mise run e2e` is the black-box suite: it brings up Postgres, riftd, and a real Caddy
 using the production Caddyfile, then drives it with the compiled CLI over HTTPS,
 validating the certificate chain with no `-k` anywhere. It runs the `internal`
 and `self` TLS modes, and it is hermetic — nothing reaches the internet. Both

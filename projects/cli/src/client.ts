@@ -15,11 +15,13 @@ import {
   ControlType,
   FrameType,
   HelloErrorCode,
+  PROTOCOL_DIALER,
   PROTOCOL_VERSION,
   RECONNECT,
   ResetCode,
   ShutdownReason,
   SUBPROTOCOL,
+  type SupportedProtocol,
   VERSION,
 } from "./constants.ts";
 import { type FrameSink, RequestStream, type Stream } from "./forwarder.ts";
@@ -47,7 +49,7 @@ import { UpgradeStream } from "./upgrade.ts";
 
 export interface ClientOptions {
   readonly config: ResolvedConfig;
-  readonly protocol: string;
+  readonly protocol: SupportedProtocol;
   readonly port: number;
   readonly subdomain?: string;
   readonly logger: Logger;
@@ -61,11 +63,22 @@ export class ClientError extends Error {
   }
 }
 
+/** Hosts treated as loopback for the upstream-TLS verification default. */
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
+  "127.0.0.1",
+  "::1",
+  "localhost",
+]);
+
+function isLoopbackHost(host: string): boolean {
+  return LOOPBACK_HOSTS.has(host.toLowerCase());
+}
+
 export class TunnelClient {
   private readonly config: ResolvedConfig;
   private readonly logger: Logger;
   private readonly port: number;
-  private readonly protocol: string;
+  private readonly protocol: SupportedProtocol;
   /** Subdomain to request; updated to the gateway-assigned one after hello_ok. */
   private subdomain: string | undefined;
   /** Whether the user asked for a specific subdomain (vs. an auto-generated one). */
@@ -191,7 +204,10 @@ export class TunnelClient {
     const hello: Hello = {
       protocol_version: PROTOCOL_VERSION,
       token: this.config.token,
-      protocol: this.protocol,
+      // Send the wire protocol, not the CLI keyword: an `https` tunnel is an
+      // `http` tunnel to the gateway, differing only in the local upstream
+      // scheme (see PROTOCOL_DIALER). this.protocol is kept for local display.
+      protocol: PROTOCOL_DIALER[this.protocol].wire,
     };
     if (this.subdomain !== undefined) {
       hello.subdomain = this.subdomain;
@@ -297,9 +313,12 @@ export class TunnelClient {
       ok.bind_addr !== undefined
         ? `${this.protocol}://${ok.bind_addr}`
         : ok.url;
+    // http and https both proxy HTTP over the tunnel; the scheme shown reflects
+    // the local upstream, so https reads `https://host:port`. A raw tunnel
+    // (tcp/tls) has no scheme and is shown as a bare host:port.
     const localAddr =
-      this.protocol === "http"
-        ? `http://${this.config.host}:${this.port}`
+      this.protocol === "http" || this.protocol === "https"
+        ? `${this.protocol}://${this.config.host}:${this.port}`
         : `${this.config.host}:${this.port}`;
     if (!this.established) {
       this.established = true;
@@ -336,6 +355,18 @@ export class TunnelClient {
     } catch {
       return this.config.server;
     }
+  }
+
+  /**
+   * Whether to skip certificate verification when dialing a local HTTPS
+   * upstream. The explicit flag forces it; otherwise a loopback upstream is
+   * trusted without verification (a self-signed cert is the norm for a local
+   * dev server), while a non-loopback upstream is verified against a real cert.
+   * This is entirely separate from config.insecure, which governs the gateway
+   * wss connection only.
+   */
+  private resolveUpstreamInsecure(): boolean {
+    return this.config.upstreamInsecure || isLoopbackHost(this.config.host);
   }
 
   private handleHelloError(payload: unknown): void {
@@ -415,7 +446,14 @@ export class TunnelClient {
     }
     this.totalRequests++;
     const deps = {
-      target: { host: this.config.host, port: this.port },
+      target: {
+        host: this.config.host,
+        port: this.port,
+        // `https` dials the local upstream over TLS; `http` (and raw tunnels)
+        // do not. See resolveUpstreamInsecure for the verification policy.
+        tls: PROTOCOL_DIALER[this.protocol].upstreamTls,
+        insecure: this.resolveUpstreamInsecure(),
+      },
       sink: this.sink,
       logger: this.logger,
       onDone: (id: bigint) => {

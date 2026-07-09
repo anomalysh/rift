@@ -139,6 +139,11 @@ export const CLI_SPEC: CliSpec = {
       blurb:
         "forward HTTP requests; the gateway routes by subdomain and terminates TLS",
     },
+    {
+      name: "https",
+      blurb:
+        "forward HTTP to a local HTTPS upstream; the gateway still terminates edge TLS",
+    },
     { name: "tcp", blurb: "forward a raw TCP stream to the local port" },
     {
       name: "tls",
@@ -205,6 +210,12 @@ export const CLI_SPEC: CliSpec = {
       kind: "run",
     },
     {
+      long: "--upstream-insecure",
+      takesValue: false,
+      help: "skip verification of the local HTTPS upstream's certificate",
+      kind: "run",
+    },
+    {
       long: "--set-token",
       takesValue: true,
       placeholder: "token",
@@ -251,6 +262,10 @@ export const CLI_SPEC: CliSpec = {
   examples: [
     { cmd: "rift http 3000", desc: "open a tunnel with a random subdomain" },
     { cmd: "rift http 3000 myapp", desc: 'request the subdomain "myapp"' },
+    {
+      cmd: "rift https 8443",
+      desc: "tunnel a local HTTPS server (self-signed ok)",
+    },
     { cmd: "rift tcp 5432", desc: "forward a raw TCP port (e.g. Postgres)" },
     {
       cmd: "rift --set-server wss://gw.example.com",

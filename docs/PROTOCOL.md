@@ -86,6 +86,12 @@ data frame before it has replied to `hello`.
 
 * `subdomain` is optional. When empty the gateway allocates a random one.
 * `local_port` is informational; it is never used for routing.
+* `protocol` is the wire protocol (`http`, `tcp`, or `tls`). Whether the agent
+  dials its local upstream over plain HTTP or HTTPS is an **agent-local** choice
+  (the CLI's `http` vs `https` keyword) that never appears on the wire:
+  `hello.protocol` is `"http"` for both and `RequestHead.scheme` stays the public
+  scheme, so an `https` tunnel is byte-identical to a plain `http` one and needs
+  no `PROTOCOL_VERSION` bump.
 
 ### `hello_ok` — gateway → agent
 

@@ -12,13 +12,14 @@ import {
 
 // The whole point of generating docs from the spec is that they can never omit
 // a real part of the CLI surface. These assert the current surface is covered.
-const PROTOCOLS = ["http", "tcp", "tls"];
+const PROTOCOLS = ["http", "https", "tcp", "tls"];
 const FLAGS = [
   "--token",
   "--server",
   "--host",
   "--log-level",
   "--insecure",
+  "--upstream-insecure",
   "--set-token",
   "--set-server",
   "--set-host",
@@ -60,7 +61,7 @@ describe("shell completions", () => {
   test("zsh is a compdef with the protocols", () => {
     const zsh = renderZshCompletion();
     expect(zsh).toContain("#compdef rift");
-    expect(zsh).toContain("http tcp tls");
+    expect(zsh).toContain("http https tcp tls");
   });
 
   test("fish registers per-flag completions", () => {
