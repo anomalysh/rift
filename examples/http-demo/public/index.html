@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>rift demo</title>
+    <style>
+      :root {
+        --bg: #0b0f17;
+        --panel: #121826;
+        --border: #1f2937;
+        --text: #e5e7eb;
+        --muted: #94a3b8;
+        --accent: #7c9cff;
+        --good: #34d399;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font: 15px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+        color: var(--text);
+        background: radial-gradient(1200px 600px at 50% -10%, #1a2440 0%, var(--bg) 60%);
+        display: grid;
+        place-items: center;
+        padding: 2rem 1rem;
+      }
+      main { width: 100%; max-width: 720px; }
+      .brand { display: flex; align-items: baseline; gap: 0.6rem; margin-bottom: 0.25rem; }
+      .brand h1 { margin: 0; font-size: 2.4rem; letter-spacing: -0.03em; }
+      .brand .bolt { color: var(--accent); }
+      .tag { color: var(--muted); margin: 0 0 1.5rem; }
+      .status {
+        display: inline-flex; align-items: center; gap: 0.5rem;
+        color: var(--good); font-weight: 600; margin-bottom: 1.5rem;
+      }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--good);
+        box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6); animation: pulse 2s infinite; }
+      @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5); }
+        70% { box-shadow: 0 0 0 10px rgba(52, 211, 153, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+      }
+      .card {
+        background: var(--panel); border: 1px solid var(--border);
+        border-radius: 14px; padding: 1.25rem 1.4rem; margin-bottom: 1.1rem;
+      }
+      .card h2 { margin: 0 0 0.9rem; font-size: 0.8rem; text-transform: uppercase;
+        letter-spacing: 0.12em; color: var(--muted); }
+      dl { display: grid; grid-template-columns: 9.5rem 1fr; gap: 0.4rem 1rem; margin: 0; }
+      dt { color: var(--muted); }
+      dd { margin: 0; word-break: break-all; }
+      .clock { font-size: 1.6rem; letter-spacing: 0.02em; }
+      form { display: flex; gap: 0.6rem; margin-top: 0.2rem; }
+      input {
+        flex: 1; background: #0b1220; border: 1px solid var(--border); color: var(--text);
+        border-radius: 9px; padding: 0.6rem 0.8rem; font: inherit;
+      }
+      input:focus { outline: 2px solid var(--accent); outline-offset: 0; }
+      button {
+        background: var(--accent); color: #0b0f17; border: 0; font: inherit; font-weight: 700;
+        border-radius: 9px; padding: 0.6rem 1.1rem; cursor: pointer;
+      }
+      button:hover { filter: brightness(1.08); }
+      pre { margin: 0.9rem 0 0; background: #0b1220; border: 1px solid var(--border);
+        border-radius: 9px; padding: 0.8rem; overflow-x: auto; color: var(--muted); min-height: 1rem; }
+      footer { color: var(--muted); font-size: 0.85rem; text-align: center; margin-top: 0.5rem; }
+      a { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="brand"><h1>rift<span class="bolt">.</span></h1></div>
+      <p class="tag">A self-hosted ngrok. This page is being served from your laptop.</p>
+      <div class="status"><span class="dot"></span><span id="reached">served locally</span></div>
+
+      <section class="card">
+        <h2>How this request reached the server</h2>
+        <dl>
+          <dt>Host</dt><dd id="host">…</dd>
+          <dt>X-Forwarded-Proto</dt><dd id="proto">…</dd>
+          <dt>X-Forwarded-For</dt><dd id="ff">…</dd>
+          <dt>User-Agent</dt><dd id="ua">…</dd>
+        </dl>
+      </section>
+
+      <section class="card">
+        <h2>Live server clock</h2>
+        <div class="clock" id="clock">…</div>
+      </section>
+
+      <section class="card">
+        <h2>Echo — round-trip through the tunnel</h2>
+        <form id="echo-form">
+          <input id="echo-input" placeholder="type something and press send" autocomplete="off" />
+          <button type="submit">send</button>
+        </form>
+        <pre id="echo-out"></pre>
+      </section>
+
+      <footer>Served by <code>examples/http-demo</code>. Tunnel it with <code>rift http 3000 demo</code>.</footer>
+    </main>
+
+    <script type="module">
+      const $ = (id) => document.getElementById(id);
+
+      // Show the request as the server saw it (the X-Forwarded-* headers rift
+      // and Caddy add prove it came through the tunnel).
+      const info = await fetch("/api/info").then((r) => r.json());
+      $("host").textContent = info.host ?? "—";
+      $("proto").textContent = info.forwardedProto ?? "— (direct, not tunneled)";
+      $("ff").textContent = info.forwardedFor ?? "—";
+      $("ua").textContent = info.userAgent ?? "—";
+      if (info.forwardedProto === "https") {
+        $("reached").textContent = "reached through a rift tunnel (HTTPS at the edge)";
+      }
+
+      // Live clock straight from the origin server.
+      async function tick() {
+        try {
+          const { now } = await fetch("/api/time").then((r) => r.json());
+          $("clock").textContent = new Date(now).toLocaleTimeString();
+        } catch {
+          $("clock").textContent = "— offline —";
+        }
+      }
+      tick();
+      setInterval(tick, 1000);
+
+      // Echo round-trip.
+      $("echo-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const text = $("echo-input").value;
+        const res = await fetch("/api/echo", { method: "POST", body: text }).then((r) => r.json());
+        $("echo-out").textContent = JSON.stringify(res, null, 2);
+      });
+    </script>
+  </body>
+</html>

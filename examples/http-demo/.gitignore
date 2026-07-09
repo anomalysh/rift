@@ -1,0 +1,9 @@
+# dependencies (bun install) — this demo has none, but keep it out just in case
+node_modules
+
+# logs
+*.log
+
+# env
+.env
+.env.local

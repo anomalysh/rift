@@ -1,0 +1,9 @@
+# dependencies (bun install)
+node_modules
+
+# logs
+*.log
+
+# env
+.env
+.env.local
