@@ -58,6 +58,11 @@ const (
 	KeyHeartbeatInterval   = EnvPrefix + "HEARTBEAT_INTERVAL"
 	KeyHeartbeatTimeout    = EnvPrefix + "HEARTBEAT_TIMEOUT"
 	KeyReaperInterval      = EnvPrefix + "REAPER_INTERVAL"
+	// KeyTokenRevalidateInterval controls how often a live tunnel re-checks
+	// that its token is still valid, so revoking a token tears down the
+	// tunnels it opened instead of only blocking new ones.
+	KeyTokenRevalidateInterval = EnvPrefix + "TOKEN_REVALIDATE_INTERVAL"
+
 	KeyRequestTimeout      = EnvPrefix + "REQUEST_TIMEOUT"
 	KeyMaxRequestBodyBytes = EnvPrefix + "MAX_REQUEST_BODY_BYTES"
 	KeyMaxTunnelsPerToken  = EnvPrefix + "MAX_TUNNELS_PER_TOKEN"

@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	"github.com/siliconcolony/tunl/server/internal/ingress"
 	"github.com/siliconcolony/tunl/server/internal/registry"
 	"github.com/siliconcolony/tunl/server/internal/store/memory"
+	"github.com/siliconcolony/tunl/server/internal/tunnelproto"
 )
 
 const testBaseDomain = "tunl.example.test"
@@ -31,11 +34,37 @@ const testBaseDomain = "tunl.example.test"
 type stack struct {
 	cfg        *config.Config
 	store      *memory.Store
+	tokens     *flakyTokens
 	gatewayWS  string
 	ingressURL string
 	client     *http.Client
 	token      string
 	tokenID    string
+}
+
+// flakyTokens wraps a TokenStore so a test can make FindByID fail, simulating
+// a database outage during token revalidation.
+type flakyTokens struct {
+	core.TokenStore
+
+	mu  sync.Mutex
+	err error
+}
+
+func (f *flakyTokens) failFindByID(err error) {
+	f.mu.Lock()
+	f.err = err
+	f.mu.Unlock()
+}
+
+func (f *flakyTokens) FindByID(ctx context.Context, id string) (*core.Token, error) {
+	f.mu.Lock()
+	err := f.err
+	f.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return f.TokenStore.FindByID(ctx, id)
 }
 
 func unmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
@@ -58,14 +87,15 @@ func newStack(t *testing.T, tune func(*config.Config)) *stack {
 			WriteTimeout:     5 * time.Second,
 		},
 		Tunnel: config.Tunnel{
-			BaseDomain:          testBaseDomain,
-			PublicScheme:        config.SchemeHTTPS,
-			HeartbeatInterval:   50 * time.Millisecond,
-			HeartbeatTimeout:    2 * time.Second,
-			RequestTimeout:      5 * time.Second,
-			MaxRequestBodyBytes: 1 << 20,
-			MaxTunnelsPerToken:  5,
-			StreamBufferSize:    8,
+			BaseDomain:              testBaseDomain,
+			PublicScheme:            config.SchemeHTTPS,
+			HeartbeatInterval:       50 * time.Millisecond,
+			HeartbeatTimeout:        2 * time.Second,
+			TokenRevalidateInterval: 50 * time.Millisecond,
+			RequestTimeout:          5 * time.Second,
+			MaxRequestBodyBytes:     1 << 20,
+			MaxTunnelsPerToken:      5,
+			StreamBufferSize:        8,
 		},
 		SubdomainRules: rules,
 	}
@@ -93,8 +123,10 @@ func newStack(t *testing.T, tune func(*config.Config)) *stack {
 		t.Fatalf("create token: %v", err)
 	}
 
+	tokens := &flakyTokens{TokenStore: store.Tokens()}
+
 	reg := registry.NewLocal()
-	gw := gateway.New(cfg, logger, store.Tokens(), store.Reservations(), store.Tunnels(), reg)
+	gw := gateway.New(cfg, logger, tokens, store.Reservations(), store.Tunnels(), reg)
 	ing := ingress.New(cfg, logger, reg, store.Tunnels(), store.Reservations())
 
 	gwMux := http.NewServeMux()
@@ -111,6 +143,7 @@ func newStack(t *testing.T, tune func(*config.Config)) *stack {
 	return &stack{
 		cfg:        cfg,
 		store:      store,
+		tokens:     tokens,
 		gatewayWS:  "ws" + strings.TrimPrefix(gwSrv.URL, "http") + cfg.Gateway.Path,
 		ingressURL: ingSrv.URL,
 		client:     ingSrv.Client(),
@@ -500,6 +533,116 @@ func TestTLSAskAuthorizesOnlyLiveOrReservedSubdomains(t *testing.T) {
 		if resp.StatusCode != tc.want {
 			t.Errorf("tls-ask %q = %d, want %d", tc.domain, resp.StatusCode, tc.want)
 		}
+	}
+}
+
+// Revoking a token must terminate the tunnels it already opened. Blocking
+// only new connections would leave a compromised token serving traffic until
+// its agent happened to disconnect.
+func TestRevokingATokenClosesItsLiveTunnels(t *testing.T) {
+	s := newStack(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	a, err := dialAgent(t, ctx, s.gatewayWS, s.token, "doomed", textHandler("alive"))
+	if err != nil {
+		t.Fatalf("dial agent: %v", err)
+	}
+	defer a.close()
+
+	resp := s.do(t, http.MethodGet, "doomed", "/", nil)
+	body := readAll(t, resp.Body)
+	resp.Body.Close()
+	if body != "alive" {
+		t.Fatalf("tunnel did not serve before revocation: %q", body)
+	}
+
+	if err := s.store.Tokens().Revoke(ctx, s.tokenID, time.Now()); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	select {
+	case <-a.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("tunnel kept serving after its token was revoked")
+	}
+	if got := a.shutdownReason(); got != tunnelproto.ShutdownTokenRevoked {
+		t.Fatalf("shutdown reason = %q, want %q", got, tunnelproto.ShutdownTokenRevoked)
+	}
+
+	// Routing must drop the tunnel too, not just close the socket.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		r := s.do(t, http.MethodGet, "doomed", "/", nil)
+		code := r.StatusCode
+		r.Body.Close()
+		if code == http.StatusNotFound {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("subdomain still routable after revocation (status %d)", code)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// An expired token is as dead as a revoked one.
+func TestExpiredTokenClosesItsLiveTunnels(t *testing.T) {
+	s := newStack(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	expiring := core.MustNewID(time.Now())
+	const secret = "tunl_expiringtokensecretvalue00000"
+	future := time.Now().Add(700 * time.Millisecond)
+	if err := s.store.Tokens().Create(ctx, &core.Token{
+		ID: expiring, Name: "expiring", TokenHash: auth.HashToken(secret),
+		MaxTunnels: 2, CreatedAt: time.Now(), ExpiresAt: &future,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err := dialAgent(t, ctx, s.gatewayWS, secret, "ttl", textHandler("alive"))
+	if err != nil {
+		t.Fatalf("dial agent: %v", err)
+	}
+	defer a.close()
+
+	select {
+	case <-a.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("tunnel kept serving after its token expired")
+	}
+	if got := a.shutdownReason(); got != tunnelproto.ShutdownTokenRevoked {
+		t.Fatalf("shutdown reason = %q, want %q", got, tunnelproto.ShutdownTokenRevoked)
+	}
+}
+
+// A store failure must not disconnect every live tunnel at once.
+func TestTokenRevalidationToleratesStoreFailure(t *testing.T) {
+	s := newStack(t, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	a, err := dialAgent(t, ctx, s.gatewayWS, s.token, "resilient", textHandler("alive"))
+	if err != nil {
+		t.Fatalf("dial agent: %v", err)
+	}
+	defer a.close()
+
+	s.tokens.failFindByID(errors.New("database is on fire"))
+
+	// Several revalidation ticks must pass without the tunnel dying.
+	select {
+	case <-a.done:
+		t.Fatal("a transient store failure tore down a healthy tunnel")
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	resp := s.do(t, http.MethodGet, "resilient", "/", nil)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200 while the store is failing", resp.StatusCode)
 	}
 }
 

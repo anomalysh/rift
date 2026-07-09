@@ -110,6 +110,9 @@ type Tunnel struct {
 	HeartbeatInterval time.Duration
 	HeartbeatTimeout  time.Duration
 	ReaperInterval    time.Duration
+	// TokenRevalidateInterval bounds how long a revoked token's existing
+	// tunnels keep serving before the gateway closes them.
+	TokenRevalidateInterval time.Duration
 
 	RequestTimeout      time.Duration
 	MaxRequestBodyBytes int64
@@ -173,9 +176,10 @@ func Load() (*Config, error) {
 			PublicScheme: l.str(KeyPublicScheme, DefaultPublicScheme),
 			AdvertiseURL: l.str(KeyNodeAdvertiseURL, ""),
 
-			HeartbeatInterval: l.duration(KeyHeartbeatInterval, DefaultHeartbeatInterval),
-			HeartbeatTimeout:  l.duration(KeyHeartbeatTimeout, DefaultHeartbeatTimeout),
-			ReaperInterval:    l.duration(KeyReaperInterval, DefaultReaperInterval),
+			HeartbeatInterval:       l.duration(KeyHeartbeatInterval, DefaultHeartbeatInterval),
+			HeartbeatTimeout:        l.duration(KeyHeartbeatTimeout, DefaultHeartbeatTimeout),
+			ReaperInterval:          l.duration(KeyReaperInterval, DefaultReaperInterval),
+			TokenRevalidateInterval: l.duration(KeyTokenRevalidateInterval, DefaultTokenRevalidateInterval),
 
 			RequestTimeout:      l.duration(KeyRequestTimeout, DefaultRequestTimeout),
 			MaxRequestBodyBytes: l.integer64(KeyMaxRequestBodyBytes, DefaultMaxRequestBodyBytes),

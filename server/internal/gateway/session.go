@@ -44,6 +44,7 @@ type session struct {
 	cfg     *config.Config
 	logger  *slog.Logger
 	tunnels core.TunnelStore
+	tokens  core.TokenStore
 
 	// out serialises frames onto the socket. A WebSocket connection permits
 	// exactly one concurrent writer, and a bounded queue turns a slow agent
@@ -74,13 +75,14 @@ type session struct {
 	wg sync.WaitGroup
 }
 
-func newSession(conn *websocket.Conn, t core.Tunnel, cfg *config.Config, tunnels core.TunnelStore, logger *slog.Logger) *session {
+func newSession(conn *websocket.Conn, t core.Tunnel, cfg *config.Config, tunnels core.TunnelStore, tokens core.TokenStore, logger *slog.Logger) *session {
 	s := &session{
 		conn:    conn,
 		tunnel:  t,
 		cfg:     cfg,
 		logger:  logger,
 		tunnels: tunnels,
+		tokens:  tokens,
 		out:     make(chan []byte, cfg.Tunnel.StreamBufferSize),
 		closing: make(chan struct{}),
 		closed:  make(chan struct{}),
@@ -104,6 +106,12 @@ func (s *session) Close(reason string) error {
 	return nil
 }
 
+// closeHandshakeGrace bounds the WebSocket close handshake. An agent that has
+// already stopped reading — which is exactly what a well-behaved agent does
+// after receiving our shutdown frame — will never send its own close frame,
+// and waiting for one would stall teardown.
+const closeHandshakeGrace = time.Second
+
 // teardown is called only by writeLoop. It sends the agent a final shutdown
 // frame explaining why, then closes the socket.
 func (s *session) teardown() {
@@ -119,10 +127,18 @@ func (s *session) teardown() {
 		}
 		cancel()
 
-		// Signal waiters before the close handshake, which may block on an
-		// unresponsive peer.
+		closed := make(chan struct{})
+		go func() {
+			_ = s.conn.Close(websocket.StatusNormalClosure, reason)
+			close(closed)
+		}()
+		select {
+		case <-closed:
+		case <-time.After(closeHandshakeGrace):
+			_ = s.conn.CloseNow()
+		}
+
 		close(s.closed)
-		_ = s.conn.Close(websocket.StatusNormalClosure, reason)
 	})
 }
 
@@ -351,8 +367,7 @@ func (s *session) handleControl(ctx context.Context, payload []byte) bool {
 		// here is how a node discovers another node claimed its subdomain.
 		if err := s.tunnels.Heartbeat(ctx, s.tunnel.ID, time.Now()); err != nil {
 			if errors.Is(err, core.ErrNotFound) {
-				s.logger.Info("tunnel no longer registered; closing",
-					slog.String("tunnel_id", s.tunnel.ID))
+				s.logger.Info("tunnel no longer registered; closing")
 				_ = s.Close(string(tunnelproto.ShutdownReplaced))
 				return false
 			}
@@ -374,12 +389,20 @@ func (s *session) handleControl(ctx context.Context, payload []byte) bool {
 	return true
 }
 
-// watchdog closes the session when heartbeats stop arriving.
+// watchdog closes the session when heartbeats stop arriving, and periodically
+// re-checks that the tunnel's token is still valid.
+//
+// Revocation must terminate the tunnels a token already opened, not merely
+// stop it from opening new ones. The check lives here rather than on the
+// heartbeat path so that an agent which stops sending pings cannot postpone
+// its own revocation.
 func (s *session) watchdog(ctx context.Context) {
 	defer s.wg.Done()
 
 	ticker := time.NewTicker(s.cfg.Tunnel.HeartbeatInterval)
 	defer ticker.Stop()
+
+	lastTokenCheck := time.Now()
 
 	for {
 		select {
@@ -388,16 +411,41 @@ func (s *session) watchdog(ctx context.Context) {
 		case <-s.closing:
 			return
 		case <-ticker.C:
+			// The session logger already carries tunnel_id and token_id.
 			last := time.Unix(0, s.lastSeenNanos.Load())
 			if time.Since(last) > s.cfg.Tunnel.HeartbeatTimeout {
 				s.logger.Info("tunnel heartbeat timed out; closing",
-					slog.String("tunnel_id", s.tunnel.ID),
 					slog.Duration("since_last_seen", time.Since(last)))
 				_ = s.Close(string(tunnelproto.ShutdownHeartbeatTimeout))
 				return
 			}
+
+			if time.Since(lastTokenCheck) < s.cfg.Tunnel.TokenRevalidateInterval {
+				continue
+			}
+			lastTokenCheck = time.Now()
+			if s.tokenRevoked(ctx) {
+				s.logger.Info("token is no longer valid; closing tunnel")
+				_ = s.Close(string(tunnelproto.ShutdownTokenRevoked))
+				return
+			}
 		}
 	}
+}
+
+// tokenRevoked reports whether the tunnel's token has been revoked, expired,
+// or deleted. A store failure is not treated as revocation: a database blip
+// must not disconnect every live tunnel at once.
+func (s *session) tokenRevoked(ctx context.Context) bool {
+	token, err := s.tokens.FindByID(ctx, s.tunnel.TokenID)
+	if errors.Is(err, core.ErrNotFound) {
+		return true
+	}
+	if err != nil {
+		s.logger.Warn("could not revalidate token", slog.Any("error", err))
+		return false
+	}
+	return !token.Active(time.Now())
 }
 
 // RoundTrip implements http.RoundTripper: it ships one public request through

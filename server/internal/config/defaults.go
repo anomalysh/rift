@@ -41,6 +41,10 @@ const (
 	DefaultHeartbeatTimeout = 45 * time.Second
 	DefaultReaperInterval   = 30 * time.Second
 
+	// A revoked token should stop serving traffic promptly, but re-reading it
+	// on every heartbeat would multiply database load by the tunnel count.
+	DefaultTokenRevalidateInterval = 30 * time.Second
+
 	DefaultRequestTimeout      = 60 * time.Second
 	DefaultMaxRequestBodyBytes = int64(32 << 20) // 32 MiB
 	DefaultMaxTunnelsPerToken  = 5

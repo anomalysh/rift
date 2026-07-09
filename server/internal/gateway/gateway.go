@@ -106,7 +106,7 @@ func (g *Gateway) serve(r *http.Request, conn *websocket.Conn) {
 		slog.String("subdomain", tunnel.Subdomain),
 		slog.String("token_id", token.ID),
 	)
-	sess := newSession(conn, *tunnel, g.cfg, g.tunnels, sessLogger)
+	sess := newSession(conn, *tunnel, g.cfg, g.tunnels, g.tokens, sessLogger)
 
 	// The session outlives the HTTP handler that created it.
 	runCtx, runCancel := context.WithCancel(context.WithoutCancel(r.Context()))
@@ -154,10 +154,15 @@ func (g *Gateway) serve(r *http.Request, conn *websocket.Conn) {
 	go sess.watchdog(runCtx)
 	go sess.readLoop(runCtx)
 
-	<-sess.closed
-	sess.wg.Wait()
+	// Stop routing as soon as teardown is *requested*, not once the socket has
+	// finished closing. An unresponsive agent can drag the close handshake out,
+	// and until the session leaves the registry its subdomain answers 502
+	// instead of 404 and cannot be reclaimed.
+	<-sess.closing
+	cleanupCtx := context.WithoutCancel(runCtx)
+	g.cleanupSession(cleanupCtx, sess)
 
-	g.cleanupSession(context.WithoutCancel(runCtx), sess)
+	sess.wg.Wait()
 	sessLogger.Info("tunnel closed", slog.String("reason", closeReasonOf(sess)))
 }
 

@@ -134,6 +134,12 @@ prove the agent's event loop is alive.
 Reasons: `server_shutdown`, `token_revoked`, `heartbeat_timeout`,
 `replaced` (same subdomain claimed by a newer connection).
 
+The gateway re-checks each tunnel's token every
+`TUNL_TOKEN_REVALIDATE_INTERVAL`. Revoking or expiring a token therefore
+tears down the tunnels it already opened, within that interval, rather than
+only preventing new ones. An agent that receives `token_revoked` must not
+reconnect.
+
 ## Request / response lifecycle
 
 For each inbound public HTTP request the gateway:

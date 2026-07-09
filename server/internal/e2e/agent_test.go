@@ -23,8 +23,9 @@ type testAgent struct {
 
 	writeMu sync.Mutex
 
-	mu      sync.Mutex
-	streams map[uint64]*agentStream
+	mu       sync.Mutex
+	streams  map[uint64]*agentStream
+	shutdown tunnelproto.ShutdownReason
 
 	hello tunnelproto.HelloOK
 	done  chan struct{}
@@ -89,6 +90,7 @@ func dialAgent(t *testing.T, ctx context.Context, gatewayURL, token, subdomain s
 			done:    make(chan struct{}),
 		}
 		go a.readLoop(h)
+		go a.heartbeat()
 		return a, nil
 
 	case tunnelproto.ControlHelloError:
@@ -113,6 +115,39 @@ func (e *handshakeRejection) Error() string { return string(e.code) + ": " + e.m
 
 func (a *testAgent) close() {
 	_ = a.conn.Close(websocket.StatusNormalClosure, "")
+}
+
+// shutdownReason returns the reason the gateway gave for closing, if any.
+func (a *testAgent) shutdownReason() tunnelproto.ShutdownReason {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.shutdown
+}
+
+// heartbeat pings on the interval the gateway asked for, as a real agent does.
+func (a *testAgent) heartbeat() {
+	interval := time.Duration(a.hello.HeartbeatIntervalMS) * time.Millisecond
+	if interval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-a.done:
+			return
+		case <-ticker.C:
+			frame, err := tunnelproto.EncodeControl(tunnelproto.ControlPing,
+				tunnelproto.Heartbeat{TS: time.Now().UnixMilli()})
+			if err != nil {
+				return
+			}
+			if err := a.write(frame); err != nil {
+				return
+			}
+		}
+	}
 }
 
 func (a *testAgent) write(frame []byte) error {
@@ -144,6 +179,12 @@ func (a *testAgent) readLoop(h http.Handler) {
 				return
 			}
 			if env.Type == tunnelproto.ControlShutdown {
+				var sd tunnelproto.Shutdown
+				if err := tunnelproto.UnmarshalPayload(env, &sd); err == nil {
+					a.mu.Lock()
+					a.shutdown = sd.Reason
+					a.mu.Unlock()
+				}
 				return
 			}
 
