@@ -1,0 +1,4 @@
+# Serve the certificate and key the operator mounted. Renewal is entirely the
+# operator's responsibility: Caddy will not fetch a replacement when this
+# expires, it will simply serve an expired certificate.
+tls {$RIFT_TLS_CERT_FILE} {$RIFT_TLS_KEY_FILE}

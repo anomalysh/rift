@@ -1,0 +1,5 @@
+# Linode. The token needs Domains: Read/Write.
+acme_dns linode {
+	api_token {$RIFT_DNS_API_TOKEN}
+	api_version {$RIFT_LINODE_API_VERSION}
+}

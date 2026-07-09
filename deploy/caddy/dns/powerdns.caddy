@@ -1,0 +1,7 @@
+# PowerDNS Authoritative HTTP API. The API key grants zone write access over
+# HTTP; prefer rfc2136 or acmedns if you can.
+acme_dns powerdns {
+	server_url {$RIFT_PDNS_SERVER_URL}
+	api_token {$RIFT_PDNS_API_TOKEN}
+	server_id {$RIFT_PDNS_SERVER_ID}
+}

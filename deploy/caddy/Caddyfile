@@ -1,26 +1,34 @@
-# rift production reverse proxy.
+# rift reverse proxy.
 #
-# Wildcard TLS via DNS-01 would need DNS-provider API credentials we do not
-# have, so certificates are issued ON DEMAND over HTTP-01 / TLS-ALPN. This only
-# works because the wildcard A/AAAA records already point every label under
-# RIFT_BASE_DOMAIN at this host, so ACME can validate each subdomain the first
-# time it is requested. Everything host/domain-specific comes from {$VAR}
-# placeholders (supplied by the caddy container's environment), never literals.
+# How certificates are obtained is chosen by RIFT_TLS_MODE, which selects a
+# pair of snippets under modes/:
+#
+#   dns01     one wildcard certificate via the DNS-01 challenge. Every
+#             subdomain is covered, so an unknown tunnel gets a readable 404
+#             over valid TLS. Needs a DNS provider (RIFT_ACME_DNS_PROVIDER)
+#             and a Caddy image built with that provider's plugin.
+#   http01    a certificate per hostname, minted on first contact via HTTP-01
+#             and gated by riftd's ask endpoint. No DNS credentials needed,
+#             but a hostname that never served a tunnel has no certificate and
+#             so cannot complete a handshake at all.
+#   self      a certificate and key the operator supplies.
+#   internal  Caddy's own CA. Nothing publicly trusted. Local dev and e2e.
+#
+# riftd validates RIFT_TLS_MODE at boot and refuses to start on a bad or
+# (in production) absent value, so this file can assume the mode is sane.
+#
+# Everything host-specific comes from {$VAR} placeholders supplied by the
+# container's environment. There are no literals here.
 {
-	# ACME account contact; Let's Encrypt uses it for expiry warnings.
+	# ACME account contact. Ignored by the self and internal modes.
 	email {$RIFT_ACME_EMAIL}
 
-	# On-demand TLS mints a certificate the first time an unrecognised SNI
-	# arrives. WITHOUT an `ask` endpoint this is an OPEN CERTIFICATE-ISSUANCE
-	# RELAY: anyone who points a hostname at this IP could make us request
-	# certificates on their behalf and exhaust our Let's Encrypt rate limit.
-	# `ask` is therefore MANDATORY. Caddy GETs this URL with `?domain=<sni>`
-	# appended (QueryParamDomain); riftd replies 200 to authorise issuance (the
-	# subdomain maps to a live tunnel) or non-200 to refuse. The path is the
-	# RouteTLSAsk constant from server/internal/config/keys.go.
-	on_demand_tls {
-		ask http://{$RIFT_UPSTREAM_HOST:riftd}:{$RIFT_INGRESS_PORT:8080}/internal/tls-ask
-	}
+	# Which certificate authority the ACME modes talk to. `public` is Let's
+	# Encrypt; `internal-ca` points at your own ACME server. Ignored by the
+	# self and internal modes, which never speak ACME.
+	import /etc/caddy/acme/{$RIFT_ACME_CA_PROFILE:public}.caddy
+
+	import /etc/caddy/modes/{$RIFT_TLS_MODE}.global.caddy
 
 	# Long-lived streams are the entire point of this service. Any non-zero
 	# read/write/idle timeout here would silently sever a WebSocket tunnel or a
@@ -36,54 +44,34 @@
 	}
 }
 
-# --- Public tunnel traffic: https://<subdomain>.RIFT_BASE_DOMAIN ------------
-*.{$RIFT_BASE_DOMAIN} {
-	tls {
-		on_demand
-	}
-
-	# NO Strict-Transport-Security on the wildcard. Each tunnel is an
-	# untrusted, user-controlled subdomain of RIFT_BASE_DOMAIN. An HSTS header
-	# served from one malicious tunnel (especially with includeSubDomains)
-	# would be cached by the browser against the PARENT domain and could brick
-	# unrelated sibling subdomains. HSTS belongs only on hostnames we fully
-	# control, never here.
-
-	reverse_proxy {$RIFT_UPSTREAM_HOST:riftd}:{$RIFT_INGRESS_PORT:8080}
+# The per-site half of the TLS mode. Imported by every site block below so that
+# no site can accidentally end up on a different certificate path than the
+# others -- which is exactly the bug that once left the gateway hostname with
+# no certificate at all.
+(rift_site_tls) {
+	import /etc/caddy/modes/{$RIFT_TLS_MODE}.site.caddy
 }
 
-# --- The base domain itself: https://RIFT_BASE_DOMAIN ------------------------
-# A wildcard certificate covers *.example.com but NOT example.com, and the
-# wildcard site block above does not match the apex either. Without this block
-# the apex has no certificate and anyone who trims a subdomain off a tunnel URL
-# gets a TLS error rather than an answer. riftd replies with a plain 404 saying
-# the host is not a tunnel, which is the truthful response.
-{$RIFT_BASE_DOMAIN} {
-	tls {
-		on_demand
-	}
+# --- Public tunnel traffic, and the base domain itself ----------------------
+#
+# The apex is served by the same block. A wildcard certificate covers
+# *.example.com but NOT example.com, and a `*.example.com` site block does not
+# match the apex either, so naming both here is what keeps the bare domain from
+# having no certificate. riftd answers it with a plain 404: it is not a tunnel.
+#
+# NO Strict-Transport-Security. Each tunnel is an untrusted, user-controlled
+# subdomain. An HSTS header served from one malicious tunnel (especially with
+# includeSubDomains) would be cached by the browser against the PARENT domain
+# and could brick unrelated sibling subdomains. HSTS belongs only on hostnames
+# we fully control, never here.
+*.{$RIFT_BASE_DOMAIN}, {$RIFT_BASE_DOMAIN} {
+	import rift_site_tls
 	reverse_proxy {$RIFT_UPSTREAM_HOST:riftd}:{$RIFT_INGRESS_PORT:8080}
 }
 
 # --- Agent gateway: wss://RIFT_GATEWAY_HOSTNAME -----------------------------
-# The CLI dials the gateway over TLS from the public internet.
 {$RIFT_GATEWAY_HOSTNAME} {
-	# on_demand is REQUIRED here, even though this is an exact-match site with
-	# a hostname we control, and omitting it silently yields NO CERTIFICATE AT
-	# ALL. RIFT_GATEWAY_HOSTNAME normally sits under RIFT_BASE_DOMAIN, so it is
-	# shadowed by the wildcard's on-demand automation policy. In that state
-	# Caddy skips obtaining a managed certificate at start-up, yet the
-	# handshake resolves the exact (non-on-demand) policy and so refuses to
-	# obtain one lazily either. The name falls between the two paths and every
-	# TLS connection fails with "no certificate available".
-	#
-	# Marking it on_demand puts it on one consistent path: riftd's `ask`
-	# endpoint authorises this exact hostname (RIFT_GATEWAY_HOSTNAME is read by
-	# the server for precisely that purpose), so the certificate is issued on
-	# the first dial and renewed normally thereafter.
-	tls {
-		on_demand
-	}
+	import rift_site_tls
 
 	# Caddy upgrades WebSockets automatically. flush_interval -1 disables
 	# response buffering so the upgrade and every subsequent frame stream
@@ -97,6 +85,6 @@
 # --- Admin API is deliberately NOT exposed ----------------------------------
 # riftd's admin listener (RIFT_ADMIN_ADDR, default :8082) manages tokens and
 # reservations. It is intentionally not proxied by any site block here, and its
-# port is never published on the host. Reach it only from the VPS itself or
+# port is never published on the host. Reach it only from the host itself or
 # over an SSH tunnel. Exposing it publicly would put token minting one weak
 # credential away from a full takeover.

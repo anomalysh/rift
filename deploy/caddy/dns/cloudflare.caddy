@@ -1,0 +1,2 @@
+# Cloudflare. The token needs Zone:DNS:Edit on the zone only.
+acme_dns cloudflare {$RIFT_DNS_API_TOKEN}

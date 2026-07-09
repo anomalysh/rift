@@ -1,0 +1,7 @@
+# A private ACME server: step-ca, Boulder, Vault, or Pebble in tests.
+#
+# acme_ca_root is the PEM that signs the ACME *server's own* HTTPS certificate.
+# Without it Caddy cannot even talk to the directory endpoint. It is not the
+# root that will sign your leaf certificates -- clients need that one too.
+acme_ca {$RIFT_ACME_CA_URL}
+acme_ca_root {$RIFT_ACME_CA_ROOT}

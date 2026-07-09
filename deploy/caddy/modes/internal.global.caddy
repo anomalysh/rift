@@ -1,0 +1,7 @@
+# Caddy signs everything with its own CA. Nothing here is publicly trusted:
+# clients must trust the root at /data/caddy/pki/authorities/local/root.crt.
+#
+# This mode issues a certificate for every configured site, including the
+# wildcard, so its routing behaviour matches dns01 exactly. That makes it a
+# faithful local stand-in for a wildcard deployment, with no ACME server.
+local_certs

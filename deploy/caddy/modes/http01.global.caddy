@@ -1,0 +1,13 @@
+# On-demand issuance over HTTP-01.
+#
+# On-demand TLS mints a certificate the first time an unrecognised SNI arrives.
+# WITHOUT an `ask` endpoint this is an OPEN CERTIFICATE-ISSUANCE RELAY: anyone
+# who points a hostname at this IP could make us request certificates on their
+# behalf and exhaust our ACME rate limit. `ask` is therefore MANDATORY.
+#
+# Caddy GETs this URL with `?domain=<sni>` appended (QueryParamDomain); riftd
+# replies 200 to authorise issuance and non-200 to refuse. The path is the
+# RouteTLSAsk constant from server/internal/config/keys.go.
+on_demand_tls {
+	ask http://{$RIFT_UPSTREAM_HOST:riftd}:{$RIFT_INGRESS_PORT:8080}/internal/tls-ask
+}

@@ -1,0 +1,10 @@
+# Every site is on-demand, including the gateway hostname and the apex.
+#
+# A site that omitted this while a sibling wildcard site had it would get NO
+# CERTIFICATE AT ALL: Caddy skips obtaining a managed certificate at start-up
+# for a name shadowed by an on-demand policy, yet resolves the exact,
+# non-on-demand policy at handshake and so refuses to obtain one lazily either.
+# One consistent path for every site is what avoids that gap.
+tls {
+	on_demand
+}

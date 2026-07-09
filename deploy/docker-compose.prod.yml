@@ -25,7 +25,10 @@ services:
       RIFT_INGRESS_TRUSTED_PROXY_IPS: ${RIFT_INGRESS_TRUSTED_PROXY_IPS:-}
 
   caddy:
-    image: caddy:2-alpine
+    # Stock Caddy serves the http01, self and internal TLS modes. dns01 needs a
+    # solver plugin compiled in: build one with tools/build-caddy.sh and point
+    # RIFT_CADDY_IMAGE at it.
+    image: ${RIFT_CADDY_IMAGE:-caddy:2-alpine}
     restart: unless-stopped
     depends_on:
       - riftd
@@ -39,11 +42,41 @@ services:
       RIFT_BASE_DOMAIN: ${RIFT_BASE_DOMAIN:-rift.anomaly.sh}
       RIFT_GATEWAY_HOSTNAME: ${RIFT_GATEWAY_HOSTNAME:-gateway.rift.anomaly.sh}
       RIFT_ACME_EMAIL: ${RIFT_ACME_EMAIL:-}
+      # Selects deploy/caddy/modes/<mode>.{global,site}.caddy. riftd validates
+      # the same value at boot, so a typo fails the stack rather than the
+      # first TLS handshake.
+      RIFT_TLS_MODE: ${RIFT_TLS_MODE:?RIFT_TLS_MODE must be set (dns01, http01, self, internal)}
+      RIFT_ACME_CA_PROFILE: ${RIFT_ACME_CA_PROFILE:-public}
+      RIFT_ACME_CA_URL: ${RIFT_ACME_CA_URL:-}
+      RIFT_ACME_CA_ROOT: ${RIFT_ACME_CA_ROOT:-}
+      # dns01 only. Selects deploy/caddy/dns/<provider>.caddy.
+      RIFT_ACME_DNS_PROVIDER: ${RIFT_ACME_DNS_PROVIDER:-}
+      RIFT_DNS_API_TOKEN: ${RIFT_DNS_API_TOKEN:-}
+      RIFT_DNS_SERVER: ${RIFT_DNS_SERVER:-}
+      RIFT_DNS_TSIG_KEY_NAME: ${RIFT_DNS_TSIG_KEY_NAME:-}
+      RIFT_DNS_TSIG_KEY_ALG: ${RIFT_DNS_TSIG_KEY_ALG:-}
+      RIFT_DNS_TSIG_KEY: ${RIFT_DNS_TSIG_KEY:-}
+      RIFT_ACMEDNS_USERNAME: ${RIFT_ACMEDNS_USERNAME:-}
+      RIFT_ACMEDNS_PASSWORD: ${RIFT_ACMEDNS_PASSWORD:-}
+      RIFT_ACMEDNS_SUBDOMAIN: ${RIFT_ACMEDNS_SUBDOMAIN:-}
+      RIFT_ACMEDNS_SERVER_URL: ${RIFT_ACMEDNS_SERVER_URL:-}
+      RIFT_PDNS_SERVER_URL: ${RIFT_PDNS_SERVER_URL:-}
+      RIFT_PDNS_API_TOKEN: ${RIFT_PDNS_API_TOKEN:-}
+      RIFT_PDNS_SERVER_ID: ${RIFT_PDNS_SERVER_ID:-}
+      RIFT_LINODE_API_VERSION: ${RIFT_LINODE_API_VERSION:-}
+      # self only.
+      RIFT_TLS_CERT_FILE: ${RIFT_TLS_CERT_FILE:-}
+      RIFT_TLS_KEY_FILE: ${RIFT_TLS_KEY_FILE:-}
       RIFT_UPSTREAM_HOST: ${RIFT_UPSTREAM_HOST:-riftd}
       RIFT_INGRESS_PORT: ${RIFT_INGRESS_PORT:-8080}
       RIFT_GATEWAY_PORT: ${RIFT_GATEWAY_PORT:-8081}
     volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # The whole directory: the Caddyfile imports mode, provider and ACME
+      # snippets from beside it.
+      - ./caddy:/etc/caddy:ro
+      # Certificates for the `self` mode. Points at ./caddy when unused, since
+      # a bind mount of a missing path would fail to start.
+      - ${RIFT_TLS_CERT_DIR:-./caddy}:/certs:ro
       # caddy_data holds issued certificates and the ACME account key. Losing it
       # forces re-issuance on the next boot and can trip Let's Encrypt duplicate
       # -certificate rate limits, so it MUST persist in a named volume.

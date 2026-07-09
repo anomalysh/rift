@@ -1,0 +1,6 @@
+# One wildcard certificate, proved over DNS-01.
+#
+# The solver is a compile-time Caddy module. If this import fails with
+# "module not registered: dns.providers.<name>", the Caddy image was not built
+# with that plugin -- rebuild it with tools/build-caddy.sh.
+import /etc/caddy/dns/{$RIFT_ACME_DNS_PROVIDER}.caddy

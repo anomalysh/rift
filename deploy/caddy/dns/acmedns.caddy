@@ -1,0 +1,10 @@
+# acme-dns delegation. _acme-challenge.<base-domain> is CNAMEd to a small
+# acme-dns instance that holds nothing but challenge records, so these
+# credentials cannot touch the real zone. The smallest blast radius available:
+# a compromised rift host still cannot rewrite your DNS.
+acme_dns acmedns {
+	username {$RIFT_ACMEDNS_USERNAME}
+	password {$RIFT_ACMEDNS_PASSWORD}
+	subdomain {$RIFT_ACMEDNS_SUBDOMAIN}
+	server_url {$RIFT_ACMEDNS_SERVER_URL}
+}

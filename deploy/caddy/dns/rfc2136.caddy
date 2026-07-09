@@ -1,0 +1,9 @@
+# Dynamic DNS updates (RFC 2136) authenticated by a TSIG key. The standard way
+# to let an automated client write a single record into a self-hosted BIND,
+# Knot or PowerDNS zone without granting it an HTTP API.
+acme_dns rfc2136 {
+	key_name {$RIFT_DNS_TSIG_KEY_NAME}
+	key_alg {$RIFT_DNS_TSIG_KEY_ALG}
+	key {$RIFT_DNS_TSIG_KEY}
+	server {$RIFT_DNS_SERVER}
+}

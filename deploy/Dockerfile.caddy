@@ -1,0 +1,44 @@
+# Caddy with DNS-01 solver plugins compiled in.
+#
+# Caddy's DNS solvers are compile-time modules, so "support many providers"
+# means building the binary with the ones you need. Only RIFT_TLS_MODE=dns01
+# requires this image at all; the http01, self and internal modes run on stock
+# Caddy. Build it with tools/build-caddy.sh, which reads RIFT_CADDY_DNS_PLUGINS
+# from your .env.
+#
+# The build is deliberately not run on the deployment host: compiling Caddy
+# wants more memory than a small VPS has, and shipping a Go toolchain to
+# production is a needless surface. build-caddy.sh builds locally and can load
+# the image onto the remote host over SSH.
+
+ARG CADDY_VERSION=2
+
+FROM caddy:${CADDY_VERSION}-builder AS builder
+
+# Space-separated Go module paths. Every one must be a Caddy DNS provider
+# module; the resulting solver name is what RIFT_ACME_DNS_PROVIDER selects.
+ARG RIFT_CADDY_DNS_PLUGINS="github.com/caddy-dns/rfc2136 github.com/caddy-dns/acmedns"
+
+RUN set -eux; \
+	args=""; \
+	for plugin in ${RIFT_CADDY_DNS_PLUGINS}; do \
+		args="${args} --with ${plugin}"; \
+	done; \
+	echo "building caddy with:${args}"; \
+	# shellcheck disable=SC2086 -- intentional word splitting of the plugin list
+	xcaddy build ${args}
+
+FROM caddy:${CADDY_VERSION}-alpine
+
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+
+# Fail the build rather than the deployment if a requested plugin silently did
+# not register. A missing solver otherwise surfaces only when Caddy starts and
+# cannot parse the provider snippet.
+ARG RIFT_CADDY_DNS_PLUGINS="github.com/caddy-dns/rfc2136 github.com/caddy-dns/acmedns"
+RUN set -eux; \
+	caddy list-modules | grep -q '^dns.providers\.' || { \
+		echo "no dns.providers modules compiled in"; exit 1; \
+	}; \
+	echo "compiled DNS providers:"; \
+	caddy list-modules | grep '^dns.providers\.'

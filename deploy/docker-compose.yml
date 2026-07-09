@@ -60,6 +60,12 @@ services:
       # Read by the TLS-ask endpoint so Caddy may issue a certificate for the
       # hostname agents dial. Empty in local dev, where there is no TLS.
       RIFT_GATEWAY_HOSTNAME: ${RIFT_GATEWAY_HOSTNAME:-}
+      # riftd validates the TLS mode even though Caddy is what uses it, so a
+      # bad value fails the stack at boot. Local dev has no TLS: internal.
+      RIFT_TLS_MODE: ${RIFT_TLS_MODE:-internal}
+      RIFT_ACME_DNS_PROVIDER: ${RIFT_ACME_DNS_PROVIDER:-}
+      RIFT_TLS_CERT_FILE: ${RIFT_TLS_CERT_FILE:-}
+      RIFT_TLS_KEY_FILE: ${RIFT_TLS_KEY_FILE:-}
       RIFT_ADMIN_ADDR: ${RIFT_ADMIN_ADDR:-:8082}
       # --- redis (only consulted when RIFT_REDIS_ENABLED=true + --profile redis) ---
       RIFT_REDIS_ENABLED: ${RIFT_REDIS_ENABLED:-false}

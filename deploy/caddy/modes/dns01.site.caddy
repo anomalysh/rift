@@ -1,0 +1,4 @@
+# No per-site tls directive. Certificates are managed for each site's subjects
+# using the global DNS-01 issuer, and *.BASE_DOMAIN yields a wildcard that
+# covers every subdomain -- live, reserved, or never used. No on-demand policy
+# exists in this mode, so no site can be shadowed by one.
