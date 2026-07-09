@@ -1,48 +1,65 @@
-// Terminal-emulator regression for the sticky Dashboard.
+// Terminal-emulator regression for the fixed-header (ngrok-style) Dashboard.
 //
-// The Dashboard only emits escape sequences to an injected `write`, so we can
-// feed those into a tiny VT parser that maintains a screen grid -- including the
-// behaviour that actually caused the bug: a newline on the bottom row SCROLLS
-// the viewport. If the redraw's cursor math is wrong, events land on top of the
-// panel, which shows up as a corrupted grid. This lets us prove the fix without
-// a real TTY.
+// The Dashboard only emits escape sequences to an injected `write`, so we feed
+// those into a tiny VT parser that maintains a screen grid AND honours a DECSTBM
+// scroll region. That lets us assert the real invariant: the status panel stays
+// pinned to the top rows while the log scrolls only in the region below it --
+// no real TTY required.
 
 import { describe, expect, test } from "bun:test";
+
 import {
   clampWidth,
   createStyle,
   Dashboard,
   type DashboardDeps,
-  type PanelState,
+  PANEL_HEIGHT,
   renderPanel,
   type SessionInfo,
 } from "../src/ui.ts";
 
-/** A minimal VT100 screen: enough of the protocol for what the Dashboard emits. */
+/** A minimal VT100 screen with a scroll region: enough for the Dashboard. */
 class Screen {
   private grid: string[][];
   private row = 0;
   private col = 0;
+  private savedRow = 0;
+  private savedCol = 0;
+  private scrollTop: number;
+  private scrollBottom: number;
 
   constructor(
     private readonly height: number,
     private readonly width: number,
   ) {
-    this.grid = Array.from({ length: height }, () =>
-      Array<string>(width).fill(" "),
+    this.grid = this.blankGrid();
+    this.scrollTop = 0;
+    this.scrollBottom = height - 1;
+  }
+
+  private blankGrid(): string[][] {
+    return Array.from({ length: this.height }, () =>
+      Array<string>(this.width).fill(" "),
     );
   }
 
-  private scroll(): void {
-    this.grid.shift();
-    this.grid.push(Array<string>(this.width).fill(" "));
+  private blankRow(): string[] {
+    return Array<string>(this.width).fill(" ");
+  }
+
+  private scrollRegionUp(): void {
+    // Shift rows up within [scrollTop, scrollBottom]; blank the bottom row.
+    for (let r = this.scrollTop; r < this.scrollBottom; r++) {
+      this.grid[r] = this.grid[r + 1] as string[];
+    }
+    this.grid[this.scrollBottom] = this.blankRow();
   }
 
   private lineFeed(): void {
-    this.row++;
-    if (this.row >= this.height) {
-      this.scroll();
-      this.row = this.height - 1;
+    if (this.row === this.scrollBottom) {
+      this.scrollRegionUp();
+    } else if (this.row < this.height - 1) {
+      this.row++;
     }
   }
 
@@ -50,6 +67,19 @@ class Screen {
     for (let i = 0; i < s.length; ) {
       const ch = s[i] as string;
       if (ch === "\x1b") {
+        const two = s.slice(i, i + 2);
+        if (two === "\x1b7") {
+          this.savedRow = this.row;
+          this.savedCol = this.col;
+          i += 2;
+          continue;
+        }
+        if (two === "\x1b8") {
+          this.row = this.savedRow;
+          this.col = this.savedCol;
+          i += 2;
+          continue;
+        }
         // biome-ignore lint/suspicious/noControlCharactersInRegex: parsing the ANSI ESC (0x1b) the Dashboard emits.
         const m = /^\x1b\[([0-9;?]*)([A-Za-z])/.exec(s.slice(i));
         if (m) {
@@ -61,7 +91,6 @@ class Screen {
         continue;
       }
       if (ch === "\n") {
-        // The display treats a newline as move-to-start-of-next-line.
         this.col = 0;
         this.lineFeed();
         i++;
@@ -83,40 +112,59 @@ class Screen {
   }
 
   private csi(params: string, cmd: string): void {
-    const n = params === "" ? 1 : Number.parseInt(params, 10);
+    const parts = params.split(";");
+    const n = params === "" ? 1 : Number.parseInt(parts[0] as string, 10);
     switch (cmd) {
-      case "A": // cursor up (the scroll-safe redraw)
-        this.row = Math.max(0, this.row - n);
+      case "H": {
+        // Cursor position (1-indexed); default 1;1.
+        this.row = clamp((n || 1) - 1, 0, this.height - 1);
+        this.col = clamp(
+          (Number.parseInt(parts[1] ?? "1", 10) || 1) - 1,
+          0,
+          this.width - 1,
+        );
         break;
-      case "F": // cursor previous line (the OLD, buggy redraw): up + column 0
-        this.row = Math.max(0, this.row - n);
+      }
+      case "r": {
+        // DECSTBM set scroll region, or reset when empty. Homes the cursor.
+        if (params === "") {
+          this.scrollTop = 0;
+          this.scrollBottom = this.height - 1;
+        } else {
+          this.scrollTop = clamp((n || 1) - 1, 0, this.height - 1);
+          this.scrollBottom = clamp(
+            (Number.parseInt(parts[1] ?? String(this.height), 10) ||
+              this.height) - 1,
+            0,
+            this.height - 1,
+          );
+        }
+        this.row = 0;
         this.col = 0;
         break;
-      case "J": // erase in display; 0 = cursor to end of screen
-        if (params === "" || params === "0") {
-          this.eraseToEnd();
+      }
+      case "J":
+        if (params === "" || params === "2") {
+          this.grid = this.blankGrid();
         }
         break;
-      // SGR colours, cursor show/hide (?25h/l), etc. do not move the cursor.
+      case "K":
+        (this.grid[this.row] as string[]).fill(" ");
+        break;
+      // SGR colours and cursor show/hide do not move the cursor.
       default:
         break;
     }
   }
 
-  private eraseToEnd(): void {
-    const line = this.grid[this.row] as string[];
-    for (let c = this.col; c < this.width; c++) {
-      line[c] = " ";
-    }
-    for (let r = this.row + 1; r < this.height; r++) {
-      this.grid[r] = Array<string>(this.width).fill(" ");
-    }
-  }
-
-  /** Rows with trailing blanks trimmed, for comparison. */
+  /** Rows with trailing blanks trimmed. */
   rows(): string[] {
     return this.grid.map((r) => r.join("").replace(/\s+$/, ""));
   }
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
 }
 
 const SESSION: SessionInfo = {
@@ -142,6 +190,7 @@ function rig(height: number, width: number): Rig {
     deps: {
       write: (c) => screen.write(c),
       columns: () => width,
+      rows: () => height,
       style: createStyle(false),
       now: () => clock.t,
       setInterval: () => ({ cancel: () => {} }),
@@ -151,24 +200,10 @@ function rig(height: number, width: number): Rig {
   };
 }
 
-function expectedPanel(width: number, uptimeMs: number): string[] {
-  const state: PanelState = {
-    session: SESSION,
-    status: "online",
-    detail: "",
-    uptimeMs,
-    metrics: null,
-    spinnerFrame: "⠋",
-  };
-  return renderPanel(state, createStyle(false), clampWidth(width)).map((l) =>
-    l.replace(/\s+$/, ""),
-  );
-}
-
-describe("Dashboard rendered through a VT emulator", () => {
-  test("the panel stays intact after events scroll the viewport", () => {
-    const H = 16;
-    const W = 40;
+describe("Dashboard renders an ngrok-style fixed header", () => {
+  test("the header stays pinned to the top while the log scrolls below it", () => {
+    const H = 20;
+    const W = 60;
     const r = rig(H, W);
     const d = new Dashboard(r.deps);
 
@@ -176,45 +211,95 @@ describe("Dashboard rendered through a VT emulator", () => {
     d.setSession(SESSION);
     d.setStatus("online");
 
-    // Enough events to push the panel to the bottom and force scrolling.
-    for (let i = 0; i < 12; i++) {
-      r.clock.t += 1000;
-      d.event(`event line ${i}`);
-    }
-
-    const panel = expectedPanel(W, r.clock.t);
-    const rows = r.screen.rows();
-    // The panel must occupy the bottom rows, intact and in order -- not painted
-    // over by event lines.
-    const bottom = rows.slice(H - panel.length);
-    expect(bottom).toEqual(panel);
-
-    // And the most recent events must be directly above it, unclobbered.
-    const above = rows.slice(0, H - panel.length).join("\n");
-    expect(above).toContain("event line 11");
-  });
-
-  test("no event text bleeds into the panel region", () => {
-    const H = 14;
-    const W = 48;
-    const r = rig(H, W);
-    const d = new Dashboard(r.deps);
-    d.start();
-    d.setSession(SESSION);
-    d.setStatus("online");
-    for (let i = 0; i < 20; i++) {
+    // Many more events than the log region can hold, forcing it to scroll.
+    for (let i = 0; i < 30; i++) {
       r.clock.t += 1000;
       d.event(`req ${i} GET /path`);
     }
-    const panel = expectedPanel(W, r.clock.t);
-    const rows = r.screen.rows();
-    const bottom = rows.slice(H - panel.length);
-    // Every panel row is a box row (starts with a border glyph), never an event.
-    for (const row of bottom) {
-      expect(
-        row.startsWith("┌") || row.startsWith("│") || row.startsWith("└"),
-      ).toBe(true);
-      expect(row).not.toContain("req ");
+    d.setStatus("online"); // force a final header repaint at the current clock
+
+    const grid = r.screen.rows();
+    const header = grid.slice(0, PANEL_HEIGHT);
+    const region = grid.slice(PANEL_HEIGHT);
+
+    // Header: the box, intact, with live fields -- and never an event line.
+    expect(header[0]?.startsWith("┌")).toBe(true);
+    expect(header.at(-1)?.startsWith("└")).toBe(true);
+    const headerText = header.join("\n");
+    expect(headerText).toContain("online");
+    expect(headerText).toContain(SESSION.url);
+    expect(headerText).not.toContain("req ");
+    for (let i = 1; i < PANEL_HEIGHT - 1; i++) {
+      expect(header[i]?.startsWith("│")).toBe(true);
     }
+
+    // Log region: the most recent events, and no box border bled into it.
+    const regionText = region.join("\n");
+    expect(regionText).toContain("req 29 GET /path");
+    expect(regionText).not.toContain("┌");
+    expect(regionText).not.toContain("└");
+    // Old events scrolled out of the region.
+    expect(regionText).not.toContain("req 0 GET /path");
+  });
+
+  test("the header matches renderPanel exactly after a repaint", () => {
+    const H = 24;
+    const W = 72;
+    const r = rig(H, W);
+    const d = new Dashboard(r.deps);
+    d.start();
+    d.setSession(SESSION);
+    r.clock.t = 5000;
+    d.setStatus("online"); // repaint at a known clock
+
+    const expected = renderPanel(
+      {
+        session: SESSION,
+        status: "online",
+        detail: "",
+        uptimeMs: 5000,
+        metrics: null,
+        spinnerFrame: "⠋",
+      },
+      createStyle(false),
+      clampWidth(W),
+    ).map((l) => l.replace(/\s+$/, ""));
+
+    const header = r.screen.rows().slice(0, PANEL_HEIGHT);
+    expect(header).toEqual(expected);
+  });
+
+  test("close resets the scroll region and shows the cursor", () => {
+    const H = 20;
+    const W = 60;
+    const r = rig(H, W);
+    const captured: string[] = [];
+    const spyDeps: DashboardDeps = {
+      ...r.deps,
+      write: (c) => captured.push(c),
+    };
+    const d = new Dashboard(spyDeps);
+    d.start();
+    d.setStatus("online");
+    captured.length = 0;
+    d.close("offline");
+    const out = captured.join("");
+    expect(out).toContain("\x1b[r"); // scroll region reset
+    expect(out).toContain("\x1b[?25h"); // cursor restored
+  });
+
+  test("a terminal too short for the header degrades to a one-shot banner", () => {
+    const H = PANEL_HEIGHT; // no room for the header plus a log line
+    const W = 60;
+    const r = rig(H, W);
+    const captured: string[] = [];
+    const d = new Dashboard({ ...r.deps, write: (c) => captured.push(c) });
+    d.start();
+    const out = captured.join("");
+    // Degraded mode never hides the cursor or sets a scroll region.
+    expect(out).not.toContain("\x1b[?25l");
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: asserting no DECSTBM scroll-region escape was emitted.
+    expect(out).not.toMatch(/\x1b\[\d+;\d+r/);
+    expect(out).toContain("┌"); // the banner is still printed once
   });
 });

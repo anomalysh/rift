@@ -368,6 +368,9 @@ export function renderPanel(
   lines.push(row(justify(brand, statusCell, inner)));
   lines.push(row(""));
 
+  // Always emit the same rows so the panel height is constant. The header is a
+  // fixed region at the top of the screen (see Dashboard); a changing height
+  // would move the scroll region and disturb the log below it.
   if (state.session !== null) {
     lines.push(
       row(fieldRow(style, "Forwarding", style.cyan(state.session.url))),
@@ -377,23 +380,30 @@ export function renderPanel(
     );
     lines.push(row(fieldRow(style, "Gateway", state.session.gateway)));
   } else {
-    lines.push(row(fieldRow(style, "", style.dim("establishing tunnel…"))));
+    lines.push(
+      row(fieldRow(style, "Forwarding", style.dim("establishing tunnel…"))),
+    );
+    lines.push(row(""));
+    lines.push(row(""));
   }
 
   lines.push(row(fieldRow(style, "Uptime", formatDuration(state.uptimeMs))));
 
-  if (state.metrics !== null) {
-    const m =
-      `${style.bold(String(state.metrics.total))} total ` +
-      `${style.dim("·")} ${style.bold(String(state.metrics.open))} open`;
-    lines.push(row(fieldRow(style, "Requests", m)));
-  }
+  const requests =
+    state.metrics !== null
+      ? `${style.bold(String(state.metrics.total))} total ` +
+        `${style.dim("·")} ${style.bold(String(state.metrics.open))} open`
+      : style.dim("0 total · 0 open");
+  lines.push(row(fieldRow(style, "Requests", requests)));
 
   lines.push(row(""));
   lines.push(row(style.dim("Ctrl-C to quit")));
   lines.push(border(width, BOX.bottomLeft, BOX.bottomRight));
   return lines;
 }
+
+/** Fixed number of rows renderPanel always emits (the header region height). */
+export const PANEL_HEIGHT = 11;
 
 // ---------------------------------------------------------------------------
 // Event line + plain banner formatting (pure).
@@ -449,12 +459,22 @@ export function formatPlainBanner(info: SessionInfo): string {
 // All I/O flows through injected callbacks; construction has no side effects.
 // ---------------------------------------------------------------------------
 
-/** Cursor and screen control the Dashboard emits (never measured as content). */
+/** Cursor, screen, and scroll-region control (never measured as content). */
 const HIDE_CURSOR = "\x1b[?25l";
 const SHOW_CURSOR = "\x1b[?25h";
+const SAVE_CURSOR = "\x1b7"; // DECSC: save cursor position
+const RESTORE_CURSOR = "\x1b8"; // DECRC: restore cursor position
+const CLEAR_SCREEN = "\x1b[2J\x1b[H";
+const CLEAR_LINE = "\x1b[2K";
+const RESET_SCROLL_REGION = "\x1b[r";
+const moveTo = (row: number, col: number): string => `\x1b[${row};${col}H`;
+const setScrollRegion = (top: number, bottom: number): string =>
+  `\x1b[${top};${bottom}r`;
 
-/** Spinner cadence; signature-gated redraws keep idle states near 1 Hz. */
+/** Spinner cadence; signature-gated header repaints keep idle states near 1 Hz. */
 const TICK_INTERVAL_MS = 120;
+/** Terminal height to assume when stdout does not report one. */
+const FALLBACK_ROWS = 24;
 
 /** Injected environment for the Dashboard, so it is TTY- and clock-agnostic. */
 export interface DashboardDeps {
@@ -462,22 +482,26 @@ export interface DashboardDeps {
   write(chunk: string): void;
   /** Current terminal width in columns. */
   columns(): number;
+  /** Current terminal height in rows. */
+  rows(): number;
   /** Enabled colour palette. */
   readonly style: Style;
   /** Clock source (`Date.now` in production; deterministic in tests). */
   now(): number;
   /** Schedule the redraw tick; returns a cancel handle. */
   setInterval(fn: () => void, ms: number): { cancel(): void };
-  /** Register/deregister a best-effort cursor-restore on process exit. */
+  /** Register/deregister a best-effort terminal-restore on process exit. */
   onExit(fn: () => void): void;
   offExit(fn: () => void): void;
 }
 
 /**
- * A sticky, self-redrawing status panel with scrollback above it. Event lines
- * (`event`) are written above the panel; the panel is torn down and redrawn in
- * place on every state change and on each spinner tick. The redraw is gated by
- * a cheap signature so an idle, connected session only repaints ~once a second.
+ * An ngrok-style dashboard: the status panel is a fixed header pinned to the top
+ * of the screen with a DECSTBM scroll region, while the event/request log scrolls
+ * in the region below it. The header height is constant (PANEL_HEIGHT) so the
+ * region never moves; the header repaints in place around a saved cursor, leaving
+ * the log untouched. A terminal too short for the header degrades to a one-shot
+ * banner followed by plain scrolling logs.
  */
 export class Dashboard {
   private session: SessionInfo | null = null;
@@ -485,68 +509,72 @@ export class Dashboard {
   private detail = "";
   private metricsSource: (() => Metrics) | null = null;
   private frame = 0;
-  private renderedLines = 0;
   private lastSignature = "";
   private cursorHidden = false;
   private stopped = false;
+  /** True once the fixed-header scroll region is set up (not degraded/stopped). */
+  private active = false;
+  private termRows = FALLBACK_ROWS;
   private ticker: { cancel(): void } | null = null;
   private readonly startedAt: number;
-  private readonly restoreCursor = (): void => {
-    if (this.cursorHidden) {
-      this.deps.write(SHOW_CURSOR);
-      this.cursorHidden = false;
-    }
-  };
+  private readonly exitHandler = (): void => this.teardown();
 
   constructor(private readonly deps: DashboardDeps) {
     this.startedAt = deps.now();
   }
 
-  /** Hide the cursor, paint the initial (connecting) panel, start the ticker. */
+  /** Clear the screen, pin the header, and start scrolling the log below it. */
   start(): void {
-    this.deps.write(HIDE_CURSOR);
+    this.termRows = Math.max(1, this.deps.rows() || FALLBACK_ROWS);
+    // A terminal too short for the header plus a line of log cannot host the
+    // fixed layout; degrade to a one-shot banner and plain logs.
+    if (this.termRows <= PANEL_HEIGHT + 1) {
+      this.deps.write(
+        `${renderPanel(this.snapshot(), this.deps.style, this.headerWidth()).join("\n")}\n`,
+      );
+      return;
+    }
     this.cursorHidden = true;
-    this.deps.onExit(this.restoreCursor);
-    this.draw(true);
+    this.active = true;
+    this.deps.onExit(this.exitHandler);
+    // Clear, carve out the scroll region below the header, and park the cursor at
+    // the top of that region so the first log line lands just under the panel.
+    this.deps.write(
+      HIDE_CURSOR +
+        CLEAR_SCREEN +
+        setScrollRegion(PANEL_HEIGHT + 1, this.termRows) +
+        moveTo(PANEL_HEIGHT + 1, 1),
+    );
+    this.paintHeader(true);
     this.ticker = this.deps.setInterval(() => {
       this.frame++;
-      this.draw(false);
+      this.paintHeader(false);
     }, TICK_INTERVAL_MS);
   }
 
   setSession(info: SessionInfo): void {
     this.session = info;
-    this.draw(true);
+    this.paintHeader(true);
   }
 
   setStatus(status: ConnStatus, detail?: string): void {
     this.status = status;
     this.detail = detail ?? "";
-    this.draw(true);
+    this.paintHeader(true);
   }
 
   setMetrics(source: () => Metrics): void {
     this.metricsSource = source;
   }
 
-  /** Print a scrollback line above the panel, then repaint the panel below it. */
+  /** Append a line to the scrolling log below the fixed header. The cursor lives
+   *  in the scroll region, so writing here scrolls the log and never touches the
+   *  header above it. */
   event(line: string): void {
-    const text = line.endsWith("\n") ? line : `${line}\n`;
-    if (this.stopped) {
-      this.deps.write(text);
-      return;
-    }
-    // Erase the panel, print the event where its top was (it scrolls into the
-    // scrollback), then repaint the panel below the event.
-    this.deps.write(this.clearSequence() + text);
-    this.renderedLines = 0;
-    this.draw(true);
+    this.deps.write(line.endsWith("\n") ? line : `${line}\n`);
   }
 
-  /**
-   * Freeze the panel in a final state, restore the cursor, and stop ticking.
-   * The last panel is intentionally left on screen as a closing artifact.
-   */
+  /** Freeze the header in a final state and release the terminal. */
   close(final: ConnStatus, detail?: string): void {
     if (this.stopped) {
       return;
@@ -558,12 +586,32 @@ export class Dashboard {
     if (detail !== undefined) {
       this.detail = detail;
     }
-    this.draw(true);
-    // The panel is written without a trailing newline; add one so the shell
-    // prompt resumes below the frozen panel rather than on its last line.
-    this.deps.write("\n");
-    this.restoreCursor();
-    this.deps.offExit(this.restoreCursor);
+    this.paintHeader(true);
+    this.teardown();
+  }
+
+  /** Reset the scroll region, move below the header, and restore the cursor.
+   *  Idempotent, so it is safe as both the close path and the on-exit handler. */
+  private teardown(): void {
+    if (!this.active) {
+      if (this.cursorHidden) {
+        this.deps.write(SHOW_CURSOR);
+        this.cursorHidden = false;
+      }
+      return;
+    }
+    this.active = false;
+    let out = `${RESET_SCROLL_REGION}${moveTo(this.termRows, 1)}\n`;
+    if (this.cursorHidden) {
+      out += SHOW_CURSOR;
+      this.cursorHidden = false;
+    }
+    this.deps.write(out);
+    this.deps.offExit(this.exitHandler);
+  }
+
+  private headerWidth(): number {
+    return clampWidth(this.deps.columns());
   }
 
   private snapshot(): PanelState {
@@ -580,35 +628,34 @@ export class Dashboard {
     };
   }
 
-  private draw(force: boolean): void {
-    const width = clampWidth(this.deps.columns());
+  /** Repaint the fixed header at the top of the screen without disturbing the log
+   *  cursor in the region below: save the cursor, position+clear each header row,
+   *  restore the cursor. A terminal resize re-issues the scroll region first. */
+  private paintHeader(force: boolean): void {
+    if (!this.active) {
+      return;
+    }
+    const width = this.headerWidth();
+    const rows = Math.max(1, this.deps.rows() || FALLBACK_ROWS);
     const state = this.snapshot();
-    const sig = signatureOf(state, width);
+    const sig = `${signatureOf(state, width)}|${rows}`;
     if (!force && sig === this.lastSignature) {
       return;
     }
+    const resized = rows !== this.termRows;
+    this.termRows = rows;
     this.lastSignature = sig;
-    const lines = renderPanel(state, this.deps.style, width);
-    // No trailing newline after the last line: the cursor stays ON the panel's
-    // last line rather than the line below it. That is what makes redraws
-    // scroll-safe -- once the panel reaches the bottom of the viewport, a
-    // trailing newline would scroll the screen and desync the cursor math,
-    // which is what let events paint over the panel.
-    this.deps.write(this.clearSequence() + lines.join("\n"));
-    this.renderedLines = lines.length;
-  }
 
-  /** Escape sequence that erases the current panel in place. The cursor is on
-   * the panel's last line, so move to column 0, up to the first line, and erase
-   * to the end of the screen. Contiguous panel lines mean the first line is
-   * always renderedLines-1 rows up, whether or not drawing the panel scrolled
-   * the viewport -- so this survives scrolling where a fixed CSI-nF did not. */
-  private clearSequence(): string {
-    if (this.renderedLines === 0) {
-      return "";
+    const lines = renderPanel(state, this.deps.style, width);
+    let out = SAVE_CURSOR;
+    if (resized) {
+      out += setScrollRegion(PANEL_HEIGHT + 1, this.termRows);
     }
-    const up = this.renderedLines > 1 ? `\x1b[${this.renderedLines - 1}A` : "";
-    return `\r${up}\x1b[0J`;
+    for (let i = 0; i < lines.length; i++) {
+      out += moveTo(i + 1, 1) + CLEAR_LINE + lines[i];
+    }
+    out += RESTORE_CURSOR;
+    this.deps.write(out);
   }
 }
 

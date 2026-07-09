@@ -30,8 +30,9 @@ const LEVEL_RANK: Record<LogLevel, number> = {
   silent: 100,
 };
 
-/** Default terminal width when stdout does not report its columns. */
+/** Default terminal size when stdout does not report it. */
 const DEFAULT_COLUMNS = 80;
+const DEFAULT_ROWS = 24;
 
 export interface Logger {
   debug(message: string, ...rest: unknown[]): void;
@@ -130,6 +131,7 @@ function dashboardDeps(): DashboardDeps {
   return {
     write: (chunk) => process.stdout.write(chunk),
     columns: () => process.stdout.columns ?? DEFAULT_COLUMNS,
+    rows: () => process.stdout.rows ?? DEFAULT_ROWS,
     style: createStyle(true),
     now: () => Date.now(),
     setInterval: (fn, ms) => {
