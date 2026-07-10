@@ -11,6 +11,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=tools/lib/e2e-harness.sh
+. "$SCRIPT_DIR/lib/e2e-harness.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 COMPOSE_FILE="$REPO_ROOT/deploy/docker-compose.recovery.yml"
@@ -56,8 +58,6 @@ done
 require_cmd docker sha256sum python3
 
 TMP="$(mktemp -d)"
-pass=0
-fail=0
 
 cleanup() {
 	local status=$?
@@ -74,17 +74,6 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 compose() { docker compose -f "$COMPOSE_FILE" -p "$PROJECT" "$@"; }
-
-check() {
-	local name="$1" got="$2" want="$3"
-	if [ "$got" = "$want" ]; then
-		printf '    ok    %s\n' "$name"
-		pass=$((pass + 1))
-	else
-		printf '    FAIL  %s: got [%s] want [%s]\n' "$name" "$got" "$want"
-		fail=$((fail + 1))
-	fi
-}
 
 # check_ok / check_fail assert a command's exit status, for the guard tests where
 # the behaviour under test is "succeeds" or "refuses".
@@ -160,10 +149,10 @@ wipe_caddy() {
 }
 
 backup() {
-	"$SCRIPT_DIR/backup.sh" --project "$PROJECT" --compose-file "$COMPOSE_FILE" "$@"
+	"$SCRIPT_DIR/cmd/backup/backup.sh" --project "$PROJECT" --compose-file "$COMPOSE_FILE" "$@"
 }
 restore() {
-	"$SCRIPT_DIR/restore.sh" --project "$PROJECT" --compose-file "$COMPOSE_FILE" "$@"
+	"$SCRIPT_DIR/cmd/backup/restore.sh" --project "$PROJECT" --compose-file "$COMPOSE_FILE" "$@"
 }
 
 # ============================================================================
@@ -285,6 +274,4 @@ check_fail "restore without --yes refuses" restore_no_yes
 check "database unchanged after --yes refusal" "$(rsql "SELECT count(*)::text FROM tokens")" "2"
 
 # ============================================================================
-printf '\n=== summary ===\n  passed=%d failed=%d\n' "$pass" "$fail"
-[ "$fail" -eq 0 ] || die "e2e-recovery failed"
-log_info "e2e-recovery passed"
+print_summary "e2e-recovery"

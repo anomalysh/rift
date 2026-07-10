@@ -91,7 +91,7 @@ connections):
 docker exec rift-caddy-1 caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 ```
 
-`tools/remote-deploy.sh` does this automatically after every deploy, falling back
+`rift-ops deploy deploy` does this automatically after every deploy, falling back
 to a container restart if the admin API is unreachable. If you edit config by
 hand, run the reload yourself.
 

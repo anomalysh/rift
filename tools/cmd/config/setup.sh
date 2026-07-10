@@ -9,7 +9,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+. "$SCRIPT_DIR/../../lib/common.sh"
 
 # --- DNS-01 providers: exactly the snippets that exist under deploy/caddy/dns/.
 # Offering a provider with no snippet would generate a .env that Caddy cannot
@@ -18,7 +18,7 @@ DNS_PROVIDERS="rfc2136 acmedns powerdns cloudflare digitalocean linode"
 
 usage() {
 	cat >&2 <<EOF
-Usage: tools/setup.sh [options]
+Usage: rift-ops config setup [options]
 
 Interactive wizard that writes a ready-to-boot, untracked .env for rift.
 Secrets are generated locally with the system CSPRNG; nothing is transmitted
@@ -92,18 +92,7 @@ trap cleanup EXIT INT TERM
 lc() { printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'; }
 say() { printf '%s\n' "$*" >&2; }
 
-# gen_secret N -- N URL/shell-safe characters from the system CSPRNG. The
-# subshell disables pipefail so `head` closing the pipe does not trip `set -e`
-# via tr's SIGPIPE. Alphanumeric output is safe inside a DSN without escaping.
-gen_secret() {
-	local n="${1:-48}" s
-	s="$(
-		set +o pipefail
-		LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$n"
-	)"
-	[ "${#s}" -eq "$n" ] || die "could not gather $n random characters from /dev/urandom"
-	printf '%s' "$s"
-}
+# Secret generation is rift_gen_secret in lib/common.sh, shared with rotation.
 
 # mask SECRET -- first 4 and last 2 characters, the rest starred. Used only for
 # on-screen confirmation; the real value goes to the file and nowhere else.
@@ -185,6 +174,11 @@ v_yesno() { case "$(lc "$1")" in y | yes | n | no | true | false | on | off | 1 
 # Absolute URL with a scheme and a host, matching config's url.Parse check.
 v_url() { case "$1" in [a-z]*://?*) return 0 ;; *) return 1 ;; esac; }
 v_subgen() { case "$(lc "$1")" in words | random) return 0 ;; *) return 1 ;; esac; }
+# A TCP port, matching the 1-65535 range riftd's config validator enforces.
+v_port() {
+	case "$1" in '' | *[!0-9]*) return 1 ;; esac
+	[ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
 
 # ---------------------------------------------------------------------------
 # Pre-flight: refuse to clobber, and refuse to write anywhere git would track.
@@ -325,7 +319,7 @@ self)
 esac
 
 # 4. Admin token (generated, never typed) -----------------------------------
-ADMIN_TOKEN="$(gen_secret 48)"
+ADMIN_TOKEN="$(rift_gen_secret 48)"
 
 # 5. Postgres ---------------------------------------------------------------
 say ""
@@ -333,7 +327,7 @@ ask SETUP_POSTGRES "Postgres: 'bundled' (compose Postgres, generated password) o
 PG_MODE="$(lc "$REPLY_VALUE")"
 PG_PASSWORD=""
 if [ "$PG_MODE" = "bundled" ]; then
-	PG_PASSWORD="$(gen_secret 32)"
+	PG_PASSWORD="$(rift_gen_secret 32)"
 	# Host 'postgres' is the compose service name; alphanumeric password needs
 	# no URL-escaping. sslmode=disable is correct on the internal compose net.
 	PG_DSN="postgres://rift:${PG_PASSWORD}@postgres:5432/rift?sslmode=disable"
@@ -351,12 +345,41 @@ PEER_SECRET=""
 ADVERTISE_URL=""
 if is_true "$REPLY_VALUE"; then
 	REDIS_ON=true
-	PEER_SECRET="$(gen_secret 48)"
+	PEER_SECRET="$(rift_gen_secret 48)"
 	ask SETUP_NODE_ADVERTISE_URL "  This node's advertise URL (how peers reach it, e.g. http://10.0.0.4:8080)" "" v_url
 	ADVERTISE_URL="$REPLY_VALUE"
 fi
 
-# 7. Subdomain generator ----------------------------------------------------
+# 7. Raw tunnels (rift tcp / rift tls) --------------------------------------
+# Both default OFF. Enabling one is only half the job: remote-deploy.sh layers
+# the matching compose overlay to publish the ports, and harden.sh must open
+# them on the firewall. The wizard just records the intent in .env.
+say ""
+ask SETUP_TCP_TUNNELS "Enable raw TCP tunnels (rift tcp)? Publishes a port range; open it on the firewall (yes/no)" "no" v_yesno
+TCP_ON=false
+TCP_PORT_MIN=20000
+TCP_PORT_MAX=20100
+if is_true "$REPLY_VALUE"; then
+	TCP_ON=true
+	ask SETUP_TCP_PORT_MIN "  Lowest public TCP-tunnel port" "20000" v_port
+	TCP_PORT_MIN="$REPLY_VALUE"
+	ask SETUP_TCP_PORT_MAX "  Highest public TCP-tunnel port (each port costs one docker-proxy process)" "20100" v_port
+	TCP_PORT_MAX="$REPLY_VALUE"
+	[ "$TCP_PORT_MIN" -le "$TCP_PORT_MAX" ] ||
+		die "TCP port min ($TCP_PORT_MIN) must not exceed max ($TCP_PORT_MAX)"
+fi
+
+say ""
+ask SETUP_TLS_TUNNELS "Enable TLS passthrough tunnels (rift tls)? Publishes one port; open it on the firewall (yes/no)" "no" v_yesno
+TLS_TUN_ON=false
+TLS_TUN_PORT=8443
+if is_true "$REPLY_VALUE"; then
+	TLS_TUN_ON=true
+	ask SETUP_TLS_TUNNEL_PORT "  Public TLS-tunnel port (clients dial sub.<domain>:PORT)" "8443" v_port
+	TLS_TUN_PORT="$REPLY_VALUE"
+fi
+
+# 8. Subdomain generator ----------------------------------------------------
 say ""
 ask SETUP_SUBDOMAIN_GENERATOR "Generated-subdomain style: 'words' (adjective-noun-number) or 'random'" "words" v_subgen
 SUBGEN="$(lc "$REPLY_VALUE")"
@@ -377,11 +400,11 @@ wq() { printf '%s="%s"\n' "$1" "$2" >>"$TMP_ENV"; } # quoted: value has URL/DSN 
 secrets_list="admin token"
 [ "$PG_MODE" = "bundled" ] && secrets_list="$secrets_list, database password"
 [ "$REDIS_ON" = true ] && secrets_list="$secrets_list, peer secret"
-w "# rift environment -- GENERATED by tools/setup.sh on $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+w "# rift environment -- GENERATED by rift-ops config setup on $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 w "#"
 w "# THIS FILE CONTAINS LIVE SECRETS ($secrets_list)."
 w "# It is gitignored. Keep it private and NEVER commit it. To regenerate, delete"
-w "# it and re-run tools/setup.sh (secrets are one-time and are not recoverable)."
+w "# it and re-run rift-ops config setup (secrets are one-time and are not recoverable)."
 w ""
 w "# --- Core -------------------------------------------------------------------"
 w "RIFT_ENV=$ENV_VAL"
@@ -453,12 +476,43 @@ if [ "$REDIS_ON" = true ]; then
 	w "RIFT_PEER_SECRET=$PEER_SECRET"
 	wq RIFT_NODE_ADVERTISE_URL "$ADVERTISE_URL"
 fi
+if [ "$TCP_ON" = true ] || [ "$TLS_TUN_ON" = true ]; then
+	w ""
+	w "# --- Raw tunnels (rift tcp / rift tls) --------------------------------------"
+	w "# remote-deploy.sh publishes these ports (docker-compose.tcp.yml / .tls.yml)"
+	w "# when the matching flag is true; run tools/harden.sh to open them in nftables."
+	if [ "$TCP_ON" = true ]; then
+		w "RIFT_TCP_ENABLED=true"
+		w "RIFT_TCP_PORT_MIN=$TCP_PORT_MIN"
+		w "RIFT_TCP_PORT_MAX=$TCP_PORT_MAX"
+	fi
+	if [ "$TLS_TUN_ON" = true ]; then
+		w "RIFT_TLS_TUNNEL_ENABLED=true"
+		w "RIFT_TLS_TUNNEL_ADVERTISE_PORT=$TLS_TUN_PORT"
+	fi
+fi
 w ""
 w "# --- Subdomain generation ---------------------------------------------------"
 w "RIFT_SUBDOMAIN_GENERATOR=$SUBGEN"
 
 mv -f "$TMP_ENV" "$OUT_ABS"
 TMP_ENV="" # written; nothing for the trap to clean up
+
+# Authoritative gate: if a riftd binary is available, validate the written file
+# against the REAL config loader. The interactive v_* prompts above give fast
+# per-field feedback, but this is the source of truth -- it catches any rule the
+# wizard does not mirror. Best-effort: an operator without a built binary just
+# skips it (the compose stack validates on boot regardless).
+riftd_bin="$(command -v riftd 2>/dev/null || true)"
+[ -n "$riftd_bin" ] || riftd_bin="$RIFT_REPO_ROOT/projects/server/riftd"
+if [ -x "$riftd_bin" ]; then
+	if "$riftd_bin" config validate --env-file "$OUT_ABS" >/dev/null 2>&1; then
+		log_info "validated against the riftd config loader"
+	else
+		log_warn "riftd config validate flagged the generated .env:"
+		"$riftd_bin" config validate --env-file "$OUT_ABS" 2>&1 | sed 's/^/  /' >&2
+	fi
+fi
 
 # ---------------------------------------------------------------------------
 # Confirmation + next steps (all masked; the file is the only copy of a secret)
@@ -482,6 +536,10 @@ if [ "$IS_PROD" = true ]; then
 		say "       (runs tools/remote-deploy.sh)"
 	fi
 	say "  - Mint an admin token for a user later with:  make mint-token NAME=you"
+	if [ "$TCP_ON" = true ] || [ "$TLS_TUN_ON" = true ]; then
+		say "  - Raw tunnels are enabled: 'make deploy' publishes the ports, and"
+		say "    'make harden' opens them in the firewall. Re-run harden after this."
+	fi
 else
 	if [ "$REDIS_ON" = true ]; then
 		say "  1. Start the local stack:  make up   (Redis backend: docker compose --profile redis up)"

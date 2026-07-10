@@ -18,6 +18,46 @@ rc_compose() {
 	docker compose "${RIFT_COMPOSE_ARGS[@]}" -p "$RIFT_PROJECT" "$@"
 }
 
+# rc_resolve_stack DEFAULT_COMPOSE_FILE — turn the caller's COMPOSE_FILES array
+# (possibly empty) into RIFT_COMPOSE_ARGS, defaulting to DEFAULT_COMPOSE_FILE,
+# and default CADDY_VOLUME to "<project>_caddy_data". backup.sh and restore.sh
+# resolve their target stack identically; this is that shared step.
+#
+# The default is the BASE compose file only: it defines the postgres service
+# without the prod overlay's required `RIFT_TLS_MODE:?`, so a cron environment
+# with none of the .env set can still reach the running container.
+rc_resolve_stack() {
+	local default_file="$1" f
+	[ "${#COMPOSE_FILES[@]}" -gt 0 ] || COMPOSE_FILES=("$default_file")
+	RIFT_COMPOSE_ARGS=()
+	for f in "${COMPOSE_FILES[@]}"; do
+		[ -f "$f" ] || die "compose file not found: $f"
+		RIFT_COMPOSE_ARGS+=(-f "$f")
+	done
+	[ -n "$CADDY_VOLUME" ] || CADDY_VOLUME="${RIFT_PROJECT}_caddy_data"
+}
+
+# rc_resolve_db_identity — print "<user>\t<db>" for the target stack. An explicit
+# RIFT_POSTGRES_DSN wins; otherwise the values the running container was
+# initialised with (rc_pg_env). Aborts if neither yields a user and a database.
+# Used for both dump (source) and restore (target) identity.
+rc_resolve_db_identity() {
+	local user="" db="" env_user="" env_db=""
+	if [ -n "${RIFT_POSTGRES_DSN:-}" ]; then
+		user="$(rc_dsn_user "$RIFT_POSTGRES_DSN")"
+		db="$(rc_dsn_db "$RIFT_POSTGRES_DSN")"
+	fi
+	if [ -z "$user" ] || [ -z "$db" ]; then
+		IFS=$'\t' read -r env_user env_db < <(rc_pg_env) || true
+		[ -n "$user" ] || user="$env_user"
+		[ -n "$db" ] || db="$env_db"
+	fi
+	[ -n "$user" ] && [ -n "$db" ] || die "could not determine database user/name"
+	# Trailing newline so a `read` consuming this returns 0 rather than tripping
+	# set -e on the EOF-without-newline it would otherwise hit.
+	printf '%s\t%s\n' "$user" "$db"
+}
+
 # rc_require_pg_running — abort unless the postgres service has a container up.
 # A clearer failure than letting `exec` error out three calls later.
 rc_require_pg_running() {

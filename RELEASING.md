@@ -27,7 +27,7 @@ from Conventional Commit messages. You do not tag by hand.
      `X.Y`, and `latest` to `ghcr.io/anomalysh`.
 
 The version in `projects/cli/package.json` stays the single source of truth —
-`tools/release.sh` reads it, and release-please keeps it in step with the tag.
+`rift-ops release cli` reads it, and release-please keeps it in step with the tag.
 
 ## One-time setup: the release token
 

@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tools/lib/common.sh
+. "$SCRIPT_DIR/lib/common.sh"
+
+# rift-ops -- one discoverable front door for the operator toolchain. Instead of
+# remembering 20-odd script names, run `rift-ops <group> <verb>`; `rift-ops` with
+# no args (or --help) prints the grouped command tree. It is an additive routing
+# layer over the existing tools/*.sh -- each verb execs the script that already
+# does the work, so nothing about their behaviour, flags, or the Makefile
+# changes. The Makefile and `mise run e2e:*` remain equally valid entrypoints.
+#
+# To add a command: add a "group verb  script  one-line help" row to COMMANDS.
+
+# group  verb  script(relative to tools/)  help
+# A leading "e2e" group routes to the mise tasks rather than a script.
+COMMANDS=$(
+	cat <<'TSV'
+provision create        cmd/provision/provision.sh  Create a VPS and wait for SSH
+provision destroy       cmd/provision/provision.sh  Destroy an instance (pass --destroy <id>)
+provision key           cmd/provision/key.sh        Generate a deploy key and install it on the VPS
+host      harden        cmd/host/harden.sh          Host-harden the VPS (sshd, nftables, fail2ban)
+host      check-dns     cmd/host/check-dns.sh       Advisory DNS / split-horizon check
+host      doctor        cmd/host/doctor.sh          Check this workstation is ready for the tooling
+deploy    deploy        cmd/deploy/deploy.sh        Build & deploy the stack to the VPS
+deploy    plan          cmd/deploy/deploy.sh        Read-only preview of a deploy (adds --plan)
+deploy    verify        cmd/deploy/verify.sh        Assert a live deployment serves TLS correctly
+deploy    rollback      cmd/deploy/rollback.sh      Roll riftd back to the previous image
+deploy    ship          cmd/deploy/ship.sh          Full pipeline: provision -> harden -> deploy -> verify
+deploy    status        cmd/deploy/status.sh        Live snapshot of the deployed stack
+deploy    logs          cmd/deploy/logs.sh          Tail the deployed stack's logs over SSH
+config    setup         cmd/config/setup.sh         Interactive wizard: generate an untracked .env
+secret    rotate        cmd/secret/rotate.sh        Rotate an admin/peer secret on the VPS
+secret    mint-token    cmd/secret/mint-token.sh    Mint an admin token
+backup    backup        cmd/backup/backup.sh        Back up Postgres + caddy_data
+backup    restore       cmd/backup/restore.sh       Restore a backup (pass --from <dir>)
+backup    teardown      cmd/backup/teardown.sh      Destroy the instance + local state
+release   cli           cmd/release/cli.sh          Cross-compile the CLI release artifacts
+release   caddy         cmd/release/caddy.sh        Build Caddy with the DNS-01 plugins
+release   images        cmd/release/images.sh       Build/push the ghcr container images
+release   docker        cmd/release/docker.sh       Reproducible release build in a pinned container
+cert      watch         cmd/cert/watch.sh           Warn before a served TLS certificate expires
+ssh       ssh           cmd/remote/ssh.sh           SSH to the VPS (or run a remote command)
+ssh       scp           cmd/remote/scp.sh           Copy files to/from the VPS
+TSV
+)
+
+groups() { printf '%s\n' "$COMMANDS" | awk '{print $1}' | awk '!seen[$0]++'; }
+
+usage() {
+	printf 'rift-ops -- the rift operator toolchain\n\n' >&2
+	printf 'Usage: rift-ops <group> <verb> [args...]\n' >&2
+	printf '       rift-ops <group>            list a group'"'"'s verbs\n' >&2
+	printf '       rift-ops --help             this help\n\n' >&2
+	local g
+	for g in $(groups); do
+		printf '  %s\n' "$g" >&2
+		printf '%s\n' "$COMMANDS" | awk -v g="$g" '$1==g {
+			printf "    %-13s %s\n", $2, substr($0, index($0,$4))
+		}' | sed 's/[^ ]*\.sh  *//' >&2
+	done
+	printf '\nEvery verb execs tools/<script> and forwards your args; pass --help to a\nverb for its own options. The Makefile and `mise run ...` still work too.\n' >&2
+}
+
+# lookup GROUP VERB -> prints the script name, or empty.
+lookup() {
+	printf '%s\n' "$COMMANDS" | awk -v g="$1" -v v="$2" '$1==g && $2==v {print $3; exit}'
+}
+
+case "${1:-}" in
+-h | --help | "")
+	usage
+	[ "${1:-}" = "" ] && exit 1 || exit 0
+	;;
+esac
+
+group="$1"
+shift
+
+# `rift-ops <group>` with no verb: list that group.
+if ! groups | grep -qx -- "$group"; then
+	log_error "unknown group: $group"
+	usage
+	exit 2
+fi
+if [ "$#" -eq 0 ]; then
+	printf 'verbs in "%s":\n' "$group" >&2
+	printf '%s\n' "$COMMANDS" | awk -v g="$group" '$1==g {printf "  %s\n", $2}' >&2
+	exit 1
+fi
+
+verb="$1"
+shift
+script="$(lookup "$group" "$verb")"
+[ -n "$script" ] || die "unknown verb '$verb' in group '$group' (try: rift-ops $group)"
+
+# `deploy plan` is `remote-deploy.sh --plan`; wire that one alias explicitly.
+if [ "$group" = deploy ] && [ "$verb" = plan ]; then
+	set -- --plan "$@"
+fi
+
+exec bash "$SCRIPT_DIR/$script" "$@"

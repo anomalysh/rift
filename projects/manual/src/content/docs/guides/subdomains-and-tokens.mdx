@@ -27,7 +27,7 @@ public, run it on the host or forward the port over SSH first:
 1. Forward the admin port from the host (in a separate terminal):
 
    ```sh
-   tools/ssh.sh -L 8082:127.0.0.1:8082
+   rift-ops ssh ssh -L 8082:127.0.0.1:8082
    ```
 
 2. Mint a named token:
@@ -35,7 +35,7 @@ public, run it on the host or forward the port over SSH first:
    ```sh
    RIFT_ADMIN_URL=http://127.0.0.1:8082 \
    RIFT_ADMIN_TOKEN=your_admin_token \
-   tools/mint-token.sh my-laptop
+   rift-ops secret mint-token my-laptop
    ```
 
    It prints one line beginning with `rift_`. Hand that to the agent via

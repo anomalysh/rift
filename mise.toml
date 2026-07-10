@@ -45,10 +45,6 @@ depends = [
   "//projects/server:vet",
 ]
 
-[tasks.gen-docs]
-description = "Regenerate the man page and shell completions"
-run = "make gen-docs"
-
 # .git/hooks is not tracked, so each clone installs the hook once with
 # `mise run install-hooks` (or `mise generate git-pre-commit --write`).
 [tasks.install-hooks]

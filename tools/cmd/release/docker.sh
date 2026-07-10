@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/release-docker.sh — build the multi-arch CLI release inside a pinned Bun
+# rift-ops release docker — build the multi-arch CLI release inside a pinned Bun
 # container and extract the artifacts to dist/release/<version>/.
 #
 # Reproducible: the toolchain is fixed by deploy/Dockerfile.release, so the
@@ -8,16 +8,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=tools/lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+. "$SCRIPT_DIR/../../lib/common.sh"
 
-DOCKERFILE="$REPO_DIR/deploy/Dockerfile.release"
-OUT="$REPO_DIR/dist/release"
+DOCKERFILE="$RIFT_REPO_ROOT/deploy/Dockerfile.release"
+OUT="$RIFT_REPO_ROOT/dist/release"
 
 usage() {
 	cat <<'EOF'
-Usage: tools/release-docker.sh [options]
+Usage: rift-ops release docker [options]
 
 Cross-compile the rift CLI for every target inside a pinned Bun container and
 extract the artifacts to dist/release/<version>/. The toolchain is fixed by
@@ -66,7 +65,7 @@ main() {
 		--output "type=local,dest=$OUT"
 	)
 	[ -n "$bun" ] && args+=(--build-arg "BUN_VERSION=$bun")
-	args+=("$REPO_DIR")
+	args+=("$RIFT_REPO_ROOT")
 
 	log_info "building rift release in a pinned Bun container (reproducible)"
 	docker buildx "${args[@]}"

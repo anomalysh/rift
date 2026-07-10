@@ -3,11 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+. "$SCRIPT_DIR/../../lib/common.sh"
 
 usage() {
 	cat >&2 <<'EOF'
-Usage: tools/ssh-provision-key.sh
+Usage: rift-ops provision key
 
 Bootstrap key-based SSH to the rift VPS. Idempotent — safe to re-run.
   1. Generates tools/.ssh/id_ed25519 if it does not exist.

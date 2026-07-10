@@ -3,17 +3,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+. "$SCRIPT_DIR/../../lib/common.sh"
 # shellcheck source=tools/lib/preflight.sh
-. "$SCRIPT_DIR/lib/preflight.sh"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+. "$SCRIPT_DIR/../../lib/preflight.sh"
 
 DEFAULT_PLUGINS="github.com/caddy-dns/rfc2136 github.com/caddy-dns/acmedns"
 DEFAULT_IMAGE="rift-caddy:local"
 
 usage() {
 	cat >&2 <<EOF
-Usage: tools/build-caddy.sh [--validate] [--push] [--image NAME] [--dry-run]
+Usage: rift-ops release caddy [--validate] [--push] [--image NAME] [--dry-run]
 
 Build a Caddy image with the DNS-01 solver plugins listed in
 RIFT_CADDY_DNS_PLUGINS, read from your untracked .env (or the environment).
@@ -65,16 +64,8 @@ while [ "$#" -gt 0 ]; do
 	shift
 done
 
-# Load the operator's untracked .env if present, without clobbering anything
-# already exported.
-if [ -f "$REPO_ROOT/.env" ]; then
-	log_info "reading $REPO_ROOT/.env"
-	set -a
-	# operator-supplied, not in the repo
-	# shellcheck disable=SC1091
-	. "$REPO_ROOT/.env"
-	set +a
-fi
+# Load the operator's untracked .env (honors RIFT_ENV_FILE) if present.
+load_env
 
 require_docker
 
@@ -102,11 +93,11 @@ log_info "caddy:   $caddy_version"
 log_info "plugins: $plugins"
 
 build_cmd=(docker build
-	--file "$REPO_ROOT/deploy/Dockerfile.caddy"
+	--file "$RIFT_REPO_ROOT/deploy/Dockerfile.caddy"
 	--build-arg "CADDY_VERSION=$caddy_version"
 	--build-arg "RIFT_CADDY_DNS_PLUGINS=$plugins"
 	--tag "$image"
-	"$REPO_ROOT")
+	"$RIFT_REPO_ROOT")
 
 if [ "$dry_run" = true ]; then
 	log_info "[dry-run] ${build_cmd[*]}"
@@ -130,7 +121,7 @@ if [ "$validate" = true ]; then
 		# so the placeholders below have to look plausible or validation fails
 		# for the wrong reason.
 		dummy_token="0123456789abcdef0123456789abcdef01234567"
-		for snippet in "$REPO_ROOT"/deploy/caddy/dns/*.caddy; do
+		for snippet in "$RIFT_REPO_ROOT"/deploy/caddy/dns/*.caddy; do
 			provider="$(basename "$snippet" .caddy)"
 			if docker run --rm \
 				-e RIFT_ACME_EMAIL=validate@example.test \
@@ -148,7 +139,7 @@ if [ "$validate" = true ]; then
 				-e RIFT_PDNS_SERVER_URL=http://127.0.0.1:8081 \
 				-e RIFT_PDNS_API_TOKEN=t -e RIFT_PDNS_SERVER_ID=localhost \
 				-e RIFT_LINODE_API_VERSION=v4 \
-				-v "$REPO_ROOT/deploy/caddy:/etc/caddy:ro" \
+				-v "$RIFT_REPO_ROOT/deploy/caddy:/etc/caddy:ro" \
 				"$image" caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
 				log_info "  ok       $provider"
 			else
@@ -165,7 +156,7 @@ fi
 
 if [ "$push" = true ]; then
 	require_env RIFT_VPS_HOST
-	ssh_wrapper="$SCRIPT_DIR/ssh.sh"
+	ssh_wrapper="$RIFT_TOOLS_DIR/cmd/remote/ssh.sh"
 	if [ "$dry_run" = true ]; then
 		log_info "[dry-run] docker save $image | $ssh_wrapper 'docker load'"
 	else

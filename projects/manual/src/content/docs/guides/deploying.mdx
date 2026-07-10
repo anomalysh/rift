@@ -75,7 +75,7 @@ coordinates (`RIFT_VPS_HOST`, `RIFT_VPS_USER`, `RIFT_VPS_PORT`) from `.env`.
 1. **Provision key-based SSH** and disable password auth:
 
    ```sh
-   tools/ssh-provision-key.sh          # or: make provision-key
+   rift-ops provision key          # or: make provision-key
    ```
 
    This bootstraps key auth using `RIFT_VPS_PASSWORD`, then you disable password
@@ -86,13 +86,13 @@ coordinates (`RIFT_VPS_HOST`, `RIFT_VPS_USER`, `RIFT_VPS_PORT`) from `.env`.
    of any deploy tarball, so it survives every redeploy:
 
    ```sh
-   tools/scp.sh .env /opt/rift/deploy/.env
+   rift-ops ssh scp .env /opt/rift/deploy/.env
    ```
 
 3. **Deploy the stack:**
 
    ```sh
-   tools/remote-deploy.sh              # or: make deploy
+   rift-ops deploy deploy              # or: make deploy
    ```
 
    This ships `server/` and `deploy/` to `/opt/rift`, then runs from
@@ -126,8 +126,8 @@ deploy:
 ```sh
 make build-caddy ARGS=--validate
 # set RIFT_CADDY_IMAGE and RIFT_ACME_DNS_PROVIDER in .env, then:
-tools/scp.sh .env /opt/rift/deploy/.env
-tools/remote-deploy.sh
+rift-ops ssh scp .env /opt/rift/deploy/.env
+rift-ops deploy deploy
 ```
 
 See [DNS-01 providers](/guides/dns-providers/) for the provider snippets and

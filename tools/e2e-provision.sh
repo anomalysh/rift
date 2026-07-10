@@ -6,6 +6,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=tools/lib/e2e-harness.sh
+. "$SCRIPT_DIR/lib/e2e-harness.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # End-to-end test for tools/provision.sh and the Linode provider. Hermetic: it
@@ -60,9 +62,6 @@ TMPDIR_E2E="$(mktemp -d)"
 EMPTY_ENV="$TMPDIR_E2E/empty.env"
 : >"$EMPTY_ENV"
 
-pass=0
-fail=0
-
 cleanup() {
 	local status=$?
 	if [ "$keep" != true ]; then
@@ -90,51 +89,6 @@ build_images() {
 	fi
 	tail -20 "$TMPDIR_E2E/build.log" >&2
 	die "could not build the provisioning e2e images"
-}
-
-check() {
-	local name="$1" got="$2" want="$3"
-	if [ "$got" = "$want" ]; then
-		printf '    ok    %s\n' "$name"
-		pass=$((pass + 1))
-	else
-		printf '    FAIL  %s: got [%s] want [%s]\n' "$name" "$got" "$want"
-		fail=$((fail + 1))
-	fi
-}
-
-check_ge() {
-	local name="$1" got="$2" min="$3"
-	if [ "${got:-0}" -ge "$min" ] 2>/dev/null; then
-		printf '    ok    %s\n' "$name"
-		pass=$((pass + 1))
-	else
-		printf '    FAIL  %s: got [%s] want >= [%s]\n' "$name" "$got" "$min"
-		fail=$((fail + 1))
-	fi
-}
-
-check_contains() {
-	local name="$1" haystack="$2" needle="$3"
-	if printf '%s' "$haystack" | grep -qF "$needle"; then
-		printf '    ok    %s\n' "$name"
-		pass=$((pass + 1))
-	else
-		printf '    FAIL  %s: %q does not contain %q\n' "$name" "$haystack" "$needle"
-		fail=$((fail + 1))
-	fi
-}
-
-wait_for_tcp() {
-	local port="$1" what="$2"
-	for _ in $(seq 1 60); do
-		if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
-			exec 3<&- 3>&-
-			return 0
-		fi
-		sleep 1
-	done
-	die "$what did not come up on port $port"
 }
 
 # --- mock control plane -----------------------------------------------------
@@ -244,7 +198,7 @@ mock_reset
 DRY_STATE="$TMPDIR_E2E/dry-state.json"
 rm -f "$DRY_STATE"
 run rc "$TMPDIR_E2E/t1.log" env RIFT_LINODE_TOKEN="$TOKEN" RIFT_ENV_FILE="$EMPTY_ENV" \
-	"$SCRIPT_DIR/provision.sh" --api-base "$(mock_url)" --ssh-port "$SSHD_PORT" \
+	"$SCRIPT_DIR/cmd/provision/provision.sh" --api-base "$(mock_url)" --ssh-port "$SSHD_PORT" \
 	--key "$KEY_PUB" --dry-run --name dry1 --state-file "$DRY_STATE"
 check "dry-run exits 0" "$rc" "0"
 check "dry-run makes zero HTTP requests" "$(count_all_requests)" "0"
@@ -254,7 +208,7 @@ check "dry-run writes no state file" "$([ -e "$DRY_STATE" ] && echo yes || echo 
 printf '\n=== 2. create without a token fails and the mock logs a 401 ===\n'
 mock_reset
 run rc "$TMPDIR_E2E/t2.log" env RIFT_LINODE_TOKEN="" RIFT_ENV_FILE="$EMPTY_ENV" \
-	"$SCRIPT_DIR/provision.sh" --api-base "$(mock_url)" --ssh-port "$SSHD_PORT" \
+	"$SCRIPT_DIR/cmd/provision/provision.sh" --api-base "$(mock_url)" --ssh-port "$SSHD_PORT" \
 	--key "$KEY_PUB" --name notoken --status-timeout 5 --poll-interval 1 \
 	--state-file "$TMPDIR_E2E/nt.json"
 check "create without token exits non-zero" "$([ "$rc" -ne 0 ] && echo yes || echo no)" "yes"
@@ -266,7 +220,7 @@ mock_reset
 LIFE_STATE="$TMPDIR_E2E/life-state.json"
 rm -f "$LIFE_STATE"
 run rc "$TMPDIR_E2E/t3.log" env RIFT_LINODE_TOKEN="$TOKEN" RIFT_ENV_FILE="$EMPTY_ENV" \
-	"$SCRIPT_DIR/provision.sh" --provider linode --api-base "$(mock_url)" \
+	"$SCRIPT_DIR/cmd/provision/provision.sh" --provider linode --api-base "$(mock_url)" \
 	--ssh-port "$SSHD_PORT" --key "$KEY_PUB" --name life1 \
 	--status-timeout 30 --poll-interval 1 --state-file "$LIFE_STATE"
 check "full create succeeds (SSH answered)" "$rc" "0"
@@ -288,17 +242,17 @@ check "state records the provider" "$(json_field "$LIFE_STATE" provider)" "linod
 # ============================================================================
 printf '\n=== 5. --list shows the created instance ===\n'
 LIST_OUT="$(env RIFT_LINODE_TOKEN="$TOKEN" RIFT_ENV_FILE="$EMPTY_ENV" \
-	"$SCRIPT_DIR/provision.sh" --provider linode --api-base "$(mock_url)" --list 2>/dev/null || true)"
+	"$SCRIPT_DIR/cmd/provision/provision.sh" --provider linode --api-base "$(mock_url)" --list 2>/dev/null || true)"
 check_ge "--list shows the created instance id" \
 	"$(printf '%s' "$LIST_OUT" | grep -Ec "^${EXPECTED_ID}([^0-9]|$)" || true)" "1"
 
 # ============================================================================
 printf '\n=== 6. --destroy is idempotent (0 first, 0 again on 404) ===\n'
 run rc1 "$TMPDIR_E2E/d1.log" env RIFT_LINODE_TOKEN="$TOKEN" RIFT_ENV_FILE="$EMPTY_ENV" \
-	"$SCRIPT_DIR/provision.sh" --provider linode --api-base "$(mock_url)" --destroy "$EXPECTED_ID"
+	"$SCRIPT_DIR/cmd/provision/provision.sh" --provider linode --api-base "$(mock_url)" --destroy "$EXPECTED_ID"
 check "first --destroy succeeds" "$rc1" "0"
 run rc2 "$TMPDIR_E2E/d2.log" env RIFT_LINODE_TOKEN="$TOKEN" RIFT_ENV_FILE="$EMPTY_ENV" \
-	"$SCRIPT_DIR/provision.sh" --provider linode --api-base "$(mock_url)" --destroy "$EXPECTED_ID"
+	"$SCRIPT_DIR/cmd/provision/provision.sh" --provider linode --api-base "$(mock_url)" --destroy "$EXPECTED_ID"
 check "second --destroy is idempotent (still 0 on 404)" "$rc2" "0"
 check_ge "two DELETEs were issued" "$(count_requests DELETE '^/v4/linode/instances/[0-9]+$')" "2"
 
@@ -309,7 +263,7 @@ mock_config '{"provisioning_polls": 100000}'
 TO_STATE="$TMPDIR_E2E/timeout-state.json"
 rm -f "$TO_STATE"
 run rc "$TMPDIR_E2E/t7.log" env RIFT_LINODE_TOKEN="$TOKEN" RIFT_ENV_FILE="$EMPTY_ENV" \
-	"$SCRIPT_DIR/provision.sh" --provider linode --api-base "$(mock_url)" \
+	"$SCRIPT_DIR/cmd/provision/provision.sh" --provider linode --api-base "$(mock_url)" \
 	--ssh-port "$SSHD_PORT" --key "$KEY_PUB" --name t7 \
 	--status-timeout 3 --poll-interval 1 --state-file "$TO_STATE"
 check "status timeout exits non-zero" "$([ "$rc" -ne 0 ] && echo yes || echo no)" "yes"
@@ -319,13 +273,11 @@ check "status timeout wrote no state file" "$([ -e "$TO_STATE" ] && echo yes || 
 # ============================================================================
 printf '\n=== 8. an unknown provider fails, naming the providers that exist ===\n'
 run rc "$TMPDIR_E2E/t8.log" env RIFT_LINODE_TOKEN="$TOKEN" RIFT_ENV_FILE="$EMPTY_ENV" \
-	"$SCRIPT_DIR/provision.sh" --provider nope --api-base "$(mock_url)" \
+	"$SCRIPT_DIR/cmd/provision/provision.sh" --provider nope --api-base "$(mock_url)" \
 	--key "$KEY_PUB" --name x
 check "unknown provider exits non-zero" "$([ "$rc" -ne 0 ] && echo yes || echo no)" "yes"
 check_contains "error names the unknown provider" "$(cat "$TMPDIR_E2E/t8.log")" "unknown provider: nope"
 check_contains "error lists the available providers" "$(cat "$TMPDIR_E2E/t8.log")" "linode"
 
 # ============================================================================
-printf '\n=== summary ===\n  passed=%d failed=%d\n' "$pass" "$fail"
-[ "$fail" -eq 0 ] || die "provisioning e2e failed"
-log_info "provisioning e2e passed"
+print_summary "provisioning e2e"

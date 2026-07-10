@@ -49,6 +49,43 @@ is_true() {
 # rift_ssh_key_path — path to the managed deploy key (may not exist yet).
 rift_ssh_key_path() { printf '%s/.ssh/id_ed25519' "$RIFT_TOOLS_DIR"; }
 
+# rift_gen_secret [N] — N (default 48) random URL-safe characters from the
+# kernel CSPRNG. Aborts rather than return a short/predictable value. Shared by
+# the setup wizard and secret rotation so both mint identical-strength secrets.
+rift_gen_secret() {
+	local n="${1:-48}" s
+	s="$(
+		set +o pipefail
+		LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$n"
+	)"
+	[ "${#s}" -eq "$n" ] || die "could not gather $n random characters from /dev/urandom"
+	printf '%s' "$s"
+}
+
+# rift_ssh_auth AUTH_ARR PREFIX_ARR — resolve VPS auth ONCE for both ssh and scp.
+# Populates AUTH_ARR with the auth-selecting ssh/scp options and PREFIX_ARR with
+# the command prefix (empty for key auth, `sshpass -e` otherwise). The caller
+# keeps the base tool and the port flag (`-p` for ssh, `-P` for scp) explicit, so
+# that footgun stays visible at the call site.
+#
+# `sshpass -e` reads the password from the SSHPASS env var, never argv: `-p pw`
+# would expose it in `ps` to every user on the machine.
+rift_ssh_auth() {
+	local -n __auth="$1" __prefix="$2"
+	local key
+	key="$(rift_ssh_key_path)"
+	if [ -f "$key" ]; then
+		__auth=(-i "$key" -o IdentitiesOnly=yes -o PasswordAuthentication=no)
+		__prefix=()
+	else
+		require_cmd sshpass
+		require_env RIFT_VPS_PASSWORD
+		export SSHPASS="$RIFT_VPS_PASSWORD"
+		__auth=(-o PubkeyAuthentication=no)
+		__prefix=(sshpass -e)
+	fi
+}
+
 # Shared ssh/scp options.
 #   accept-new records an unknown host key on first contact but still refuses a
 #   CHANGED key afterwards (catches a later MITM). ServerAlive* keeps a long
@@ -79,3 +116,9 @@ RIFT_SSH_OPTS=(
 	-o "ControlPath=$RIFT_SSH_CONTROL_DIR/%r@%h:%p"
 	-o ControlPersist=5m
 )
+
+# Runtime primitives (repo root, load_env, register_cleanup, rift_run). Sourced
+# here so every script that sources common.sh gets them without a second source
+# line; keep this last, after common.sh's own definitions it depends on.
+# shellcheck source=tools/lib/runtime.sh
+. "$RIFT_TOOLS_DIR/lib/runtime.sh"

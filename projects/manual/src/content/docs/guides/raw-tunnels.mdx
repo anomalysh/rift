@@ -1,0 +1,101 @@
+---
+title: Raw TCP & TLS tunnels
+description: Tunnel a non-HTTP service (rift tcp) or a service that terminates its own TLS (rift tls), and the ports each one needs published and firewalled.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Most tunnels are HTTP: the gateway routes by subdomain and terminates edge TLS,
+so many tunnels share ports 80/443. Two protocols are different — they carry raw
+bytes the gateway never parses, so each needs a port of its own on the server.
+
+| Protocol | For | Reached at |
+| -------- | --- | ---------- |
+| `rift tcp <port>` | any TCP service — Postgres, Redis, SSH, a game server | a **public port the gateway allocates** per tunnel |
+| `rift tls <port> <sub>` | a service that terminates its **own** TLS | `sub.<domain>` on a **dedicated TLS port**, SNI-routed |
+
+Both are **off by default**. Turning either on has three parts: enable it on the
+server, publish its ports from the container, and open those ports on the host
+firewall. The tooling does the last two for you when the flags are set.
+
+## `rift tcp` — raw TCP
+
+The gateway keeps a pool of public ports (`RIFT_TCP_PORT_MIN`–`RIFT_TCP_PORT_MAX`,
+default `20000`–`20100`). Each `rift tcp` tunnel is assigned one; the gateway
+binds a listener there and pipes every connection through to your local port. The
+bound address is printed in the agent's banner.
+
+```sh
+rift tcp 5432 --server wss://gateway.example.com/tunnel --token rift_xxx
+# -> tcp://gateway.example.com:20000  (forwards to localhost:5432)
+```
+
+<Aside type="caution" title="One process per published port">
+	Docker publishes a port range by running one `docker-proxy` process per port,
+	so the default 101-port range is ~101 processes. On a small host (a 1 GB VPS),
+	narrow `RIFT_TCP_PORT_MIN`/`RIFT_TCP_PORT_MAX` to the number of concurrent TCP
+	tunnels you actually need — even a handful is usually plenty.
+</Aside>
+
+## `rift tls` — TLS passthrough
+
+For a service that holds its own certificate, `rift tls` routes by the
+ClientHello **SNI** and passes the encrypted bytes straight through. The gateway
+never decrypts, so your service keeps end-to-end TLS; rift only steers the
+connection to the right tunnel by subdomain.
+
+```sh
+rift tls 8443 api --server wss://gateway.example.com/tunnel --token rift_xxx
+# -> clients dial api.<domain>:8443, your local service terminates TLS
+```
+
+Because it cannot share 443 with the HTTP edge (that is Caddy's), passthrough
+listens on a dedicated port, `RIFT_TLS_TUNNEL_ADVERTISE_PORT` (default `8443`).
+
+## Enabling it on the server
+
+Set the flags in your `.env` (the [setup wizard](/guides/deploying/) prompts for
+these):
+
+| Variable | Default | Purpose |
+| -------- | ------- | ------- |
+| `RIFT_TCP_ENABLED` | `false` | turn on `rift tcp` tunnels |
+| `RIFT_TCP_PORT_MIN` / `RIFT_TCP_PORT_MAX` | `20000` / `20100` | inclusive public port range to allocate from |
+| `RIFT_TCP_ADVERTISE_HOST` | `RIFT_BASE_DOMAIN` | host clients dial for a TCP tunnel |
+| `RIFT_TLS_TUNNEL_ENABLED` | `false` | turn on `rift tls` passthrough |
+| `RIFT_TLS_TUNNEL_ADVERTISE_PORT` | `8443` | public port clients dial for a TLS tunnel |
+
+## Publishing and firewalling the ports
+
+Unlike HTTP tunnels, these ports are **not** fronted by Caddy — riftd publishes
+them from its container directly, and the host firewall must allow them. Both
+steps are automatic when the flags above are set:
+
+- **`make deploy`** ([`remote-deploy.sh`](/guides/deploying/)) layers
+  `docker-compose.tcp.yml` when `RIFT_TCP_ENABLED` is true, and
+  `docker-compose.tls.yml` when `RIFT_TLS_TUNNEL_ENABLED` is true — publishing
+  exactly the ports whose feature is on.
+- **`make harden`** (`rift-ops host harden`) reads the same variables and opens those
+  ports in nftables, leaving the rest of the host closed.
+
+<Aside type="tip" title="Re-run harden after flipping a flag">
+	Enabling a tunnel changes the firewall's expected open set. After you turn one
+	on (or narrow the range), run `make harden` again so nftables matches, then
+	`make deploy` to publish the ports.
+</Aside>
+
+The two features are independent: enabling only `rift tls` publishes and opens
+only `8443`, and enabling only `rift tcp` touches only the range — neither drags
+the other's ports along.
+
+## How the bytes flow
+
+```text
+rift tcp:   client ──TCP──▶ gateway:20000 ──frame──▶ agent ──▶ localhost:5432
+rift tls:   client ──TLS──▶ gateway:8443 ─(SNI route, still encrypted)─▶ agent ──▶ local TLS service
+```
+
+For an HTTP tunnel the gateway sees your requests; for `rift tcp` it sees only
+bytes; for `rift tls` it sees only the SNI and the ciphertext. See the
+[CLI reference](/reference/cli/) for every flag and the
+[wire protocol](/reference/protocol/) for the framing.

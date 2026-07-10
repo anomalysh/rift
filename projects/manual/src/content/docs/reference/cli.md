@@ -60,10 +60,15 @@ argument is a usage error (exit code 2).
 rift http 3000                 # tunnel localhost:3000 with a random subdomain
 rift http 3000 myapp           # request the subdomain "myapp"
 rift https 8443                # tunnel a local HTTPS server (self-signed ok)
+rift tcp 5432                  # expose a raw TCP service on an allocated port
+rift tls 8443 api              # SNI-passthrough a TLS service at api.<domain>
 
 # Point at a specific gateway with a token and quiet logging:
 rift http 8080 --server wss://gateway.example.com/tunnel --token rift_xxx --log-level warn
 ```
+
+The `tcp` and `tls` protocols carry raw bytes on dedicated server ports that must
+be published and firewalled; see [Raw TCP & TLS tunnels](/guides/raw-tunnels/).
 
 For an `https` tunnel the agent verifies the upstream certificate by default,
 except on a loopback host (`127.0.0.1`, `::1`, `localhost`), where a self-signed

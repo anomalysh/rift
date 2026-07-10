@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/publish-images.sh — build (and optionally push) the three rift container
+# rift-ops release images — build (and optionally push) the three rift container
 # images without CI, for someone who has a laptop and a registry but no Actions.
 #
 # This mirrors what the publish job in .github/workflows/ci.yml does: same images, same OCI
@@ -10,9 +10,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=tools/lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+. "$SCRIPT_DIR/../../lib/common.sh"
 
 DEFAULT_REGISTRY="ghcr.io/anomalysh"
 DEFAULT_TAG="local"
@@ -35,7 +34,7 @@ IMAGES=(
 
 usage() {
 	cat <<EOF
-Usage: tools/publish-images.sh [options]
+Usage: rift-ops release images [options]
 
 Build the rift container images (riftd, rift-caddy, rift-cli) locally and,
 only with --push, publish them to a registry. Mirrors the CI publish workflow.
@@ -104,7 +103,7 @@ docker buildx version >/dev/null 2>&1 || die "docker buildx is required (install
 registry="${registry%/}"
 
 created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-revision="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "")"
+revision="$(git -C "$RIFT_REPO_ROOT" rev-parse HEAD 2>/dev/null || echo "")"
 
 log_info "registry: $registry"
 log_info "tag:      $tag"
@@ -128,7 +127,7 @@ build_image() {
 	local ref="$registry/$image:$tag"
 
 	local cmd=(docker buildx build
-		--file "$REPO_ROOT/$dockerfile"
+		--file "$RIFT_REPO_ROOT/$dockerfile"
 		--tag "$ref"
 		--build-arg "IMAGE_SOURCE=$IMAGE_SOURCE_URL"
 		--build-arg "IMAGE_REVISION=$revision"
@@ -158,7 +157,7 @@ build_image() {
 		cmd+=(--load)
 	fi
 
-	cmd+=("$REPO_ROOT")
+	cmd+=("$RIFT_REPO_ROOT")
 
 	log_info "building $ref"
 	run "${cmd[@]}"

@@ -3,18 +3,18 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+. "$SCRIPT_DIR/../../lib/common.sh"
 
 usage() {
 	cat >&2 <<'EOF'
-Usage: tools/mint-token.sh NAME
+Usage: rift-ops secret mint-token NAME
 
 Create an admin API token named NAME and print the plaintext token to stdout.
 
 The admin API is NOT publicly exposed, so run this on the VPS itself or over an
 SSH tunnel, e.g.:
     tools/ssh.sh -L 8082:127.0.0.1:8082   # in another terminal
-    RIFT_ADMIN_URL=http://127.0.0.1:8082 tools/mint-token.sh my-laptop
+    RIFT_ADMIN_URL=http://127.0.0.1:8082 rift-ops secret mint-token my-laptop
 
 Environment:
   RIFT_ADMIN_URL    Admin API base URL   (default: http://127.0.0.1:8082)

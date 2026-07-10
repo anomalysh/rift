@@ -7,7 +7,9 @@
 #
 #   bash tools/release-docker.sh        -> ./dist/release/<version>/
 
-ARG BUN_VERSION=1.3.12
+# Keep in lockstep with the bun pin in mise.toml (tools/check-versions.sh gates
+# this); the release binary must build on the same Bun the tests ran on.
+ARG BUN_VERSION=1.3.14
 FROM oven/bun:${BUN_VERSION} AS build
 
 # release.sh packages the Windows target as a .zip; the bun image is
@@ -27,7 +29,7 @@ RUN cd projects/cli && bun install
 
 # Build every target into /src/dist/release/<version>/. --clean makes the layer
 # deterministic regardless of any stale output copied in.
-RUN bash tools/release.sh --clean
+RUN bash tools/cmd/release/cli.sh --clean
 
 # --- artifacts --------------------------------------------------------------
 # A files-only stage so `buildx --target artifacts --output type=local,dest=…`

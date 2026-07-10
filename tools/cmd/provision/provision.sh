@@ -3,9 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PROVIDERS_DIR="$SCRIPT_DIR/providers"
+. "$SCRIPT_DIR/../../lib/common.sh"
+PROVIDERS_DIR="$RIFT_TOOLS_DIR/providers"
 
 # provision.sh -- create a cloud VPS for rift and get it ready for hand-off.
 #
@@ -36,9 +35,9 @@ DEFAULT_SSH_PORT=22
 
 usage() {
 	cat >&2 <<EOF
-Usage: tools/provision.sh [options]
-       tools/provision.sh --list
-       tools/provision.sh --destroy <id>
+Usage: rift-ops provision create [options]
+       rift-ops provision create --list
+       rift-ops provision create --destroy <id>
 
 Create a VPS and wait until SSH answers, then hand off to tools/harden.sh and
 tools/remote-deploy.sh. Creates the instance and installs the deploy key only;
@@ -136,15 +135,9 @@ _env_image="${RIFT_IMAGE:-}"
 _env_name="${RIFT_INSTANCE_NAME:-}"
 _env_state="${RIFT_STATE_FILE:-}"
 
-ENV_FILE="${RIFT_ENV_FILE:-$REPO_ROOT/.env}"
-if [ -f "$ENV_FILE" ]; then
-	log_info "reading $ENV_FILE"
-	set -a
-	# operator-supplied, not in the repo
-	# shellcheck disable=SC1090
-	. "$ENV_FILE"
-	set +a
-fi
+# The snapshots above let the caller's env win; load_env then fills in the rest
+# from the file (honoring RIFT_ENV_FILE, as this script's --help documents).
+load_env
 
 # Precedence for every value: CLI flag > caller env > .env > built-in default.
 provider="${opt_provider:-${_env_provider:-${RIFT_PROVIDER:-$DEFAULT_PROVIDER}}}"
@@ -152,7 +145,7 @@ region="${opt_region:-${_env_region:-${RIFT_REGION:-$DEFAULT_REGION}}}"
 type="${opt_type:-${_env_type:-${RIFT_TYPE:-$DEFAULT_TYPE}}}"
 image="${opt_image:-${_env_image:-${RIFT_IMAGE:-$DEFAULT_IMAGE}}}"
 api_base="${opt_api_base:-${_env_api_base:-${RIFT_PROVIDER_API_BASE:-}}}"
-state_file="${opt_state_file:-${_env_state:-${RIFT_STATE_FILE:-$REPO_ROOT/.rift/state.json}}}"
+state_file="${opt_state_file:-${_env_state:-${RIFT_STATE_FILE:-$RIFT_REPO_ROOT/.rift/state.json}}}"
 name="${opt_name:-${_env_name:-${RIFT_INSTANCE_NAME:-rift-$(date +%Y%m%d-%H%M%S)}}}"
 status_timeout="${opt_status_timeout:-$DEFAULT_STATUS_TIMEOUT}"
 ssh_timeout="${opt_ssh_timeout:-$DEFAULT_SSH_TIMEOUT}"

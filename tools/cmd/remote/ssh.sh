@@ -3,11 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+. "$SCRIPT_DIR/../../lib/common.sh"
 
 usage() {
 	cat >&2 <<'EOF'
-Usage: tools/ssh.sh [REMOTE_COMMAND...]
+Usage: rift-ops ssh ssh [REMOTE_COMMAND...]
 
 SSH to the rift VPS. With no arguments this opens an interactive shell; with
 arguments it runs them as a remote command and exits with the command's status.
@@ -47,17 +47,8 @@ if [ "$#" -eq 0 ]; then
 	ssh_args+=(-t)
 fi
 
-key="$(rift_ssh_key_path)"
-if [ -f "$key" ]; then
-	ssh_args+=(-i "$key" -o IdentitiesOnly=yes -o PasswordAuthentication=no)
-	exec ssh "${ssh_args[@]}" "$user@$host" "$@"
-fi
-
-# No key yet: password auth. Export SSHPASS so sshpass reads the password from
-# the ENVIRONMENT (`sshpass -e`). We deliberately never use `sshpass -p "$pw"`:
-# that would place the password in the process arguments, visible in `ps` to
-# every user on this machine.
-require_cmd sshpass
-require_env RIFT_VPS_PASSWORD
-export SSHPASS="$RIFT_VPS_PASSWORD"
-exec sshpass -e ssh "${ssh_args[@]}" -o PubkeyAuthentication=no "$user@$host" "$@"
+# Key auth if the managed key exists, else `sshpass -e` (never `-p`, which would
+# leak the password into argv). rift_ssh_auth fills both arrays by nameref.
+auth=() prefix=()
+rift_ssh_auth auth prefix
+exec "${prefix[@]}" ssh "${ssh_args[@]}" "${auth[@]}" "$user@$host" "$@"

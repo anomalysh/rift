@@ -30,6 +30,16 @@ import (
 const shutdownGrace = 20 * time.Second
 
 func main() {
+	// `riftd config ...` is the operator config tooling (validate an .env, print
+	// defaults); it dispatches before any startup so the no-subcommand path is
+	// exactly the server. Everything else runs the gateway.
+	if len(os.Args) > 1 && os.Args[1] == "config" {
+		if err := runConfig(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "riftd config: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		// The logger may not exist yet when config loading fails.
 		fmt.Fprintf(os.Stderr, "riftd: %v\n", err)

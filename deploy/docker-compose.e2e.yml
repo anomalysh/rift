@@ -80,6 +80,26 @@ services:
       RIFT_REAPER_INTERVAL: 2s
       RIFT_TOKEN_REVALIDATE_INTERVAL: 1s
       RIFT_REQUEST_TIMEOUT: 15s
+
+      # Ingress read/header/body bounds. Default to the production values so the
+      # normal modes exercise what ships; the --security run overrides them with
+      # short/small values so a slowloris resolves in seconds and an oversized
+      # body is a few KiB, not tens of MiB.
+      RIFT_INGRESS_READ_TIMEOUT: ${RIFT_E2E_INGRESS_READ_TIMEOUT:-30s}
+      RIFT_INGRESS_MAX_HEADER_BYTES: ${RIFT_E2E_INGRESS_MAX_HEADER_BYTES:-1048576}
+      RIFT_MAX_REQUEST_BODY_BYTES: ${RIFT_E2E_MAX_REQUEST_BODY_BYTES:-33554432}
+
+      # Raw tcp/tls tunnels. Off by default so the normal modes are unaffected;
+      # the --tunnels suite flips these on and layers docker-compose.e2e-tunnels.yml
+      # to publish the ports it allocates.
+      RIFT_TCP_ENABLED: ${RIFT_E2E_TCP_ENABLED:-false}
+      RIFT_TCP_LISTEN_HOST: 0.0.0.0
+      RIFT_TCP_ADVERTISE_HOST: ${RIFT_E2E_TCP_ADVERTISE_HOST:-127.0.0.1}
+      RIFT_TCP_PORT_MIN: ${RIFT_E2E_TCP_PORT_MIN:-20000}
+      RIFT_TCP_PORT_MAX: ${RIFT_E2E_TCP_PORT_MAX:-20002}
+      RIFT_TLS_TUNNEL_ENABLED: ${RIFT_E2E_TLS_TUNNEL_ENABLED:-false}
+      RIFT_TLS_TUNNEL_LISTEN_ADDR: ":8443"
+      RIFT_TLS_TUNNEL_ADVERTISE_PORT: ${RIFT_E2E_TLS_TUNNEL_ADVERTISE_PORT:-8443}
     networks:
       default:
         ipv4_address: ${RIFT_E2E_RIFTD_IP:-10.77.53.20}
@@ -90,6 +110,10 @@ services:
       # asserted separately, with curl, against gateway.rift.localtest.
       - "127.0.0.1:${RIFT_E2E_GATEWAY_PORT:-18081}:8081"
       - "127.0.0.1:${RIFT_E2E_ADMIN_PORT:-18082}:8082"
+      # Loopback only. The security suite drives raw byte-level probes straight
+      # at the ingress, bypassing Caddy (whose timeouts are off) to exercise
+      # riftd's own ReadHeaderTimeout / MaxHeaderBytes. Unused by the other modes.
+      - "127.0.0.1:${RIFT_E2E_INGRESS_PORT:-18088}:8080"
     depends_on:
       postgres:
         condition: service_healthy

@@ -4,13 +4,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=tools/lib/e2e-harness.sh
+. "$SCRIPT_DIR/lib/e2e-harness.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 COMPOSE_FILE="$REPO_ROOT/deploy/docker-compose.hostcheck.yml"
 PROJECT="rift-hostcheck"
 
 # harden.sh, as seen from inside the container (tools/ is bind-mounted here).
-HARDEN="/opt/rift/tools/harden.sh"
+HARDEN="/opt/rift/tools/cmd/host/harden.sh"
 
 usage() {
 	cat >&2 <<EOF
@@ -51,8 +53,6 @@ done
 require_cmd docker jq
 
 TMP="$(mktemp -d)"
-pass=0
-fail=0
 
 cleanup() {
 	local status=$?
@@ -105,28 +105,6 @@ run_harden() {
 	if [ "$verbose" = true ]; then
 		printf '    --- harden %s (rc=%d) ---\n' "$label" "$HRC" >&2
 		sed 's/^/    | /' "$TMP/$label.log" >&2
-	fi
-}
-
-check() {
-	local name="$1" got="$2" want="$3"
-	if [ "$got" = "$want" ]; then
-		printf '    ok    %s\n' "$name"
-		pass=$((pass + 1))
-	else
-		printf '    FAIL  %s: got [%s] want [%s]\n' "$name" "$got" "$want"
-		fail=$((fail + 1))
-	fi
-}
-
-check_contains() {
-	local name="$1" haystack="$2" needle="$3"
-	if printf '%s' "$haystack" | grep -qF -- "$needle"; then
-		printf '    ok    %s\n' "$name"
-		pass=$((pass + 1))
-	else
-		printf '    FAIL  %s: %q does not contain %q\n' "$name" "$haystack" "$needle"
-		fail=$((fail + 1))
 	fi
 }
 
@@ -244,6 +222,40 @@ SH
 	check_contains "second apply reports no changes" "$(cat "$TMP/apply2.log")" "changes=0"
 	run_harden recheck --check
 	check "harden --check passes after hardening" "$HRC" "0"
+
+	# Raw-tunnel ports last: enabling them legitimately rewrites the ruleset, so
+	# this must not run before the idempotency and --check assertions above. The
+	# default-closed case is already proved by the exact-match 22/80/443 check.
+	printf '  raw-tunnel ports (rift tcp / rift tls)\n'
+	HRC=0
+	dexec env RIFT_TCP_ENABLED=true RIFT_TLS_TUNNEL_ENABLED=true \
+		bash "$HARDEN" --only nftables >"$TMP/tunnels.log" 2>&1 || HRC=$?
+	check "apply with tunnels enabled exits zero" "$HRC" "0"
+	check_contains "ruleset opens the tcp range and the tls tunnel port" \
+		"$(dexec nft list ruleset 2>/dev/null || true)" \
+		"tcp dport { 22, 80, 443, 8443, 20000-20100 } accept"
+	local trc=0
+	dexec nft -c -f /etc/nftables.conf >/dev/null 2>&1 || trc=$?
+	check "nft -c validates the tunnel ruleset" "$trc" "0"
+
+	# A narrowed range and a moved tls port must both reach the ruleset: the same
+	# variables drive riftd's allocator and the published container ports, so a
+	# drift here silently firewalls off working tunnels.
+	dexec env RIFT_TCP_ENABLED=true RIFT_TLS_TUNNEL_ENABLED=true \
+		RIFT_TCP_PORT_MAX=20004 RIFT_TLS_TUNNEL_ADVERTISE_PORT=9443 \
+		bash "$HARDEN" --only nftables >"$TMP/tunnels-narrow.log" 2>&1 || true
+	check_contains "a narrowed range and a custom tls port are honoured" \
+		"$(dexec nft list ruleset 2>/dev/null || true)" \
+		"tcp dport { 22, 80, 443, 9443, 20000-20004 } accept"
+
+	# An inverted range must be refused before it reaches the kernel: --check
+	# never runs `nft -c`, so nothing downstream would catch it.
+	HRC=0
+	dexec env RIFT_TCP_ENABLED=true RIFT_TCP_PORT_MIN=30000 RIFT_TCP_PORT_MAX=20000 \
+		bash "$HARDEN" --only nftables >"$TMP/tunnels-bad.log" 2>&1 || HRC=$?
+	local verdict=accepted
+	[ "$HRC" -ne 0 ] && verdict=rejected
+	check "an inverted port range is rejected" "$verdict" "rejected"
 }
 
 phase_lockout() {
@@ -293,6 +305,4 @@ phase_main
 phase_lockout
 phase_workstation
 
-printf '\n=== summary ===\n  passed=%d failed=%d\n' "$pass" "$fail"
-[ "$fail" -eq 0 ] || die "hostcheck e2e failed"
-log_info "hostcheck e2e passed"
+print_summary "hostcheck e2e"

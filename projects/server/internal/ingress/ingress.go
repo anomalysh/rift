@@ -421,7 +421,15 @@ func (i *Ingress) writeRoundTripError(w http.ResponseWriter, r *http.Request, su
 			return
 		}
 	} else {
+		// MaxBytesReader trips inside the goroutine pumping the body to the
+		// agent, so the cap surfaces here as a read error rather than as a
+		// reset from the agent. Without this it would fall through to the
+		// default 502, which tells the client nothing about what to fix.
+		var tooLarge *http.MaxBytesError
 		switch {
+		case errors.As(err, &tooLarge):
+			status, code, msg = http.StatusRequestEntityTooLarge, "payload_too_large",
+				"The request body was too large."
 		case errors.Is(err, context.DeadlineExceeded):
 			status, code, msg = http.StatusGatewayTimeout, "upstream_timeout",
 				"The local service behind this tunnel did not respond in time."

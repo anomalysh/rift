@@ -5,7 +5,9 @@
 #   docker build -f deploy/Dockerfile.cli -t rift-cli:local .
 
 # --- build ------------------------------------------------------------------
-FROM oven/bun:1 AS build
+# Pinned to the mise.toml bun (tools/check-versions.sh gates it): a floating
+# `oven/bun:1` could ship a CLI built on a different Bun than CI tested.
+FROM oven/bun:1.3.14 AS build
 WORKDIR /src
 
 COPY projects/cli/ ./

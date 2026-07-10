@@ -8,6 +8,7 @@ import {
 } from "../src/constants.ts";
 import {
   asHelloOk,
+  asRequestHead,
   decodeControl,
   decodeFrame,
   encodeControl,
@@ -210,5 +211,66 @@ describe("control envelope", () => {
 
   test("guard rejects a malformed hello_ok", () => {
     expect(asHelloOk({ subdomain: "x" })).toBeNull();
+  });
+});
+
+describe("asRequestHead", () => {
+  const httpHead = {
+    method: "GET",
+    path: "/x",
+    headers: { "x-a": ["1"] },
+    host: "app.example.com",
+    scheme: "https",
+    remote_addr: "203.0.113.7:5000",
+    has_body: false,
+  };
+
+  test("accepts a normal HTTP request head", () => {
+    const h = asRequestHead(httpHead);
+    expect(h).not.toBeNull();
+    expect(h?.raw).toBe(false);
+    expect(h?.headers).toEqual({ "x-a": ["1"] });
+  });
+
+  // The gateway sends RequestHead{Raw: true} for tcp/tls tunnels; Go marshals
+  // its nil header map as `null`. The agent must accept that or every raw
+  // tunnel stream is dropped as malformed (regression: tcp/tls tunnels broke).
+  test("accepts a raw head whose headers are null", () => {
+    const raw = {
+      method: "",
+      path: "",
+      headers: null,
+      host: "",
+      scheme: "",
+      remote_addr: "",
+      has_body: false,
+      raw: true,
+    };
+    const h = asRequestHead(raw);
+    expect(h).not.toBeNull();
+    expect(h?.raw).toBe(true);
+    expect(h?.headers).toEqual({});
+  });
+
+  test("accepts a raw head with headers omitted entirely", () => {
+    const h = asRequestHead({
+      method: "",
+      path: "",
+      host: "",
+      scheme: "",
+      remote_addr: "",
+      has_body: false,
+      raw: true,
+    });
+    expect(h?.raw).toBe(true);
+    expect(h?.headers).toEqual({});
+  });
+
+  test("still rejects a head with a malformed (non-map) headers value", () => {
+    expect(asRequestHead({ ...httpHead, headers: "nope" })).toBeNull();
+  });
+
+  test("still rejects a head missing a required field", () => {
+    expect(asRequestHead({ ...httpHead, has_body: undefined })).toBeNull();
   });
 });

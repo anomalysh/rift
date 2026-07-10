@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#MISE description="Regenerate the man page and shell completions from the CLI spec"
+#MISE depends=["//projects/cli:install"]
+#MISE sources=["projects/cli/src/**/*.ts"]
+#MISE outputs=["packaging/man/rift.1", "packaging/completions/rift.bash", "packaging/completions/rift.zsh", "packaging/completions/rift.fish"]
+set -euo pipefail
+
+# Every artifact is rendered from projects/cli/src/cli-spec.ts, so the man page
+# and the three completion scripts can never drift from the parser. packaging/ is
+# gitignored: these are build outputs, regenerated here and by tools/release.sh.
+root="${MISE_PROJECT_ROOT:?}"
+mkdir -p "$root/packaging/man" "$root/packaging/completions"
+
+cd "$root/projects/cli"
+bun src/index.ts man >"$root/packaging/man/rift.1"
+for shell in bash zsh fish; do
+	bun src/index.ts completions "$shell" >"$root/packaging/completions/rift.$shell"
+done

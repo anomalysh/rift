@@ -1,0 +1,9 @@
+# Publishes the raw-tunnel ports for tools/e2e.sh's --tunnels suite. Layered on
+# top of docker-compose.e2e.yml only for that run (see run_tunnels), so the
+# other modes never bind these host ports. Loopback only, and a deliberately
+# narrow tcp range — the suite opens a single tcp tunnel.
+services:
+  riftd:
+    ports:
+      - "127.0.0.1:${RIFT_E2E_TCP_PORT_MIN:-20000}-${RIFT_E2E_TCP_PORT_MAX:-20002}:${RIFT_E2E_TCP_PORT_MIN:-20000}-${RIFT_E2E_TCP_PORT_MAX:-20002}"
+      - "127.0.0.1:${RIFT_E2E_TLS_TUNNEL_ADVERTISE_PORT:-8443}:8443"

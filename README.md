@@ -93,7 +93,7 @@ $ make up                         # postgres + riftd via docker compose
 $ cd projects/cli && bun install && bun run build && cd ../..   # produces projects/cli/dist/rift
 
 # mint a token; the admin API listens on :8082 locally
-$ RIFT_ADMIN_TOKEN=<your admin token> tools/mint-token.sh laptop
+$ RIFT_ADMIN_TOKEN=<your admin token> rift-ops secret mint-token laptop
 
 $ ./projects/cli/dist/rift http 3000 demo --token rift_... --server ws://127.0.0.1:8081/tunnel
 $ curl -H 'Host: demo.rift.localtest' http://127.0.0.1:8080/
@@ -137,9 +137,9 @@ AAAA  *.rift.example.com  ->  <server ipv6>
 Then:
 
 ```console
-$ tools/ssh-provision-key.sh                       # key auth, then disable passwords
-$ tools/scp.sh .env /opt/rift/deploy/.env          # secrets live only here
-$ tools/remote-deploy.sh
+$ rift-ops provision key                       # key auth, then disable passwords
+$ rift-ops ssh scp .env /opt/rift/deploy/.env          # secrets live only here
+$ rift-ops deploy deploy
 ```
 
 Secrets are read from the environment at runtime. `.env` is gitignored and

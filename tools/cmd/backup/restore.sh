@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/restore.sh — restore a rift backup produced by tools/backup.sh.
+# rift-ops backup restore — restore a rift backup produced by tools/backup.sh.
 #
 # Restores the Postgres database (pg_restore --clean --if-exists) and/or the
 # caddy_data volume (issued TLS certificates + ACME account key) from a backup
@@ -12,10 +12,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+. "$SCRIPT_DIR/../../lib/common.sh"
 # shellcheck source=tools/recovery/lib.sh
-. "$SCRIPT_DIR/recovery/lib.sh"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+. "$SCRIPT_DIR/../../recovery/lib.sh"
 
 FROM=""
 ASSUME_YES=false
@@ -29,7 +28,7 @@ COMPOSE_FILES=()
 
 usage() {
 	cat >&2 <<EOF
-Usage: tools/restore.sh --from <backup-dir-or-MANIFEST> [options]
+Usage: rift-ops backup restore --from <backup-dir-or-MANIFEST> [options]
 
 Restore a backup written by tools/backup.sh. Verifies every sha256 in the
 MANIFEST first and refuses on mismatch.
@@ -98,13 +97,7 @@ done
 
 require_cmd docker sha256sum tar
 
-[ "${#COMPOSE_FILES[@]}" -gt 0 ] || COMPOSE_FILES=("$REPO_ROOT/deploy/docker-compose.yml")
-RIFT_COMPOSE_ARGS=()
-for f in "${COMPOSE_FILES[@]}"; do
-	[ -f "$f" ] || die "compose file not found: $f"
-	RIFT_COMPOSE_ARGS+=(-f "$f")
-done
-[ -n "$CADDY_VOLUME" ] || CADDY_VOLUME="${RIFT_PROJECT}_caddy_data"
+rc_resolve_stack "$RIFT_REPO_ROOT/deploy/docker-compose.yml"
 
 # Resolve --from to a backup directory + its MANIFEST.
 if [ -d "$FROM" ]; then
@@ -180,18 +173,7 @@ if [ "$do_db" = true ]; then
 	# DB user/name for the *target* stack come from the running container (or an
 	# override DSN), NOT from the backup: you may be restoring into a database
 	# named differently from the one the dump came from.
-	DB_USER=""
-	DB_NAME=""
-	if [ -n "${RIFT_POSTGRES_DSN:-}" ]; then
-		DB_USER="$(rc_dsn_user "$RIFT_POSTGRES_DSN")"
-		DB_NAME="$(rc_dsn_db "$RIFT_POSTGRES_DSN")"
-	fi
-	if [ -z "$DB_USER" ] || [ -z "$DB_NAME" ]; then
-		IFS=$'\t' read -r env_user env_db < <(rc_pg_env) || true
-		[ -n "$DB_USER" ] || DB_USER="$env_user"
-		[ -n "$DB_NAME" ] || DB_NAME="$env_db"
-	fi
-	[ -n "$DB_USER" ] && [ -n "$DB_NAME" ] || die "could not determine target database user/name"
+	IFS=$'\t' read -r DB_USER DB_NAME < <(rc_resolve_db_identity)
 
 	log_info "restoring database '$DB_NAME' as '$DB_USER' into project '$RIFT_PROJECT'"
 	rc_pg_restore "$DB_USER" "$DB_NAME" <"$DB_PATH"

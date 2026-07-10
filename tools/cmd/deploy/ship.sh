@@ -3,8 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+. "$SCRIPT_DIR/../../lib/common.sh"
 
 # ship.sh -- the deployment pipeline: provision -> harden -> deploy -> verify.
 #
@@ -19,11 +18,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # pipeline fails.
 
 STAGES=(provision harden deploy verify)
-STATE_FILE_DEFAULT="$REPO_ROOT/.rift/state.json"
+STATE_FILE_DEFAULT="$RIFT_REPO_ROOT/.rift/state.json"
 
 usage() {
 	cat >&2 <<EOF
-Usage: tools/ship.sh [--from STAGE] [--only STAGE] [--dry-run] [--yes]
+Usage: rift-ops deploy ship [--from STAGE] [--only STAGE] [--dry-run] [--yes]
 
 Run the deployment pipeline end to end:
   provision  create the VPS and wait for SSH        (tools/provision.sh)
@@ -91,13 +90,7 @@ while [ "$#" -gt 0 ]; do
 	shift
 done
 
-if [ -f "$REPO_ROOT/.env" ]; then
-	set -a
-	# operator-supplied, not in the repo
-	# shellcheck disable=SC1091
-	. "$REPO_ROOT/.env"
-	set +a
-fi
+load_env
 
 # state_get KEY -- read a value from the JSON state file, or empty.
 state_get() {
@@ -180,7 +173,7 @@ stage_provision() {
 		return 0
 	fi
 	log_info "stage: provision"
-	run "$SCRIPT_DIR/provision.sh" --state-file "$state_file"
+	run "$RIFT_TOOLS_DIR/cmd/provision/provision.sh" --state-file "$state_file"
 	host="$(state_get ipv4)"
 	[ -n "$host" ] || [ "$dry_run" = true ] || die "provision did not record an ipv4 in $state_file"
 }
@@ -198,16 +191,18 @@ stage_harden() {
 	confirm "harden $host? this disables password SSH login" || die "aborted"
 	# harden.sh runs ON the box. Ship the tools over, then run it there.
 	# --force because the real host has no hostcheck marker (that guard exists
-	# to stop the script running on a developer laptop).
-	run env RIFT_VPS_HOST="$host" "$SCRIPT_DIR/scp.sh" -r "$SCRIPT_DIR" "/opt/rift/tools" || true
-	run env RIFT_VPS_HOST="$host" "$SCRIPT_DIR/ssh.sh" \
-		"bash /opt/rift/tools/harden.sh --force"
+	# to stop the script running on a developer laptop). A failed upload must
+	# abort: running harden.sh on a stale or partial tools/ could lock SSH.
+	run env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/scp.sh" -r "$RIFT_TOOLS_DIR" "/opt/rift/tools" ||
+		die "failed to ship tools/ to $host; not running harden on a stale copy"
+	run env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" \
+		"bash /opt/rift/tools/cmd/host/harden.sh --force"
 }
 
 stage_deploy() {
 	resolve_host
 	log_info "stage: deploy ($host)"
-	run env RIFT_VPS_HOST="$host" "$SCRIPT_DIR/remote-deploy.sh"
+	run env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/deploy/deploy.sh"
 }
 
 stage_verify() {
@@ -217,7 +212,7 @@ stage_verify() {
 		log_info "[dry-run] would assert TLS serves and the stack is healthy"
 		return 0
 	fi
-	"$SCRIPT_DIR/verify-deploy.sh" --host "$host"
+	"$RIFT_TOOLS_DIR/cmd/deploy/verify.sh" --host "$host"
 }
 
 # ---------------------------------------------------------------- run

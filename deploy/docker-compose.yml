@@ -73,6 +73,29 @@ services:
       RIFT_REDIS_PASSWORD: ${RIFT_REDIS_PASSWORD:-}
       # Required only for multi-node (RIFT_REDIS_ENABLED=true); empty otherwise.
       RIFT_PEER_SECRET: ${RIFT_PEER_SECRET:-}
+      # --- raw tunnels (rift tcp / rift tls) ---
+      # Off by default. Turning either on is only half the job: the ports must
+      # also be published from this container and opened on the host firewall.
+      # Layer docker-compose.tcp.yml and/or docker-compose.tls.yml (last, one per
+      # enabled feature) to publish them, and run tools/harden.sh with the same
+      # vars to open them in nftables.
+      RIFT_TCP_ENABLED: ${RIFT_TCP_ENABLED:-false}
+      # Must stay 0.0.0.0 inside the container, or Docker's published ports have
+      # nothing to forward to.
+      RIFT_TCP_LISTEN_HOST: ${RIFT_TCP_LISTEN_HOST:-0.0.0.0}
+      # Public host clients dial; empty falls back to RIFT_BASE_DOMAIN.
+      RIFT_TCP_ADVERTISE_HOST: ${RIFT_TCP_ADVERTISE_HOST:-}
+      # The same two vars drive docker-compose.tcp.yml, so the allocator's range
+      # and the published range can never drift apart. Each published port costs
+      # one docker-proxy process — narrow this on a small host.
+      RIFT_TCP_PORT_MIN: ${RIFT_TCP_PORT_MIN:-20000}
+      RIFT_TCP_PORT_MAX: ${RIFT_TCP_PORT_MAX:-20100}
+      RIFT_TLS_TUNNEL_ENABLED: ${RIFT_TLS_TUNNEL_ENABLED:-false}
+      # Pinned, not interpolated: docker-compose.tls.yml publishes
+      # <advertise>:8443, so the container-side port must be 8443. Move the
+      # PUBLIC port with RIFT_TLS_TUNNEL_ADVERTISE_PORT instead.
+      RIFT_TLS_TUNNEL_LISTEN_ADDR: ":8443"
+      RIFT_TLS_TUNNEL_ADVERTISE_PORT: ${RIFT_TLS_TUNNEL_ADVERTISE_PORT:-8443}
     ports:
       # Local only. The prod override clears these with `ports: !reset []`.
       - "8080:8080" # ingress

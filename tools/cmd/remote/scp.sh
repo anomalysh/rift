@@ -3,11 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+. "$SCRIPT_DIR/../../lib/common.sh"
 
 usage() {
 	cat >&2 <<'EOF'
-Usage: tools/scp.sh [--pull] [-r|--recursive] SRC DST
+Usage: rift-ops ssh scp [--pull] [-r|--recursive] SRC DST
 
 Copy files to/from the rift VPS using the same auth logic as tools/ssh.sh.
   push (default): copy local SRC -> VPS:DST
@@ -68,18 +68,10 @@ if [ "$recursive" = true ]; then
 	scp_args+=(-r)
 fi
 
-key="$(rift_ssh_key_path)"
-if [ -f "$key" ]; then
-	scp_args+=(-i "$key" -o IdentitiesOnly=yes -o PasswordAuthentication=no)
-	cmd=(scp "${scp_args[@]}")
-else
-	# See tools/ssh.sh for why this is `sshpass -e` (env) and never `-p` (argv).
-	require_cmd sshpass
-	require_env RIFT_VPS_PASSWORD
-	export SSHPASS="$RIFT_VPS_PASSWORD"
-	scp_args+=(-o PubkeyAuthentication=no)
-	cmd=(sshpass -e scp "${scp_args[@]}")
-fi
+# Same auth logic as tools/ssh.sh, shared via rift_ssh_auth in lib/common.sh.
+auth=() prefix=()
+rift_ssh_auth auth prefix
+cmd=("${prefix[@]}" scp "${scp_args[@]}" "${auth[@]}")
 
 remote="$user@$host"
 case "$direction" in

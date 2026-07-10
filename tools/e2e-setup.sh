@@ -9,8 +9,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=tools/lib/e2e-harness.sh
+. "$SCRIPT_DIR/lib/e2e-harness.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-SETUP="$SCRIPT_DIR/setup.sh"
+SETUP="$SCRIPT_DIR/cmd/config/setup.sh"
 
 usage() {
 	cat >&2 <<EOF
@@ -59,8 +61,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-pass=0
-fail=0
+# This suite asserts free-form conditions rather than got/want equality, so it
+# keeps ok/no (which tally into the harness lib's pass/fail counters).
 ok() {
 	printf '    ok    %s\n' "$*"
 	pass=$((pass + 1))
@@ -113,23 +115,16 @@ file_mode() { stat -c '%a' "$1"; }
 # a file the server would reject at boot.
 validate_boots_past_config() {
 	local envfile="$1" label="$2" rc=0
-	local log="$WORK/${label}.riftd.log"
-	(
-		set -a
-		# shellcheck disable=SC1090
-		. "$envfile"
-		set +a
-		# Bound the wait; the bundled DSN points at an unresolvable host anyway.
-		export RIFT_POSTGRES_CONNECT_TIMEOUT=3s
-		exec timeout 25 "$RIFTD_BIN"
-	) >"$log" 2>&1 || rc=$?
-	if grep -qE 'config: [0-9]+ problem' "$log"; then
-		no "$label: passes config.Load (validator reported a config error)"
-		sed 's/^/          /' "$log" >&2
-	elif [ "$rc" -ne 0 ] && grep -q 'postgres' "$log"; then
-		ok "$label: passes config.Load, then fails later at Postgres (as expected)"
+	local log="$WORK/${label}.validate.log"
+	# `riftd config validate` runs the REAL config loader against the file and
+	# nothing else -- no Postgres dial, no listeners. Exit 0 means this .env would
+	# boot; a non-zero exit carries the same error the server would print. (This
+	# replaced booting riftd and inferring success from a later Postgres failure.)
+	"$RIFTD_BIN" config validate --env-file "$envfile" >"$log" 2>&1 || rc=$?
+	if [ "$rc" -eq 0 ]; then
+		ok "$label: passes riftd config validation"
 	else
-		no "$label: passes config.Load (unexpected outcome, rc=$rc)"
+		no "$label: fails riftd config validation (rc=$rc)"
 		sed 's/^/          /' "$log" >&2
 	fi
 }
@@ -278,6 +273,35 @@ prov="$(get_var "$WORK/.env.dns01" RIFT_ACME_DNS_PROVIDER)"
 [ "$prov" = "rfc2136" ] && ok "RIFT_ACME_DNS_PROVIDER=rfc2136" || no "provider is [$prov]"
 
 # ---------------------------------------------------------------------------
+# 7b. Raw tunnels: enabled path emits the vars and still boots; off by default.
+# ---------------------------------------------------------------------------
+printf '\n=== raw tunnels (rift tcp / rift tls) ===\n'
+gen "SETUP_ENV=production SETUP_TLS_MODE=http01 SETUP_ACME_EMAIL=ops@example.com SETUP_TCP_TUNNELS=yes SETUP_TCP_PORT_MAX=20010 SETUP_TLS_TUNNELS=yes SETUP_TLS_TUNNEL_PORT=9443" "$WORK/.env.tunnels"
+tcpen="$(get_var "$WORK/.env.tunnels" RIFT_TCP_ENABLED)"
+tcpmax="$(get_var "$WORK/.env.tunnels" RIFT_TCP_PORT_MAX)"
+tlsen="$(get_var "$WORK/.env.tunnels" RIFT_TLS_TUNNEL_ENABLED)"
+tlsport="$(get_var "$WORK/.env.tunnels" RIFT_TLS_TUNNEL_ADVERTISE_PORT)"
+[ "$tcpen" = "true" ] && [ "$tcpmax" = "20010" ] && ok "tcp tunnel vars emitted (max honoured)" || no "tcp tunnel vars wrong: enabled=[$tcpen] max=[$tcpmax]"
+[ "$tlsen" = "true" ] && [ "$tlsport" = "9443" ] && ok "tls tunnel vars emitted (port honoured)" || no "tls tunnel vars wrong: enabled=[$tlsen] port=[$tlsport]"
+validate_boots_past_config "$WORK/.env.tunnels" "prod+tunnels"
+
+# The default run must not emit tunnel vars, so a host stays closed unless asked.
+if grep -qE '^RIFT_(TCP_ENABLED|TLS_TUNNEL_ENABLED)=' "$WORK/.env.http01"; then
+	no "tunnel vars leaked into a default (tunnels-off) .env"
+else
+	ok "a default .env carries no tunnel vars (off unless enabled)"
+fi
+
+# An inverted range is refused rather than written.
+if env SETUP_ENV=production SETUP_TLS_MODE=http01 SETUP_ACME_EMAIL=ops@example.com \
+	SETUP_TCP_TUNNELS=yes SETUP_TCP_PORT_MIN=30000 SETUP_TCP_PORT_MAX=20000 \
+	"$SETUP" --non-interactive --output "$WORK/.env.badrange" >/dev/null 2>&1; then
+	no "an inverted tcp port range was accepted"
+else
+	ok "an inverted tcp port range is refused"
+fi
+
+# ---------------------------------------------------------------------------
 # 8. No unmasked secret ever reached the wizard's own stdout/stderr.
 # ---------------------------------------------------------------------------
 printf '\n=== secret never printed unmasked ===\n'
@@ -291,6 +315,4 @@ else
 	ok "the full admin token never appeared in wizard output (only masked)"
 fi
 
-printf '\n=== summary ===\n  passed=%d failed=%d\n' "$pass" "$fail"
-[ "$fail" -eq 0 ] || die "e2e-setup failed"
-log_info "e2e-setup passed"
+print_summary "e2e-setup"

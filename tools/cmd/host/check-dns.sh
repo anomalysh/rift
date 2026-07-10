@@ -3,12 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+. "$SCRIPT_DIR/../../lib/common.sh"
 
 usage() {
 	cat >&2 <<EOF
-Usage: tools/check-dns.sh [--host IP] [--base DOMAIN] [--gateway HOST]
+Usage: rift-ops host check-dns [--host IP] [--base DOMAIN] [--gateway HOST]
 
 Check the DNS and reachability facts rift depends on, and REPORT problems --
 this never fails the build. It exists so "certificates mysteriously won't
@@ -61,13 +60,7 @@ while [ "$#" -gt 0 ]; do
 	shift
 done
 
-if [ -f "$REPO_ROOT/.env" ]; then
-	set -a
-	# operator-supplied, not in the repo
-	# shellcheck disable=SC1091
-	. "$REPO_ROOT/.env"
-	set +a
-fi
+load_env
 
 base="${base:-${RIFT_BASE_DOMAIN:-}}"
 gateway="${gateway:-${RIFT_GATEWAY_HOSTNAME:-}}"

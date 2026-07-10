@@ -22,7 +22,7 @@ provider's environment variables need values.
 ## Building an image with a provider
 
 The default Caddy image (`caddy:2-alpine`) ships **no** DNS plugins, so `dns01`
-always requires a custom image. `tools/build-caddy.sh` compiles one from the
+always requires a custom image. `rift-ops release caddy` compiles one from the
 module paths in `RIFT_CADDY_DNS_PLUGINS`:
 
 ```sh
@@ -132,7 +132,7 @@ allows.
    plugin's README. The file name is the value you will set for
    `RIFT_ACME_DNS_PROVIDER`.
 2. Add the plugin's Go module path to `RIFT_CADDY_DNS_PLUGINS`.
-3. Run `tools/build-caddy.sh --validate` to confirm the snippet parses against a
+3. Run `rift-ops release caddy --validate` to confirm the snippet parses against a
    binary that actually includes the plugin, then deploy the new image.
 
 ## Pointing ACME at your own CA

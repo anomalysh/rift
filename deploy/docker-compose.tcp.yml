@@ -1,0 +1,34 @@
+# Publishes the raw-TCP-tunnel port range from the riftd container. Opt-in:
+# layer this file only when RIFT_TCP_ENABLED is true.
+#
+#     docker compose -f docker-compose.yml \
+#                    -f docker-compose.prod.yml \
+#                    -f docker-compose.tcp.yml up -d
+#
+# ORDER MATTERS. This file must come AFTER docker-compose.prod.yml. The prod
+# overlay clears riftd's dev port mappings with `ports: !reset []`, and a later
+# !reset wipes everything merged before it -- put this file first and the tunnel
+# ports vanish silently, with no error. Compose appends `ports` across overlays,
+# so this composes cleanly with docker-compose.tls.yml.
+#
+# Kept separate from the tls overlay on purpose: the two features are enabled
+# independently, so publishing must be independent too. Publishing this range
+# while riftd's tcp allocator is off would bind ~101 dead host ports (one
+# docker-proxy process each) for nothing -- and tools/harden.sh, which gates the
+# firewall per-flag, would not open them, leaving them published-but-unfirewalled.
+#
+# COST: Docker spawns one docker-proxy process per published port, so the
+# default 101-port range is ~101 processes. On a small host (a 1 GB VPS) narrow
+# RIFT_TCP_PORT_MIN/RIFT_TCP_PORT_MAX to the number of concurrent tcp tunnels you
+# actually need; the same vars feed riftd's allocator in the base file, so the
+# two stay in lockstep.
+#
+# Opening the ports here is not sufficient: run tools/harden.sh with the same
+# RIFT_* vars set so the host firewall allows them too.
+
+services:
+  riftd:
+    ports:
+      # Every var needs a `:-` default: an empty string would make the range
+      # unparseable and fail `docker compose config`.
+      - "${RIFT_TCP_PORT_MIN:-20000}-${RIFT_TCP_PORT_MAX:-20100}:${RIFT_TCP_PORT_MIN:-20000}-${RIFT_TCP_PORT_MAX:-20100}"

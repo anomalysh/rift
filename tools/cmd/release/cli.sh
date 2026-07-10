@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/release.sh — cross-compile rift release artifacts for every supported
+# rift-ops release cli — cross-compile rift release artifacts for every supported
 # platform, checksum them, and package tarballs/zip for distribution.
 #
 # Bun compiles to fixed targets, so a release is N cross-compiles rather than
@@ -8,12 +8,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=tools/lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+. "$SCRIPT_DIR/../../lib/common.sh"
 
-CLI_DIR="$REPO_DIR/projects/cli"
-PKG_DIR="$REPO_DIR/packaging"
+CLI_DIR="$RIFT_REPO_ROOT/projects/cli"
+PKG_DIR="$RIFT_REPO_ROOT/packaging"
 MAN_PAGE="$PKG_DIR/man/rift.1"
 COMPLETIONS_DIR="$PKG_DIR/completions"
 ENTRY="$CLI_DIR/src/index.ts"
@@ -33,7 +32,7 @@ TARGETS=(
 
 usage() {
 	cat <<'EOF'
-Usage: tools/release.sh [options]
+Usage: rift-ops release cli [options]
 
 Cross-compile rift release artifacts, checksum them, and package archives into
 dist/release/<version>/.
@@ -87,7 +86,7 @@ main() {
 	[ -n "$version" ] || version="$(pkg_version)"
 	[ -n "$version" ] || die "could not determine version"
 
-	local out="$REPO_DIR/dist/release/$version"
+	local out="$RIFT_REPO_ROOT/dist/release/$version"
 	if [ "$clean" -eq 1 ] && [ -d "$out" ]; then
 		log_info "cleaning $out"
 		rm -rf "$out"

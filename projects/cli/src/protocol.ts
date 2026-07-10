@@ -326,16 +326,28 @@ export function asRequestHead(v: unknown): RequestHead | null {
     isRecord(v) &&
     typeof v.method === "string" &&
     typeof v.path === "string" &&
-    isHeaderMap(v.headers) &&
     typeof v.host === "string" &&
     typeof v.scheme === "string" &&
     typeof v.remote_addr === "string" &&
     typeof v.has_body === "boolean"
   ) {
+    // A raw (tcp/tls) REQ_HEAD carries no HTTP semantics, so the server sends a
+    // RequestHead with an empty header map; Go marshals that nil map as `null`.
+    // Treat null/absent headers as empty rather than rejecting the frame, which
+    // would drop every tcp/tls tunnel stream. A real HTTP request always carries
+    // a populated (non-null) object here.
+    let headers: HeaderMap;
+    if (v.headers === null || v.headers === undefined) {
+      headers = {};
+    } else if (isHeaderMap(v.headers)) {
+      headers = v.headers;
+    } else {
+      return null;
+    }
     return {
       method: v.method,
       path: v.path,
-      headers: v.headers,
+      headers,
       host: v.host,
       scheme: v.scheme,
       remote_addr: v.remote_addr,

@@ -6,6 +6,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/common.sh"
 # shellcheck source=tools/lib/preflight.sh
 . "$SCRIPT_DIR/lib/preflight.sh"
+# shellcheck source=tools/lib/e2e-harness.sh
+. "$SCRIPT_DIR/lib/e2e-harness.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 COMPOSE_FILE="$REPO_ROOT/deploy/docker-compose.e2e.yml"
@@ -17,7 +19,20 @@ HTTP_PORT="18080"
 GATEWAY_PORT="18081"
 ADMIN_PORT="18082"
 GATEWAY2_PORT="18091"
+# Loopback publish of riftd's ingress, used only by the --security suite to
+# reach riftd directly (Caddy disables its own timeouts for long-lived tunnels,
+# so a slowloris must bypass it to exercise riftd's ReadHeaderTimeout).
+INGRESS_PORT="18088"
 UPSTREAM_PORT="13099"
+# The --tunnels suite. riftd allocates raw-TCP tunnel ports from this range and
+# publishes them (plus the TLS-passthrough port) to the host via an overlay, so
+# a probe can reach a real tcp/tls tunnel end to end. Narrow on purpose: one
+# tcp tunnel takes TCP_TUNNEL_PORT_MIN.
+TCP_TUNNEL_PORT_MIN="20000"
+TCP_TUNNEL_PORT_MAX="20002"
+TLS_TUNNEL_PORT="18444"
+TCP_UPSTREAM_PORT="13097"
+TLS_UPSTREAM_PORT="13098"
 ADMIN_TOKEN="e2e-admin-token-not-a-secret-0000000000000"
 # Must clear the 32-character minimum riftd enforces on a peer secret.
 PEER_SECRET="e2e-peer-secret-not-a-secret-000000000000"
@@ -57,6 +72,9 @@ nothing mocked.
 Options:
   --mode MODE   Run this mode (repeat for several).
   --cluster     Also run the two-node Redis routing test.
+  --security    Also run the robustness suite (slowloris, oversized request
+                lines/headers, body-size limit, header-injection).
+  --tunnels     Also run the raw tcp/tls tunnel suite through published ports.
   --keep        Leave the stack running afterwards, for poking at.
   --verbose     Stream container logs on failure and set riftd to debug.
 EOF
@@ -66,6 +84,8 @@ modes=()
 keep=false
 verbose=false
 cluster=false
+security=false
+tunnels=false
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 	-h | --help)
@@ -78,6 +98,8 @@ while [ "$#" -gt 0 ]; do
 		modes+=("$1")
 		;;
 	--cluster) cluster=true ;;
+	--security) security=true ;;
+	--tunnels) tunnels=true ;;
 	--keep) keep=true ;;
 	--verbose) verbose=true ;;
 	*) die "unexpected argument: $1 (see --help)" ;;
@@ -98,15 +120,23 @@ require_docker
 TMPDIR_E2E="$(mktemp -d)"
 UPSTREAM_PID=""
 CLI_PID=""
+# Extra host background processes (the tunnels suite runs two agents + two raw
+# upstreams at once); the trap kills them so nothing leaks on a mid-run failure.
+EXTRA_PIDS=()
+# Optional extra compose files, layered by a suite that needs more than the base
+# stack (the tunnels suite publishes the raw-tunnel ports through an overlay).
+COMPOSE_EXTRA=()
 
 CURRENT_MODE=""
-pass=0
-fail=0
 
 cleanup() {
 	local status=$?
 	[ -n "$CLI_PID" ] && kill "$CLI_PID" 2>/dev/null || true
 	[ -n "$UPSTREAM_PID" ] && kill "$UPSTREAM_PID" 2>/dev/null || true
+	local p
+	for p in ${EXTRA_PIDS+"${EXTRA_PIDS[@]}"}; do
+		kill "$p" 2>/dev/null || true
+	done
 	if [ "$keep" != true ]; then
 		compose down -v --remove-orphans >/dev/null 2>&1 || true
 	else
@@ -118,7 +148,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-compose() { docker compose -f "$COMPOSE_FILE" -p "$PROJECT" "$@"; }
+compose() { docker compose -f "$COMPOSE_FILE" ${COMPOSE_EXTRA+"${COMPOSE_EXTRA[@]}"} -p "$PROJECT" "$@"; }
 
 # BuildKit runs the build inside its own container, which fails on hosts whose
 # container runtime is misconfigured (a stale nvidia hook, for instance). The
@@ -134,28 +164,6 @@ build_images() {
 	fi
 	tail -20 "$TMPDIR_E2E/build.log" >&2
 	die "could not build the e2e images"
-}
-
-check() {
-	local name="$1" got="$2" want="$3"
-	if [ "$got" = "$want" ]; then
-		printf '    ok    %s\n' "$name"
-		pass=$((pass + 1))
-	else
-		printf '    FAIL  %s: got [%s] want [%s]\n' "$name" "$got" "$want"
-		fail=$((fail + 1))
-	fi
-}
-
-check_contains() {
-	local name="$1" haystack="$2" needle="$3"
-	if printf '%s' "$haystack" | grep -qF "$needle"; then
-		printf '    ok    %s\n' "$name"
-		pass=$((pass + 1))
-	else
-		printf '    FAIL  %s: %q does not contain %q\n' "$name" "$haystack" "$needle"
-		fail=$((fail + 1))
-	fi
 }
 
 # rcurl issues a request to a rift hostname through Caddy, validating the chain
@@ -192,19 +200,6 @@ generate_self_cert() {
 		-addext "basicConstraints=critical,CA:TRUE" \
 		2>/dev/null
 }
-
-wait_for_tcp() {
-	local port="$1" what="$2"
-	for _ in $(seq 1 60); do
-		if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
-			exec 3<&- 3>&-
-			return 0
-		fi
-		sleep 1
-	done
-	die "$what did not come up on port $port"
-}
-
 
 # ---------------------------------------------------------------- ACME (Pebble)
 
@@ -559,6 +554,393 @@ run_cluster() {
 	[ "$keep" = true ] || compose down -v --remove-orphans >/dev/null 2>&1 || true
 }
 
+
+# ---------------------------------------------------------------- security
+#
+# Robustness regression suite. riftd already defends each of these classes; the
+# point here is to prove the defenses keep working, so a later refactor cannot
+# quietly drop one. Every probe speaks raw bytes straight to riftd's ingress
+# (published on loopback for this run) rather than through Caddy: Caddy disables
+# its own read/header/idle timeouts so long-lived tunnels survive, so it cannot
+# stand in for riftd's ReadHeaderTimeout. The one exception is the body-size
+# check, which goes through the public Caddy path on purpose -- that is the
+# route a real client's upload takes.
+run_security() {
+	CURRENT_MODE="internal"
+
+	export RIFT_TLS_MODE="internal"
+	export RIFT_E2E_BASE_DOMAIN="$BASE_DOMAIN"
+	export RIFT_E2E_ADMIN_TOKEN="$ADMIN_TOKEN"
+	export RIFT_E2E_HTTPS_PORT="$HTTPS_PORT" RIFT_E2E_HTTP_PORT="$HTTP_PORT"
+	export RIFT_E2E_GATEWAY_PORT="$GATEWAY_PORT" RIFT_E2E_ADMIN_PORT="$ADMIN_PORT"
+	export RIFT_E2E_INGRESS_PORT="$INGRESS_PORT"
+	export RIFT_E2E_LOG_LEVEL="info"
+	[ "$verbose" = true ] && export RIFT_E2E_LOG_LEVEL="debug"
+	export RIFT_E2E_CERT_DIR="$REPO_ROOT/deploy/caddy"
+	export RIFT_E2E_PEBBLE_DIR="$REPO_ROOT/deploy/caddy"
+	export RIFT_TLS_CERT_FILE="" RIFT_TLS_KEY_FILE=""
+	export RIFT_ACME_CA_PROFILE="public" RIFT_ACME_CA_URL="" RIFT_ACME_CA_ROOT=""
+	export RIFT_ACME_DNS_PROVIDER=""
+	export RIFT_E2E_TSIG_NAME="" RIFT_E2E_TSIG_ALG="" RIFT_E2E_TSIG_KEY=""
+	export RIFT_E2E_REDIS_ENABLED="false"
+	# The profiled riftd2 service is interpolated even though it never starts, so
+	# its required peer secret must still resolve to something.
+	export RIFT_E2E_PEER_SECRET="$PEER_SECRET"
+	unset COMPOSE_PROFILES || true
+	unset RIFT_CADDY_IMAGE || true
+
+	# Tight bounds so each probe resolves in seconds and a few KiB rather than
+	# the 30s / 32 MiB production defaults the four modes above exercise.
+	export RIFT_E2E_INGRESS_READ_TIMEOUT="2s"
+	export RIFT_E2E_INGRESS_MAX_HEADER_BYTES="16384"
+	export RIFT_E2E_MAX_REQUEST_BODY_BYTES="65536"
+
+	log_info "starting an internal stack for the robustness suite"
+	compose down -v --remove-orphans >/dev/null 2>&1 || true
+	build_images
+	compose up -d >/dev/null
+
+	wait_for_tcp "$ADMIN_PORT" "riftd admin"
+	wait_for_tcp "$INGRESS_PORT" "riftd ingress"
+	wait_for_tcp "$HTTPS_PORT" "caddy"
+
+	for _ in $(seq 1 30); do
+		if compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt \
+			>"$TMPDIR_E2E/ca.pem" 2>/dev/null && [ -s "$TMPDIR_E2E/ca.pem" ]; then
+			break
+		fi
+		sleep 1
+	done
+	[ -s "$TMPDIR_E2E/ca.pem" ] || die "caddy never wrote its internal root CA"
+
+	log_info "starting upstream on 127.0.0.1:$UPSTREAM_PORT"
+	python3 "$SCRIPT_DIR/e2e/upstream.py" "$UPSTREAM_PORT" >"$TMPDIR_E2E/upstream.log" 2>&1 &
+	UPSTREAM_PID=$!
+	wait_for_tcp "$UPSTREAM_PORT" "upstream"
+
+	wait_for_tls "$BASE_DOMAIN" || log_warn "apex cert not ready"
+
+	local token
+	token="$(mint_token)"
+	[ -n "$token" ] || die "could not mint a token"
+
+	log_info "connecting the rift CLI"
+	"$REPO_ROOT/projects/cli/dist/rift" http "$UPSTREAM_PORT" hello \
+		--token "$token" \
+		--server "ws://127.0.0.1:${GATEWAY_PORT}/tunnel" \
+		>"$TMPDIR_E2E/cli.log" 2>&1 &
+	CLI_PID=$!
+
+	for _ in $(seq 1 30); do
+		[ "$(status_of "hello.$BASE_DOMAIN")" = "200" ] && break
+		sleep 1
+	done
+
+	assert_security
+
+	kill "$CLI_PID" 2>/dev/null || true
+	CLI_PID=""
+	kill "$UPSTREAM_PID" 2>/dev/null || true
+	UPSTREAM_PID=""
+
+	if [ "$fail" -ne 0 ] && [ "$verbose" = true ]; then
+		compose logs riftd 2>&1 | tail -40 >&2
+	fi
+	[ "$keep" = true ] || compose down -v --remove-orphans >/dev/null 2>&1 || true
+}
+
+# ingress_probe sends a raw, possibly malformed request straight at riftd's
+# ingress and prints its first response line (empty when the server just closes
+# the connection). Kept as one helper so every probe carries the same timeout
+# and cannot hang the suite -- there is no global harness timeout.
+assert_security() {
+	printf '  robustness\n'
+	local host="hello.$BASE_DOMAIN"
+
+	# Slowloris: a request with a dangling, never-terminated header must be
+	# closed by riftd's ReadHeaderTimeout, not held open indefinitely.
+	local slow
+	slow="$(python3 - "$INGRESS_PORT" "$host" <<'PY'
+import socket, sys
+port, host = int(sys.argv[1]), sys.argv[2]
+s = socket.create_connection(("127.0.0.1", port), timeout=10)
+# Longer than the server's 2s header deadline, so a genuine close wins the race;
+# if the deadline is ever removed, this recv blocks to the timeout and reports open.
+s.settimeout(5.0)
+s.sendall(f"GET / HTTP/1.1\r\nHost: {host}\r\nX-Slow: ".encode())
+verdict = "open"
+try:
+    s.recv(256)          # any return (a 408, or b"" at EOF) means the server gave up
+    verdict = "closed"
+except socket.timeout:
+    verdict = "open"
+except (ConnectionResetError, BrokenPipeError):
+    verdict = "closed"
+s.close()
+print(verdict)
+PY
+	)"
+	check "slowloris connection is closed by the header-read timeout" "$slow" "closed"
+
+	# Oversized header block: net/http answers 431 before routing. The pad clears
+	# Go's ~4 KiB slack above RIFT_INGRESS_MAX_HEADER_BYTES (16 KiB here).
+	local hdr
+	hdr="$(python3 - "$INGRESS_PORT" "$host" <<'PY'
+import socket, sys
+port, host = int(sys.argv[1]), sys.argv[2]
+s = socket.create_connection(("127.0.0.1", port), timeout=10)
+s.settimeout(6)
+pad = "X-Pad: " + "A" * 40000 + "\r\n"
+s.sendall(f"GET / HTTP/1.1\r\nHost: {host}\r\n{pad}\r\n".encode())
+resp = b""
+try:
+    while b"\r\n" not in resp:
+        d = s.recv(4096)
+        if not d:
+            break
+        resp += d
+except (socket.timeout, ConnectionResetError, BrokenPipeError):
+    pass  # a reset instead of a graceful 431 still leaves resp empty -> check fails
+s.close()
+print(resp.split(b"\r\n", 1)[0].decode(errors="replace"))
+PY
+	)"
+	check_contains "oversized header block is rejected with 431" "$hdr" "431"
+
+	# Header injection: a bare CR inside a header value must be rejected, never
+	# split into a smuggled second request. net/http is the thing under test.
+	local inj
+	inj="$(python3 - "$INGRESS_PORT" "$host" <<'PY'
+import socket, sys
+port, host = int(sys.argv[1]), sys.argv[2]
+s = socket.create_connection(("127.0.0.1", port), timeout=10)
+s.settimeout(6)
+s.sendall(f"GET /reflect HTTP/1.1\r\nHost: {host}\r\nX-Evil: a\rSmuggledHeader: yes\r\n\r\n".encode())
+resp = b""
+try:
+    while len(resp) < 8192:
+        d = s.recv(4096)
+        if not d:
+            break
+        resp += d
+except (socket.timeout, ConnectionResetError, BrokenPipeError):
+    pass  # a reset instead of a graceful 400 still leaves resp empty -> check fails
+s.close()
+status = resp.split(b"\r\n", 1)[0].decode(errors="replace")
+print(f"{status}|smuggled={resp.count(b'HTTP/1.1') > 1}")
+PY
+	)"
+	check_contains "a CR-injected header is rejected with 400" "$inj" "400"
+	check_contains "no smuggled second response is emitted" "$inj" "smuggled=False"
+
+	# The rejection above is the edge refusing bad input, not the tunnel dropping
+	# headers: a legitimate custom header still reaches the upstream. The tunnel
+	# lower-cases header names, so match case-insensitively.
+	local reflected
+	reflected="$(path=/reflect rcurl "$host" -H 'X-Legit-Probe: roundtrip-ok' || true)"
+	if printf '%s' "$reflected" | grep -qiF "x-legit-probe: roundtrip-ok"; then
+		printf '    ok    a legit custom header reaches the upstream\n'
+		pass=$((pass + 1))
+	else
+		printf '    FAIL  a legit custom header reaches the upstream: %q\n' "$reflected"
+		fail=$((fail + 1))
+	fi
+
+	# Body-size cap, end to end through the public Caddy path: a body over
+	# RIFT_MAX_REQUEST_BODY_BYTES (64 KiB here) is 413 payload_too_large; one
+	# under it round-trips. This is the route a real upload takes and exercises
+	# the 413 mapping riftd gained for exactly this case.
+	head -c 40000 /dev/zero | tr '\0' 'a' >"$TMPDIR_E2E/body-under.bin"
+	head -c 200000 /dev/zero | tr '\0' 'a' >"$TMPDIR_E2E/body-over.bin"
+	check "a body under the cap round-trips (200)" \
+		"$(path=/echo rcurl "$host" -o /dev/null -w '%{http_code}' \
+			--data-binary "@$TMPDIR_E2E/body-under.bin" \
+			-H 'Content-Type: application/octet-stream' || echo TLS-FAIL)" "200"
+	check "a body over the cap is rejected (413)" \
+		"$(path=/echo rcurl "$host" -o /dev/null -w '%{http_code}' \
+			--data-binary "@$TMPDIR_E2E/body-over.bin" \
+			-H 'Content-Type: application/octet-stream' || echo TLS-FAIL)" "413"
+}
+
+
+# ---------------------------------------------------------------- tunnels
+#
+# The raw tcp/tls tunnels are the only ones NOT fronted by Caddy: riftd
+# publishes their ports from its container directly. The other suites prove the
+# HTTP path through Caddy; this one proves that a real tcp tunnel pipes bytes and
+# a real tls passthrough completes a handshake through the ACTUALLY-PUBLISHED
+# host ports, not just an in-process listener. It brings up an internal stack
+# with the tunnels enabled and the tunnel-port overlay layered.
+run_tunnels() {
+	CURRENT_MODE="internal"
+
+	export RIFT_TLS_MODE="internal"
+	export RIFT_E2E_BASE_DOMAIN="$BASE_DOMAIN"
+	export RIFT_E2E_ADMIN_TOKEN="$ADMIN_TOKEN"
+	export RIFT_E2E_HTTPS_PORT="$HTTPS_PORT" RIFT_E2E_HTTP_PORT="$HTTP_PORT"
+	export RIFT_E2E_GATEWAY_PORT="$GATEWAY_PORT" RIFT_E2E_ADMIN_PORT="$ADMIN_PORT"
+	export RIFT_E2E_LOG_LEVEL="info"
+	[ "$verbose" = true ] && export RIFT_E2E_LOG_LEVEL="debug"
+	export RIFT_E2E_CERT_DIR="$REPO_ROOT/deploy/caddy"
+	export RIFT_E2E_PEBBLE_DIR="$REPO_ROOT/deploy/caddy"
+	export RIFT_TLS_CERT_FILE="" RIFT_TLS_KEY_FILE=""
+	export RIFT_ACME_CA_PROFILE="public" RIFT_ACME_CA_URL="" RIFT_ACME_CA_ROOT=""
+	export RIFT_ACME_DNS_PROVIDER=""
+	export RIFT_E2E_TSIG_NAME="" RIFT_E2E_TSIG_ALG="" RIFT_E2E_TSIG_KEY=""
+	export RIFT_E2E_REDIS_ENABLED="false"
+	export RIFT_E2E_PEER_SECRET="$PEER_SECRET"
+	unset COMPOSE_PROFILES || true
+	unset RIFT_CADDY_IMAGE || true
+
+	# Enable the tunnels and pin the (narrow) port window; the same vars drive
+	# both riftd's allocator and the publish overlay, so they cannot drift.
+	export RIFT_E2E_TCP_ENABLED="true"
+	export RIFT_E2E_TCP_ADVERTISE_HOST="127.0.0.1"
+	export RIFT_E2E_TCP_PORT_MIN="$TCP_TUNNEL_PORT_MIN"
+	export RIFT_E2E_TCP_PORT_MAX="$TCP_TUNNEL_PORT_MAX"
+	export RIFT_E2E_TLS_TUNNEL_ENABLED="true"
+	# The advertised port doubles as the published host port in the overlay.
+	export RIFT_E2E_TLS_TUNNEL_ADVERTISE_PORT="$TLS_TUNNEL_PORT"
+
+	# Layer the port-publish overlay for this run only.
+	COMPOSE_EXTRA=(-f "$REPO_ROOT/deploy/docker-compose.e2e-tunnels.yml")
+
+	log_info "starting an internal stack for the tcp/tls tunnel suite"
+	compose down -v --remove-orphans >/dev/null 2>&1 || true
+	build_images
+	compose up -d >/dev/null
+
+	wait_for_tcp "$ADMIN_PORT" "riftd admin"
+	wait_for_tcp "$GATEWAY_PORT" "riftd gateway"
+
+	# A self-signed cert the local tls service holds and terminates; the test
+	# client trusts it directly (the gateway never sees inside the tunnel).
+	local tlssub="tlstun"
+	openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+		-keyout "$TMPDIR_E2E/tuncert.key" -out "$TMPDIR_E2E/tuncert.pem" \
+		-subj "/CN=${tlssub}.${BASE_DOMAIN}" \
+		-addext "subjectAltName=DNS:${tlssub}.${BASE_DOMAIN}" 2>/dev/null
+
+	log_info "starting raw upstreams (tcp echo + tls) on the host"
+	python3 "$SCRIPT_DIR/e2e/raw-upstream.py" tcp "$TCP_UPSTREAM_PORT" \
+		>"$TMPDIR_E2E/tcp-upstream.log" 2>&1 &
+	EXTRA_PIDS+=("$!")
+	python3 "$SCRIPT_DIR/e2e/raw-upstream.py" tls "$TLS_UPSTREAM_PORT" \
+		"$TMPDIR_E2E/tuncert.pem" "$TMPDIR_E2E/tuncert.key" \
+		>"$TMPDIR_E2E/tls-upstream.log" 2>&1 &
+	EXTRA_PIDS+=("$!")
+	wait_for_tcp "$TCP_UPSTREAM_PORT" "tcp upstream"
+	wait_for_tcp "$TLS_UPSTREAM_PORT" "tls upstream"
+
+	local token
+	token="$(mint_token)"
+	[ -n "$token" ] || die "could not mint a token"
+
+	log_info "connecting the tcp and tls agents"
+	"$REPO_ROOT/projects/cli/dist/rift" tcp "$TCP_UPSTREAM_PORT" tcptun \
+		--token "$token" --server "ws://127.0.0.1:${GATEWAY_PORT}/tunnel" \
+		>"$TMPDIR_E2E/tcp-cli.log" 2>&1 &
+	EXTRA_PIDS+=("$!")
+	"$REPO_ROOT/projects/cli/dist/rift" tls "$TLS_UPSTREAM_PORT" "$tlssub" \
+		--token "$token" --server "ws://127.0.0.1:${GATEWAY_PORT}/tunnel" \
+		>"$TMPDIR_E2E/tls-cli.log" 2>&1 &
+	EXTRA_PIDS+=("$!")
+
+	# Wait for each agent to report the public address it was assigned.
+	local tcp_bind="" tls_bind=""
+	local _
+	for _ in $(seq 1 30); do
+		tcp_bind="$(sed -n 's|.*connected: tcp://\([^ ]*\).*|\1|p' "$TMPDIR_E2E/tcp-cli.log" | head -1)"
+		tls_bind="$(sed -n 's|.*connected: tls://\([^ ]*\).*|\1|p' "$TMPDIR_E2E/tls-cli.log" | head -1)"
+		[ -n "$tcp_bind" ] && [ -n "$tls_bind" ] && break
+		sleep 1
+	done
+
+	assert_tunnels "$tcp_bind" "$tls_bind" "$tlssub"
+
+	kill "${EXTRA_PIDS[@]}" 2>/dev/null || true
+	EXTRA_PIDS=()
+
+	if [ "$fail" -ne 0 ] && [ "$verbose" = true ]; then
+		compose logs riftd 2>&1 | tail -40 >&2
+	fi
+	[ "$keep" = true ] || compose down -v --remove-orphans >/dev/null 2>&1 || true
+	COMPOSE_EXTRA=()
+}
+
+# assert_tunnels TCP_BIND TLS_BIND TLS_SUB -- prove bytes cross each tunnel via
+# the published host ports. TCP_BIND/TLS_BIND are "host:port" from each agent's
+# banner; the reachable host port is the port field (published on 127.0.0.1).
+assert_tunnels() {
+	printf '  raw tunnels (rift tcp / rift tls)\n'
+	local tcp_bind="$1" tls_bind="$2" tlssub="$3"
+
+	if [ -z "$tcp_bind" ]; then
+		check "tcp agent reported a public bind address" "" "host:port"
+	else
+		local tcp_port="${tcp_bind##*:}"
+		# The allocated port is somewhere in the configured range; don't assume
+		# which one (leases make the exact value order-dependent). Connect to
+		# whatever the agent reported.
+		local tcp_inrange=no
+		case "$tcp_port" in
+		'' | *[!0-9]*) : ;;
+		*) [ "$tcp_port" -ge "$TCP_TUNNEL_PORT_MIN" ] &&
+			[ "$tcp_port" -le "$TCP_TUNNEL_PORT_MAX" ] && tcp_inrange=yes ;;
+		esac
+		check "tcp tunnel bound a port inside the range" "$tcp_inrange" "yes"
+		# Round-trip a payload through the published port: send -> gateway ->
+		# tunnel -> agent -> echo upstream -> back.
+		local echoed
+		echoed="$(python3 - "$tcp_port" <<'PY'
+import socket, sys
+port = int(sys.argv[1])
+s = socket.create_connection(("127.0.0.1", port), timeout=10)
+s.settimeout(10)
+msg = b"rift-tcp-tunnel-probe"
+s.sendall(msg)
+got = b""
+while len(got) < len(msg):
+    chunk = s.recv(4096)
+    if not chunk:
+        break
+    got += chunk
+s.close()
+print(got.decode(errors="replace"))
+PY
+		)"
+		check "tcp tunnel pipes bytes end to end" "$echoed" "rift-tcp-tunnel-probe"
+	fi
+
+	if [ -z "$tls_bind" ]; then
+		check "tls agent reported a public bind address" "" "host:port"
+	else
+		local tls_port="${tls_bind##*:}"
+		check "tls tunnel advertises the passthrough port" "$tls_port" "$TLS_TUNNEL_PORT"
+		# A REAL TLS handshake through the published port, with SNI routing to the
+		# tunnel and the local service's own cert as the trust root. Proves the
+		# gateway passed the ClientHello through without terminating it.
+		local banner
+		banner="$(python3 - "$tls_port" "$tlssub.$BASE_DOMAIN" "$TMPDIR_E2E/tuncert.pem" <<'PY'
+import socket, ssl, sys
+port, sni, ca = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+ctx = ssl.create_default_context(cafile=ca)
+raw = socket.create_connection(("127.0.0.1", port), timeout=10)
+raw.settimeout(10)
+try:
+    tls = ctx.wrap_socket(raw, server_hostname=sni)  # SNI = the tunnel subdomain
+    tls.sendall(b"ping\n")
+    data = tls.recv(256)
+    tls.close()
+    print(data.decode(errors="replace").strip())
+except Exception as e:
+    print(f"handshake-failed: {e}")
+PY
+		)"
+		check "tls passthrough completes a real handshake" "$banner" "tls-upstream-ok"
+	fi
+}
+
 mint_token() {
 	curl -fsS --max-time 15 -X POST "http://127.0.0.1:${ADMIN_PORT}/v1/tokens" \
 		-H "Authorization: Bearer ${ADMIN_TOKEN}" \
@@ -856,6 +1238,12 @@ if [ "$cluster" = true ]; then
 	run_cluster
 fi
 
-printf '\n=== summary ===\n  passed=%d failed=%d\n' "$pass" "$fail"
-[ "$fail" -eq 0 ] || die "e2e failed"
-log_info "e2e passed"
+if [ "$security" = true ]; then
+	run_security
+fi
+
+if [ "$tunnels" = true ]; then
+	run_tunnels
+fi
+
+print_summary "e2e"

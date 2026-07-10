@@ -6,7 +6,7 @@
 /dist/
 
 # Generated docs — the man page and shell completions are regenerated from the
-# CLI spec (make gen-docs / the release pipeline); never committed.
+# CLI spec (mise run gen-docs / the release pipeline); never committed.
 /packaging/
 
 # Local scratchpad for research/design notes — never committed.

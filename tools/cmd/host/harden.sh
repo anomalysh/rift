@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
+. "$SCRIPT_DIR/../../lib/common.sh"
 
 # Ordered so the SSH lockout guard (the whole point of this script) runs first:
 # if it aborts, nothing else has been touched.
@@ -16,6 +16,72 @@ MARKER="/etc/rift-hostcheck-target"
 # The user whose authorized_keys must hold a key before password auth is
 # disabled. Access to the VPS is root-over-key, so root is the default.
 SSH_KEY_USER="${RIFT_HARDEN_SSH_USER:-root}"
+
+# env_file_val KEY -- KEY's value from the operator's .env, empty if unset.
+#
+# Reads rather than sources: .env is compose's env-file format, not shell, so an
+# unquoted value containing spaces would break `.`, and sourcing it would leak
+# every secret into the apt/sshd/nft children this script execs. The VPS layout
+# (ship.sh puts tools at /opt/rift/tools) is checked first, then a repo checkout.
+env_file_val() {
+	local key="$1" file val
+	for file in "$RIFT_REPO_ROOT/deploy/.env" "$RIFT_REPO_ROOT/.env"; do
+		[ -f "$file" ] || continue
+		val="$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$file" |
+			tail -n 1 | tr -d "\"'\r")"
+		if [ -n "$val" ]; then
+			printf '%s' "$val"
+			return 0
+		fi
+	done
+}
+
+# Raw-tunnel ports. An explicit environment variable wins over .env, which wins
+# over the defaults -- which must match projects/server/internal/config/defaults.go,
+# or the firewall and riftd's allocator disagree about which ports are in use.
+RIFT_TCP_ENABLED="${RIFT_TCP_ENABLED:-$(env_file_val RIFT_TCP_ENABLED)}"
+RIFT_TCP_PORT_MIN="${RIFT_TCP_PORT_MIN:-$(env_file_val RIFT_TCP_PORT_MIN)}"
+RIFT_TCP_PORT_MAX="${RIFT_TCP_PORT_MAX:-$(env_file_val RIFT_TCP_PORT_MAX)}"
+RIFT_TCP_PORT_MIN="${RIFT_TCP_PORT_MIN:-20000}"
+RIFT_TCP_PORT_MAX="${RIFT_TCP_PORT_MAX:-20100}"
+
+RIFT_TLS_TUNNEL_ENABLED="${RIFT_TLS_TUNNEL_ENABLED:-$(env_file_val RIFT_TLS_TUNNEL_ENABLED)}"
+RIFT_TLS_TUNNEL_ADVERTISE_PORT="${RIFT_TLS_TUNNEL_ADVERTISE_PORT:-$(env_file_val RIFT_TLS_TUNNEL_ADVERTISE_PORT)}"
+RIFT_TLS_TUNNEL_LISTEN_ADDR="${RIFT_TLS_TUNNEL_LISTEN_ADDR:-$(env_file_val RIFT_TLS_TUNNEL_LISTEN_ADDR)}"
+RIFT_TLS_TUNNEL_LISTEN_ADDR="${RIFT_TLS_TUNNEL_LISTEN_ADDR:-:8443}"
+# Mirrors config.TLSTunnel.Port(): the advertised port when > 0, else the one in
+# the listen address. Note advertise=0 is the documented sentinel for "use the
+# listen port", so it must fall through here just as it does in the server --
+# `:-` alone would not, because "0" is a set, non-empty value.
+if [ -n "${RIFT_TLS_TUNNEL_ADVERTISE_PORT:-}" ] && [ "$RIFT_TLS_TUNNEL_ADVERTISE_PORT" != "0" ]; then
+	RIFT_TLS_TUNNEL_PORT="$RIFT_TLS_TUNNEL_ADVERTISE_PORT"
+else
+	# "${addr##*:}" takes the port from ":8443" and "0.0.0.0:8443".
+	RIFT_TLS_TUNNEL_PORT="${RIFT_TLS_TUNNEL_LISTEN_ADDR##*:}"
+fi
+
+# validate_port NAME VALUE -- die unless VALUE is a port number.
+validate_port() {
+	case "$2" in
+	'' | *[!0-9]*) die "$1: expected a port number, got '$2'" ;;
+	esac
+	if [ "$2" -lt 1 ] || [ "$2" -gt 65535 ]; then
+		die "$1: port $2 is outside 1-65535"
+	fi
+}
+
+# --check never runs `nft -c`, so a bad value would otherwise be written to
+# $NFT_CONF unvalidated and only fail at the next boot.
+if is_true "$RIFT_TCP_ENABLED"; then
+	validate_port RIFT_TCP_PORT_MIN "$RIFT_TCP_PORT_MIN"
+	validate_port RIFT_TCP_PORT_MAX "$RIFT_TCP_PORT_MAX"
+	if [ "$RIFT_TCP_PORT_MIN" -gt "$RIFT_TCP_PORT_MAX" ]; then
+		die "RIFT_TCP_PORT_MIN ($RIFT_TCP_PORT_MIN) must not exceed RIFT_TCP_PORT_MAX ($RIFT_TCP_PORT_MAX)"
+	fi
+fi
+if is_true "$RIFT_TLS_TUNNEL_ENABLED"; then
+	validate_port RIFT_TLS_TUNNEL_PORT "$RIFT_TLS_TUNNEL_PORT"
+fi
 
 SSH_DROPIN="/etc/ssh/sshd_config.d/99-rift.conf"
 F2B_JAIL="/etc/fail2ban/jail.d/rift.conf"
@@ -33,7 +99,7 @@ CHANGES=0
 
 usage() {
 	cat >&2 <<EOF
-Usage: tools/harden.sh [--check|--dry-run] [--only AREA] [--skip AREA]
+Usage: rift-ops host harden [--check|--dry-run] [--only AREA] [--skip AREA]
                        [--restart-docker] [--ssh-user NAME] [--force]
 
 Idempotent host hardening for a rift VPS (Debian). Running it twice changes
@@ -45,7 +111,8 @@ Areas (run in this order):
                password auth unless a key is present and sshd accepts the config
   fail2ban     enable the sshd jail with sane ban settings
   nftables     inet filter: accept 22/80/443 + loopback/established/icmp, drop
-               the rest of inbound; coexists with Docker's own chains
+               the rest of inbound; coexists with Docker's own chains. Also
+               opens the raw-tunnel ports when they are enabled (see below)
   docker       json-file log rotation merged into daemon.json (no daemon restart)
   unattended   unattended-upgrades for the security pocket only
 
@@ -64,6 +131,17 @@ Options:
   --ssh-user NAME    user whose authorized_keys is checked (default: $SSH_KEY_USER)
   --force            bypass the $MARKER workstation guard
   -h, --help         show this help and exit
+
+Raw-tunnel ports (read from the environment, else deploy/.env or ./.env; the
+defaults match the server's). The nftables area opens them only when enabled,
+so a default host stays closed. Enabling them here is one half of the job --
+deploy/docker-compose.tcp.yml / .tls.yml publish them from the riftd container.
+Run this script again after flipping either flag.
+  RIFT_TCP_ENABLED             open RIFT_TCP_PORT_MIN-MAX (default: false)
+  RIFT_TCP_PORT_MIN/MAX        tcp tunnel range (default: 20000-20100)
+  RIFT_TLS_TUNNEL_ENABLED      open the tls passthrough port (default: false)
+  RIFT_TLS_TUNNEL_ADVERTISE_PORT / RIFT_TLS_TUNNEL_LISTEN_ADDR
+                               tls tunnel port (default: 8443)
 EOF
 }
 
@@ -208,7 +286,7 @@ ssh_accepts_challengeresponse() {
 
 ssh_desired_dropin() {
 	printf '%s\n' \
-		"# Managed by rift tools/harden.sh -- do not edit by hand." \
+		"# Managed by rift rift-ops host harden -- do not edit by hand." \
 		"# Key-only SSH: no password or keyboard-interactive login paths." \
 		"PasswordAuthentication no" \
 		"PermitRootLogin prohibit-password" \
@@ -306,7 +384,7 @@ area_ssh() {
 # === fail2ban ===============================================================
 f2b_desired() {
 	printf '%s\n' \
-		"# Managed by rift tools/harden.sh." \
+		"# Managed by rift rift-ops host harden." \
 		"[sshd]" \
 		"enabled = true" \
 		"maxretry = 5" \
@@ -338,10 +416,35 @@ area_fail2ban() {
 }
 
 # === nftables ===============================================================
+
+# nft_input_ports — the anonymous set for the input chain's tcp dport rule.
+#
+# 22/80/443 are always open. The raw-tunnel ports are added only when their
+# feature is enabled, so a default host stays closed. nft accepts ranges beside
+# scalars in an anonymous set, and prints them back verbatim, which is what lets
+# --check and e2e-hostcheck compare the rendered rule as a string.
+nft_input_ports() {
+	local ports="22, 80, 443"
+	if is_true "$RIFT_TLS_TUNNEL_ENABLED"; then
+		ports="$ports, $RIFT_TLS_TUNNEL_PORT"
+	fi
+	if is_true "$RIFT_TCP_ENABLED"; then
+		ports="$ports, $RIFT_TCP_PORT_MIN-$RIFT_TCP_PORT_MAX"
+	fi
+	printf '%s' "$ports"
+}
+
 nft_desired() {
-	cat <<'EOF'
+	# Quoted heredoc: nothing here is shell-expanded, so the backticks in the
+	# prose comments below stay literal and no command substitution runs. The one
+	# dynamic value, the port set, is stitched in afterwards via a placeholder.
+	# It is only digits/commas/spaces/hyphens (nft_input_ports), so it is safe in
+	# a sed replacement and cannot smuggle a sed metacharacter.
+	local ports
+	ports="$(nft_input_ports)"
+	sed "s/@RIFT_PORTS@/$ports/" <<'EOF'
 #!/usr/sbin/nft -f
-# Managed by rift tools/harden.sh.
+# Managed by rift rift-ops host harden.
 #
 # This defines ONLY an `inet filter` table. Docker installs its own rules in the
 # `ip` family (the nat table plus the DOCKER / DOCKER-USER / FORWARD filter
@@ -372,7 +475,14 @@ table inet filter {
 		meta l4proto icmp accept
 		meta l4proto ipv6-icmp accept
 
-		tcp dport { 22, 80, 443 } accept
+		# 22/80/443, plus the raw-tunnel ports when rift tcp / rift tls are
+		# enabled. Note the asymmetry with Docker: externally-routed IPv4 to a
+		# published container port is DNAT'd in the ip nat table and traverses
+		# forward, so it never consults this chain. These rules still govern the
+		# paths that DO reach input -- IPv6, and the host sockets docker-proxy
+		# opens -- and they keep the host's stated policy honest instead of
+		# leaving Docker's generated chains as the only record of what is open.
+		tcp dport { @RIFT_PORTS@ } accept
 	}
 
 	chain output {
@@ -497,7 +607,7 @@ area_docker() {
 # === unattended-upgrades ====================================================
 uu_auto_desired() {
 	printf '%s\n' \
-		'// Managed by rift tools/harden.sh.' \
+		'// Managed by rift rift-ops host harden.' \
 		'APT::Periodic::Update-Package-Lists "1";' \
 		'APT::Periodic::Unattended-Upgrade "1";'
 }
@@ -506,7 +616,7 @@ uu_conf_desired() {
 	# ${distro_codename} is expanded by unattended-upgrades itself, not the
 	# shell, so the heredoc is single-quoted to keep it literal.
 	cat <<'EOF'
-// Managed by rift tools/harden.sh.
+// Managed by rift rift-ops host harden.
 // Security pocket only: apply security updates unattended, leave everything
 // else to the operator.
 Unattended-Upgrade::Origins-Pattern {

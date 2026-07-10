@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Prove tools/install.sh against a local fake release tree (checksum verify/reject)"
+set -euo pipefail
+exec bash "${MISE_PROJECT_ROOT:?}/tools/e2e-install.sh" "$@"

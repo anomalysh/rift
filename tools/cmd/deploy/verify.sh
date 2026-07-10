@@ -3,8 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
-. "$SCRIPT_DIR/lib/common.sh"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+. "$SCRIPT_DIR/../../lib/common.sh"
 
 # verify-deploy.sh -- assert a live rift deployment actually works.
 #
@@ -16,7 +15,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 usage() {
 	cat >&2 <<EOF
-Usage: tools/verify-deploy.sh [--host IP] [--base DOMAIN] [--gateway HOST]
+Usage: rift-ops deploy verify [--host IP] [--base DOMAIN] [--gateway HOST]
 
 Assert that a deployed rift stack serves correctly: TLS is valid on the apex
 and the gateway hostname, the apex answers as a non-tunnel, HTTP redirects to
@@ -58,13 +57,7 @@ while [ "$#" -gt 0 ]; do
 	shift
 done
 
-if [ -f "$REPO_ROOT/.env" ]; then
-	set -a
-	# operator-supplied, not in the repo
-	# shellcheck disable=SC1091
-	. "$REPO_ROOT/.env"
-	set +a
-fi
+load_env
 base="${base:-${RIFT_BASE_DOMAIN:-}}"
 gateway="${gateway:-${RIFT_GATEWAY_HOSTNAME:-gateway.$base}}"
 host="${host:-${RIFT_VPS_HOST:-}}"

@@ -1134,3 +1134,68 @@ func asRejection(err error, target **handshakeRejection) bool {
 	*target = rej
 	return true
 }
+
+// TestOversizedRequestBodyIsRejectedWith413 pins the public status for a body
+// that exceeds RIFT_MAX_REQUEST_BODY_BYTES. The cap is enforced by a
+// MaxBytesReader read inside the goroutine pumping the body to the agent, so
+// the failure reaches the ingress as a read error, not as an agent reset --
+// which is why it once surfaced as a bare 502.
+func TestOversizedRequestBodyIsRejectedWith413(t *testing.T) {
+	const limit = 64 << 10
+
+	s := newStack(t, func(c *config.Config) {
+		c.Tunnel.MaxRequestBodyBytes = limit
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Drain the body so the agent behaves like a real upstream: it must not
+	// answer early, or the response head would win the race against the cap.
+	a, err := dialAgent(t, ctx, s.gatewayWS, s.token, "bigbody", http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			n, _ := io.Copy(io.Discard, r.Body)
+			fmt.Fprintf(w, "read %d", n)
+		}))
+	if err != nil {
+		t.Fatalf("dial agent: %v", err)
+	}
+	defer a.close()
+
+	t.Run("under the cap round-trips", func(t *testing.T) {
+		body := strings.Repeat("a", limit-1)
+		resp := s.do(t, http.MethodPost, "bigbody", "/upload", strings.NewReader(body))
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+		}
+		if got, want := readAll(t, resp.Body), fmt.Sprintf("read %d", limit-1); got != want {
+			t.Fatalf("body = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("over the cap is 413 payload_too_large", func(t *testing.T) {
+		body := strings.Repeat("a", limit+(1<<10))
+		req, err := http.NewRequest(http.MethodPost, s.ingressURL+"/upload", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = core.Hostname("bigbody", testBaseDomain)
+		// Ask for JSON so the error code, not just the status, is assertable.
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := s.client.Do(req)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusRequestEntityTooLarge {
+			t.Fatalf("status = %d, want %d (body: %s)",
+				resp.StatusCode, http.StatusRequestEntityTooLarge, readAll(t, resp.Body))
+		}
+		if got := readAll(t, resp.Body); !strings.Contains(got, "payload_too_large") {
+			t.Fatalf("body = %q, want it to contain %q", got, "payload_too_large")
+		}
+	})
+}

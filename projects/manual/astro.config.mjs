@@ -33,6 +33,7 @@ export default defineConfig({
 						{ label: 'TLS modes', slug: 'guides/tls-modes' },
 						{ label: 'DNS-01 providers', slug: 'guides/dns-providers' },
 						{ label: 'Deploying to a server', slug: 'guides/deploying' },
+						{ label: 'Raw TCP & TLS tunnels', slug: 'guides/raw-tunnels' },
 						{ label: 'Reserved subdomains & tokens', slug: 'guides/subdomains-and-tokens' },
 						{ label: 'Multi-node with Redis', slug: 'guides/multi-node' },
 					],

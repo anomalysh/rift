@@ -8,6 +8,9 @@ Routes:
     POST /echo        -> streams the request body straight back
     GET  /stream      -> two chunks, 300ms apart, to prove nothing buffers
     GET  /big         -> N bytes of deterministic filler (?n=BYTES)
+    GET  /reflect     -> echoes the request line and every request header, so a
+                         test can see exactly what the tunnel forwarded (used to
+                         confirm an injected header never reaches the upstream)
 """
 
 import sys
@@ -37,6 +40,21 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(CHUNK_GAP_SECONDS)
             self._chunk(b"chunk-2\n")
             self._chunk(b"")
+            return
+
+        if url.path == "/reflect":
+            # Report the request line and headers verbatim so a caller can
+            # assert what actually crossed the tunnel. A header a malicious
+            # client tried to smuggle in via CR/LF must not show up here.
+            lines = [f"requestline={self.requestline}"]
+            for name, value in self.headers.items():
+                lines.append(f"header={name}: {value}")
+            body = ("\n".join(lines) + "\n").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
             return
 
         if url.path == "/big":

@@ -1,0 +1,26 @@
+# Publishes the raw-TLS-passthrough tunnel port from the riftd container. Opt-in:
+# layer this file only when RIFT_TLS_TUNNEL_ENABLED is true.
+#
+#     docker compose -f docker-compose.yml \
+#                    -f docker-compose.prod.yml \
+#                    -f docker-compose.tls.yml up -d
+#
+# ORDER MATTERS. This file must come AFTER docker-compose.prod.yml, whose
+# `ports: !reset []` a later !reset would wipe. Compose appends `ports` across
+# overlays, so this composes cleanly with docker-compose.tcp.yml.
+#
+# Kept separate from the tcp overlay on purpose: the two features are enabled
+# independently, so publishing must be independent too. Publishing 8443 while
+# riftd's tls passthrough is off would bind a dead host port that tools/harden.sh
+# (which gates the firewall per-flag) would not open.
+#
+# Unlike http/ws tunnels, a tls passthrough tunnel cannot be fronted by Caddy: it
+# is raw TLS routed by the ClientHello SNI, which the gateway never decrypts. So
+# riftd publishes it directly.
+
+services:
+  riftd:
+    ports:
+      # Container side is pinned to 8443 to match RIFT_TLS_TUNNEL_LISTEN_ADDR in
+      # the base file; only the public port moves.
+      - "${RIFT_TLS_TUNNEL_ADVERTISE_PORT:-8443}:8443"
