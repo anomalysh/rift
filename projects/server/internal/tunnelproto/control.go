@@ -3,6 +3,8 @@ package tunnelproto
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/anomalysh/rift/projects/server/internal/core"
 )
 
 // ControlType names a control message. Values are wire-visible.
@@ -27,6 +29,7 @@ const (
 	ErrCodeSubdomainInvalid    ErrorCode = "subdomain_invalid"
 	ErrCodeTunnelLimit         ErrorCode = "tunnel_limit"
 	ErrCodeUnsupportedProtocol ErrorCode = "unsupported_protocol"
+	ErrCodeInvalidPolicy       ErrorCode = "invalid_policy"
 	ErrCodeUnsupportedVersion  ErrorCode = "unsupported_version"
 	ErrCodeInternal            ErrorCode = "internal"
 )
@@ -68,6 +71,11 @@ type Hello struct {
 	Subdomain       string `json:"subdomain,omitempty"`
 	LocalPort       int    `json:"local_port,omitempty"`
 	ClientVersion   string `json:"client_version,omitempty"`
+	// Policy is the optional per-tunnel visitor-access policy the agent
+	// attaches (basic-auth, IP rules, rate limit, lifetime bounds). Additive
+	// and omitempty, so an older agent that never sends it is unaffected and no
+	// protocol-version bump is needed.
+	Policy *core.Policy `json:"policy,omitempty"`
 }
 
 // HelloOK confirms the tunnel is live and routable.

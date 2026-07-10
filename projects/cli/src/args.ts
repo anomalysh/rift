@@ -23,6 +23,15 @@ export interface FlagConfig {
   logLevel?: LogLevel;
   insecure?: boolean;
   upstreamInsecure?: boolean;
+  // Visitor-access policy (A2-A5). Repeatable flags accumulate; the rest are
+  // single-valued. Raw strings here; buildPolicy validates and hashes them.
+  basicAuth?: string[];
+  allowIp?: string[];
+  denyIp?: string[];
+  ttl?: string;
+  once?: boolean;
+  maxRequests?: string;
+  rateLimit?: string;
 }
 
 export type ParsedArgs =
@@ -45,7 +54,19 @@ function isShell(v: string): v is Shell {
 }
 
 /** Run flags that take a value; the rest are booleans. */
-const VALUE_FLAGS = new Set(["--token", "--server", "--host", "--log-level"]);
+const VALUE_FLAGS = new Set([
+  "--token",
+  "--server",
+  "--host",
+  "--log-level",
+  // Visitor policy value flags. --basic-auth/--allow-ip/--deny-ip may repeat.
+  "--basic-auth",
+  "--allow-ip",
+  "--deny-ip",
+  "--ttl",
+  "--max-requests",
+  "--rate-limit",
+]);
 
 // `--set-*` flags do not open a tunnel: they persist a value to the config file
 // and exit. They mirror the run flags one-for-one so `rift --set-token <t>`
@@ -97,6 +118,10 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     }
     if (arg === "--upstream-insecure") {
       flags.upstreamInsecure = true;
+      continue;
+    }
+    if (arg === "--once") {
+      flags.once = true;
       continue;
     }
 
@@ -232,6 +257,24 @@ function applyValueFlag(
         return `invalid --log-level ${JSON.stringify(value)}: expected one of ${LOG_LEVELS.join(", ")}`;
       }
       flags.logLevel = value;
+      return null;
+    case "--basic-auth":
+      flags.basicAuth = [...(flags.basicAuth ?? []), value];
+      return null;
+    case "--allow-ip":
+      flags.allowIp = [...(flags.allowIp ?? []), value];
+      return null;
+    case "--deny-ip":
+      flags.denyIp = [...(flags.denyIp ?? []), value];
+      return null;
+    case "--ttl":
+      flags.ttl = value;
+      return null;
+    case "--max-requests":
+      flags.maxRequests = value;
+      return null;
+    case "--rate-limit":
+      flags.rateLimit = value;
       return null;
     default:
       return `unknown flag: ${name}`;

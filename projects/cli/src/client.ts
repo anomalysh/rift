@@ -26,6 +26,7 @@ import {
 } from "./constants.ts";
 import { type FrameSink, RequestStream, type Stream } from "./forwarder.ts";
 import type { Logger } from "./logger.ts";
+import type { WirePolicy } from "./policy.ts";
 import {
   asHelloError,
   asHelloOk,
@@ -53,6 +54,8 @@ export interface ClientOptions {
   readonly port: number;
   readonly subdomain?: string;
   readonly logger: Logger;
+  /** Visitor-access policy declared to the gateway in the Hello (A2-A5). */
+  readonly policy?: WirePolicy;
 }
 
 /** Raised for non-recoverable client failures (surfaced as a nonzero exit). */
@@ -76,6 +79,7 @@ function isLoopbackHost(host: string): boolean {
 
 export class TunnelClient {
   private readonly config: ResolvedConfig;
+  private readonly policy: WirePolicy | undefined;
   private readonly logger: Logger;
   private readonly port: number;
   private readonly protocol: SupportedProtocol;
@@ -108,6 +112,7 @@ export class TunnelClient {
 
   constructor(opts: ClientOptions) {
     this.config = opts.config;
+    this.policy = opts.policy;
     this.logger = opts.logger;
     this.port = opts.port;
     this.protocol = opts.protocol;
@@ -214,6 +219,9 @@ export class TunnelClient {
     }
     hello.local_port = this.port;
     hello.client_version = VERSION;
+    if (this.policy !== undefined) {
+      hello.policy = this.policy;
+    }
     this.sendRaw(encodeControl(ControlType.HELLO, hello));
   }
 

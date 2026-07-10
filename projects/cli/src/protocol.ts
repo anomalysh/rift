@@ -14,6 +14,7 @@ import {
   MAX_FRAME_BYTES,
   MAX_PAYLOAD_BYTES,
 } from "./constants.ts";
+import type { WirePolicy } from "./policy.ts";
 
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
 
@@ -141,6 +142,8 @@ export interface Hello {
   subdomain?: string;
   local_port?: number;
   client_version?: string;
+  /** Optional visitor-access policy; omitted when unset (mirrors server). */
+  policy?: WirePolicy;
 }
 
 export interface HelloOk {

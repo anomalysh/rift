@@ -18,6 +18,7 @@ import (
 	"github.com/anomalysh/rift/projects/server/internal/auth"
 	"github.com/anomalysh/rift/projects/server/internal/config"
 	"github.com/anomalysh/rift/projects/server/internal/core"
+	"github.com/anomalysh/rift/projects/server/internal/policy"
 	"github.com/anomalysh/rift/projects/server/internal/tunnelproto"
 )
 
@@ -360,6 +361,19 @@ func (g *Gateway) authorize(ctx context.Context, r *http.Request, hello *tunnelp
 		ClientAddr:  r.RemoteAddr,
 		ConnectedAt: now,
 		LastSeenAt:  now,
+	}
+	// Carry the agent's declared visitor-access policy (basic-auth, IP rules,
+	// rate limit, lifetime bounds). Absent -> the zero policy, which enforces
+	// nothing. The ingress reads it via sess.Tunnel().Policy. Reject a
+	// malformed policy at connect so it cannot 500 every visitor later.
+	if hello.Policy != nil {
+		if err := policy.Validate(*hello.Policy); err != nil {
+			return nil, nil, &handshakeError{
+				code:    tunnelproto.ErrCodeInvalidPolicy,
+				message: fmt.Sprintf("invalid policy: %v", err),
+			}
+		}
+		tunnel.Policy = *hello.Policy
 	}
 
 	requested := core.NormalizeSubdomain(hello.Subdomain)

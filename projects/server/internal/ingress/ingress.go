@@ -43,6 +43,10 @@ type Ingress struct {
 
 	trusted []netAddr
 
+	// policies memoizes each tunnel's compiled visitor policy (parsed CIDRs)
+	// keyed by tunnel ID, so the stateless enforce() gate parses once per tunnel.
+	policies *policyCache
+
 	// ready reports whether this node's dependencies are usable. Nil means
 	// "nothing to check", which is what the tests and a store-less build want.
 	ready ReadyFunc
@@ -84,8 +88,9 @@ func New(
 				ResponseHeaderTimeout: cfg.Tunnel.RequestTimeout,
 			},
 		},
-		breaker: newBreaker(),
-		trusted: parseTrusted(cfg.Ingress.TrustedProxyIPs),
+		breaker:  newBreaker(),
+		trusted:  parseTrusted(cfg.Ingress.TrustedProxyIPs),
+		policies: newPolicyCache(),
 	}
 }
 
@@ -340,6 +345,13 @@ func (i *Ingress) annotateForwarded(r *http.Request) {
 
 // proxy ships one request through the tunnel and streams the response back.
 func (i *Ingress) proxy(w http.ResponseWriter, r *http.Request, sess core.Session, sub string) {
+	// Visitor-access policy runs here (not only in handlePublic) so a
+	// peer-forwarded request, which reaches proxy via handleInternalProxy, is
+	// checked too.
+	if !i.enforce(w, r, sess, sub) {
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), i.cfg.Tunnel.RequestTimeout)
 	defer cancel()
 

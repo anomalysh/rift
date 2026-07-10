@@ -102,6 +102,9 @@ type Tunnel struct {
 	ClientAddr  string
 	ConnectedAt time.Time
 	LastSeenAt  time.Time
+	// Policy is the visitor-access policy the agent attached at connect time.
+	// The zero value enforces nothing.
+	Policy Policy
 }
 
 // Stale reports whether the tunnel has missed heartbeats past timeout.

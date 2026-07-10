@@ -15,6 +15,7 @@ import {
 import { EXIT, VERSION } from "./constants.ts";
 import { renderCompletion, renderManPage } from "./docgen.ts";
 import { createLogger } from "./logger.ts";
+import { buildPolicy } from "./policy.ts";
 
 function fail(message: string, code: number): never {
   process.stderr.write(message.endsWith("\n") ? message : `${message}\n`);
@@ -81,12 +82,22 @@ async function main(): Promise<void> {
   const config = loadConfig(parsed.flags);
   const logger = createLogger(config.logLevel);
 
+  // Compile the visitor-access policy (A2-A5) from the flags; bcrypt hashing is
+  // async, so it happens here before the client connects.
+  const built = await buildPolicy(parsed.flags);
+  if ("error" in built) {
+    fail(`rift: ${built.error}\nRun 'rift --help' for usage.`, EXIT.USAGE);
+  }
+
   const clientOpts = {
     config,
     protocol: parsed.protocol,
     port: parsed.port,
     logger,
     ...(parsed.subdomain !== undefined ? { subdomain: parsed.subdomain } : {}),
+    ...("policy" in built && built.policy !== undefined
+      ? { policy: built.policy }
+      : {}),
   };
   const client = new TunnelClient(clientOpts);
 

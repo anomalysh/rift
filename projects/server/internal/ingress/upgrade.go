@@ -36,6 +36,12 @@ func isUpgradeRequest(r *http.Request) bool {
 // ways; if the local service declines to upgrade it relays the ordinary
 // response instead.
 func (i *Ingress) proxyUpgrade(w http.ResponseWriter, r *http.Request, sess core.Session, sub string) {
+	// Visitor-access policy also gates an upgrade (WebSocket) request, or a
+	// policied tunnel could be reached by upgrading past the check.
+	if !i.enforce(w, r, sess, sub) {
+		return
+	}
+
 	up, ok := sess.(core.Upgrader)
 	if !ok {
 		i.writeGatewayError(w, r, http.StatusBadGateway, "upgrade_unsupported",
