@@ -31,6 +31,9 @@ go.work.sum
 # .idea/
 # .vscode/
 
-# Compiled riftd server binary and local build output
-riftd
+# Compiled riftd server binary and local build output. Anchored with a leading
+# slash so it matches only the built binary at projects/server/riftd, NOT the
+# cmd/riftd/ source directory (a bare `riftd` silently swallowed its .go files).
+/riftd
+/cmd/riftd/riftd
 bin/
