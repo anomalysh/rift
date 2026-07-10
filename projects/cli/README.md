@@ -155,6 +155,17 @@ service needing to change.
 | `--breaker`                     | fail fast with `503` after repeated upstream failures     |
 | `--breaker-threshold <n>`       | consecutive failures before the circuit opens (default 5) |
 
+#### Custom domains
+
+| Flag                    | Meaning                                                          |
+| ----------------------- | --------------------------------------------------------------- |
+| `--domain <host>`       | route a BYO custom domain to this tunnel (repeatable)           |
+
+Point your domain at the tunnel with a DNS `CNAME` (e.g. `app.acme.com` →
+your base domain), then `rift http 3000 --domain app.acme.com`. The server
+obtains a certificate on demand for the domain and routes it to your tunnel.
+A domain is owned by the first token that claims it; another token is refused.
+
 ## Configuration
 
 Settings are resolved from four layers. **Higher layers win.**

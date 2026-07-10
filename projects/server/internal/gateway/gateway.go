@@ -33,6 +33,7 @@ type Gateway struct {
 	tokens       core.TokenStore
 	reservations core.ReservationStore
 	tunnels      core.TunnelStore
+	domains      core.DomainStore
 	registry     core.Registry
 
 	// tcp accepts public TCP connections for tcp tunnels. Nil when tcp tunnels
@@ -50,6 +51,7 @@ func New(
 	tokens core.TokenStore,
 	reservations core.ReservationStore,
 	tunnels core.TunnelStore,
+	domains core.DomainStore,
 	reg core.Registry,
 ) *Gateway {
 	return &Gateway{
@@ -58,6 +60,7 @@ func New(
 		tokens:       tokens,
 		reservations: reservations,
 		tunnels:      tunnels,
+		domains:      domains,
 		registry:     reg,
 		tcp:          newTCPForwarder(cfg, logger),
 		sessions:     make(map[*session]struct{}),
@@ -381,12 +384,62 @@ func (g *Gateway) authorize(ctx context.Context, r *http.Request, hello *tunnelp
 		if herr := g.claimGenerated(ctx, tunnel, token); herr != nil {
 			return nil, nil, herr
 		}
-		return tunnel, token, nil
+	} else if herr := g.claimRequested(ctx, tunnel, token, requested); herr != nil {
+		return nil, nil, herr
 	}
-	if herr := g.claimRequested(ctx, tunnel, token, requested); herr != nil {
+
+	// E1: register any BYO custom domains against the now-claimed subdomain, so
+	// the TLS-ask endpoint will authorize a certificate and the ingress can
+	// route the domain to this tunnel.
+	if herr := g.registerDomains(ctx, hello.Domains, tunnel.Subdomain, token.ID); herr != nil {
 		return nil, nil, herr
 	}
 	return tunnel, token, nil
+}
+
+// registerDomains upserts each requested custom domain against the tunnel's
+// subdomain. It rejects a malformed domain, one that lies under the base domain
+// (that is a subdomain, requested differently), or one owned by another token.
+func (g *Gateway) registerDomains(ctx context.Context, domains []string, subdomain, tokenID string) *handshakeError {
+	if len(domains) == 0 {
+		return nil
+	}
+	if g.domains == nil {
+		return &handshakeError{
+			code:    tunnelproto.ErrCodeInvalidDomain,
+			message: "custom domains are not supported by this server",
+		}
+	}
+	now := time.Now()
+	for _, raw := range domains {
+		d := core.NormalizeDomain(raw)
+		if d == "" {
+			return &handshakeError{
+				code:    tunnelproto.ErrCodeInvalidDomain,
+				message: fmt.Sprintf("invalid custom domain %q", raw),
+			}
+		}
+		if _, ok := core.SubdomainFromHost(d, g.cfg.Tunnel.BaseDomain); ok {
+			return &handshakeError{
+				code:    tunnelproto.ErrCodeInvalidDomain,
+				message: fmt.Sprintf("%q is under this server's base domain; request it as a subdomain instead", d),
+			}
+		}
+		err := g.domains.Upsert(ctx, core.CustomDomain{
+			Domain: d, Subdomain: subdomain, TokenID: tokenID, CreatedAt: now,
+		})
+		switch {
+		case errors.Is(err, core.ErrDomainOwned):
+			return &handshakeError{
+				code:    tunnelproto.ErrCodeDomainOwned,
+				message: fmt.Sprintf("custom domain %q is registered to another token", d),
+			}
+		case err != nil:
+			g.logger.Error("could not register custom domain", slog.String("domain", d), slog.Any("error", err))
+			return &handshakeError{code: tunnelproto.ErrCodeInternal, message: "could not register custom domain"}
+		}
+	}
+	return nil
 }
 
 // claimGenerated allocates a random label, retrying on collision.

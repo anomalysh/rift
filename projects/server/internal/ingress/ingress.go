@@ -33,6 +33,7 @@ type Ingress struct {
 	registry     core.Registry
 	tunnels      core.TunnelStore
 	reservations core.ReservationStore
+	domains      core.DomainStore
 
 	// peers forwards to another node when Redis says it owns the subdomain.
 	peers *http.Client
@@ -78,6 +79,7 @@ func New(
 	reg core.Registry,
 	tunnels core.TunnelStore,
 	reservations core.ReservationStore,
+	domains core.DomainStore,
 ) *Ingress {
 	return &Ingress{
 		cfg:          cfg,
@@ -85,6 +87,7 @@ func New(
 		registry:     reg,
 		tunnels:      tunnels,
 		reservations: reservations,
+		domains:      domains,
 		peers: &http.Client{
 			// No client timeout: a tunnelled response may legitimately stream
 			// for a long time. The per-request context carries the deadline.
@@ -184,6 +187,18 @@ func (i *Ingress) handleTLSAsk(w http.ResponseWriter, r *http.Request) {
 
 	sub, ok := core.SubdomainFromHost(domain, i.cfg.Tunnel.BaseDomain)
 	if !ok {
+		// E1: not a subdomain, but a registered BYO custom domain still gets a
+		// certificate so Caddy can terminate TLS for it on demand.
+		if i.domains != nil {
+			if _, err := i.domains.SubdomainFor(r.Context(), domain); err == nil {
+				w.WriteHeader(http.StatusOK)
+				return
+			} else if !errors.Is(err, core.ErrNotFound) {
+				i.logger.Error("tls-ask custom domain lookup failed", slog.Any("error", err))
+				http.Error(w, "lookup failed", http.StatusInternalServerError)
+				return
+			}
+		}
 		i.logger.Debug("refusing certificate for foreign domain", slog.String("domain", domain))
 		http.Error(w, "domain is not served by this host", http.StatusForbidden)
 		return
@@ -218,6 +233,27 @@ func (i *Ingress) handleTLSAsk(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "no such tunnel", http.StatusNotFound)
 }
 
+// subdomainForCustomDomain resolves a request Host that is a registered BYO
+// custom domain to the subdomain it routes to (E1). It returns ("", false) when
+// the store is absent, the lookup misses, or errors.
+func (i *Ingress) subdomainForCustomDomain(r *http.Request) (string, bool) {
+	if i.domains == nil {
+		return "", false
+	}
+	host := core.NormalizeDomain(r.Host)
+	if host == "" {
+		return "", false
+	}
+	sub, err := i.domains.SubdomainFor(r.Context(), host)
+	if err != nil {
+		if !errors.Is(err, core.ErrNotFound) {
+			i.logger.Error("custom domain lookup failed", slog.String("domain", host), slog.Any("error", err))
+		}
+		return "", false
+	}
+	return sub, true
+}
+
 // ownsHostname reports whether domain is a name this deployment serves in its
 // own right, rather than a tunnel subdomain.
 func (i *Ingress) ownsHostname(domain string) bool {
@@ -230,6 +266,11 @@ func (i *Ingress) ownsHostname(domain string) bool {
 // handlePublic routes a request from the public internet into a tunnel.
 func (i *Ingress) handlePublic(w http.ResponseWriter, r *http.Request) {
 	sub, ok := core.SubdomainFromHost(r.Host, i.cfg.Tunnel.BaseDomain)
+	if !ok {
+		// E1: the Host is not under the base domain; it may be a registered BYO
+		// custom domain that maps to one of our subdomains.
+		sub, ok = i.subdomainForCustomDomain(r)
+	}
 	if !ok {
 		i.writeGatewayError(w, r, http.StatusNotFound, "not_a_tunnel",
 			"This host does not correspond to a tunnel.")

@@ -30,6 +30,8 @@ const (
 	ErrCodeTunnelLimit         ErrorCode = "tunnel_limit"
 	ErrCodeUnsupportedProtocol ErrorCode = "unsupported_protocol"
 	ErrCodeInvalidPolicy       ErrorCode = "invalid_policy"
+	ErrCodeInvalidDomain       ErrorCode = "invalid_domain"
+	ErrCodeDomainOwned         ErrorCode = "domain_owned"
 	ErrCodeUnsupportedVersion  ErrorCode = "unsupported_version"
 	ErrCodeInternal            ErrorCode = "internal"
 )
@@ -77,6 +79,10 @@ type Hello struct {
 	// and omitempty, so an older agent that never sends it is unaffected and no
 	// protocol-version bump is needed.
 	Policy *core.Policy `json:"policy,omitempty"`
+	// Domains are BYO custom hostnames the agent wants routed to this tunnel
+	// (E1). Each is registered against the claimed subdomain at connect time.
+	// Additive and omitempty, so an older agent is unaffected.
+	Domains []string `json:"domains,omitempty"`
 }
 
 // HelloOK confirms the tunnel is live and routable.

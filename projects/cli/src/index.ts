@@ -108,6 +108,9 @@ async function main(): Promise<void> {
     ...("policy" in traffic && traffic.policy !== undefined
       ? { traffic: new TrafficController(traffic.policy) }
       : {}),
+    ...(parsed.flags.domain !== undefined && parsed.flags.domain.length > 0
+      ? { domains: parsed.flags.domain }
+      : {}),
   };
   const client = new TunnelClient(clientOpts);
 

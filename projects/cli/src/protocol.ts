@@ -144,6 +144,8 @@ export interface Hello {
   client_version?: string;
   /** Optional visitor-access policy; omitted when unset (mirrors server). */
   policy?: WirePolicy;
+  /** Optional BYO custom domains to route to this tunnel (E1). */
+  domains?: readonly string[];
 }
 
 export interface HelloOk {

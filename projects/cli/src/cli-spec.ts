@@ -332,6 +332,13 @@ export const CLI_SPEC: CliSpec = {
       kind: "run",
     },
     {
+      long: "--domain",
+      takesValue: true,
+      placeholder: "host",
+      help: "route a BYO custom domain to this tunnel (repeatable; CNAME it first)",
+      kind: "run",
+    },
+    {
       long: "--set-token",
       takesValue: true,
       placeholder: "token",

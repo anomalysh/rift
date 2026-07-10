@@ -59,6 +59,8 @@ export interface ClientOptions {
   readonly policy?: WirePolicy;
   /** Agent-side traffic policy applied by the forwarder (T1-T3, T5, T6). */
   readonly traffic?: TrafficController;
+  /** BYO custom domains to route to this tunnel, declared in the Hello (E1). */
+  readonly domains?: readonly string[];
 }
 
 /** Raised for non-recoverable client failures (surfaced as a nonzero exit). */
@@ -84,6 +86,7 @@ export class TunnelClient {
   private readonly config: ResolvedConfig;
   private readonly policy: WirePolicy | undefined;
   private readonly traffic: TrafficController | undefined;
+  private readonly domains: readonly string[] | undefined;
   private readonly logger: Logger;
   private readonly port: number;
   private readonly protocol: SupportedProtocol;
@@ -118,6 +121,7 @@ export class TunnelClient {
     this.config = opts.config;
     this.policy = opts.policy;
     this.traffic = opts.traffic;
+    this.domains = opts.domains;
     this.logger = opts.logger;
     this.port = opts.port;
     this.protocol = opts.protocol;
@@ -226,6 +230,9 @@ export class TunnelClient {
     hello.client_version = VERSION;
     if (this.policy !== undefined) {
       hello.policy = this.policy;
+    }
+    if (this.domains !== undefined && this.domains.length > 0) {
+      hello.domains = this.domains;
     }
     this.sendRaw(encodeControl(ControlType.HELLO, hello));
   }

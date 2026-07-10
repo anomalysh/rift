@@ -258,3 +258,19 @@ describe("other errors", () => {
     expect(parsed.kind).toBe("error");
   });
 });
+
+describe("custom domains (E1)", () => {
+  test("repeated --domain accumulates", () => {
+    const parsed = parseArgs([
+      "http",
+      "3000",
+      "--domain",
+      "app.acme.com",
+      "--domain",
+      "www.acme.com",
+    ]);
+    expect(parsed.kind).toBe("run");
+    if (parsed.kind !== "run") return;
+    expect(parsed.flags.domain).toEqual(["app.acme.com", "www.acme.com"]);
+  });
+});

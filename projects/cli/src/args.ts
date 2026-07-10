@@ -44,6 +44,8 @@ export interface FlagConfig {
   route?: string[];
   breaker?: boolean;
   breakerThreshold?: string;
+  // BYO custom domains (E1). Repeatable; each is routed to this tunnel.
+  domain?: string[];
 }
 
 export type ParsedArgs =
@@ -87,6 +89,7 @@ const VALUE_FLAGS = new Set([
   "--redirect",
   "--route",
   "--breaker-threshold",
+  "--domain",
 ]);
 
 // `--set-*` flags do not open a tunnel: they persist a value to the config file
@@ -328,6 +331,9 @@ function applyValueFlag(
       return null;
     case "--breaker-threshold":
       flags.breakerThreshold = value;
+      return null;
+    case "--domain":
+      flags.domain = [...(flags.domain ?? []), value];
       return null;
     default:
       return `unknown flag: ${name}`;

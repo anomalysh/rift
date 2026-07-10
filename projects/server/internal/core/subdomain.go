@@ -196,6 +196,35 @@ func Hostname(subdomain, baseDomain string) string {
 	return subdomain + "." + baseDomain
 }
 
+// NormalizeDomain lower-cases a custom domain, strips surrounding whitespace,
+// any port, and a trailing dot, returning "" if the result is not a plausible
+// multi-label hostname. It is the canonical form stored and looked up for the
+// BYO-domain feature (E1).
+func NormalizeDomain(domain string) string {
+	d := strings.ToLower(strings.TrimSpace(domain))
+	if i := strings.LastIndexByte(d, ':'); i != -1 && !strings.Contains(d[i:], "]") {
+		d = d[:i]
+	}
+	d = strings.TrimSuffix(d, ".")
+	if d == "" || !strings.Contains(d, ".") {
+		return ""
+	}
+	// Reject anything that is not a bare hostname (no scheme, path, or spaces).
+	for _, r := range d {
+		if r == '.' || r == '-' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			continue
+		}
+		return ""
+	}
+	// A leading/trailing dot or an empty label ("a..b") is not a valid host.
+	for _, label := range strings.Split(d, ".") {
+		if label == "" {
+			return ""
+		}
+	}
+	return d
+}
+
 // SubdomainFromHost extracts the tunnel label from a request Host header.
 // It strips any port, matches the base domain suffix case-insensitively, and
 // rejects multi-label prefixes such as "a.b.base.tld".

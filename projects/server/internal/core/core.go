@@ -53,6 +53,9 @@ var (
 	ErrTunnelLimit       = errors.New("core: tunnel limit reached for token")
 	ErrConflict          = errors.New("core: conflicting write")
 	ErrUnsupportedProto  = errors.New("core: unsupported protocol")
+	// ErrDomainOwned means a custom domain is already registered to a different
+	// token, so this token may not claim it (E1).
+	ErrDomainOwned = errors.New("core: custom domain owned by another token")
 
 	// ErrTunnelUnavailable means the agent connection died with a request in
 	// flight. The ingress turns this into a 502.
@@ -88,6 +91,17 @@ type Reservation struct {
 	Subdomain string
 	TokenID   string
 	Note      string
+	CreatedAt time.Time
+}
+
+// CustomDomain maps a customer-owned hostname (e.g. app.acme.com) to the
+// subdomain whose tunnel serves it (E1). The mapping is upserted each time an
+// agent connects with --domain, so it follows the live tunnel across reconnects
+// even when the subdomain is regenerated.
+type CustomDomain struct {
+	Domain    string // fully qualified, lower-cased, no trailing dot
+	Subdomain string // the rift subdomain this domain routes to
+	TokenID   string // owning token; another token cannot claim the same domain
 	CreatedAt time.Time
 }
 
@@ -131,6 +145,20 @@ type ReservationStore interface {
 	Create(ctx context.Context, r *Reservation) error
 	List(ctx context.Context) ([]Reservation, error)
 	Delete(ctx context.Context, subdomain string) error
+}
+
+// DomainStore persists custom-domain -> subdomain mappings (E1).
+type DomainStore interface {
+	// Upsert records that a custom domain routes to a subdomain for a token.
+	// It refreshes the subdomain when the same token reconnects, and returns
+	// ErrDomainOwned when the domain is already held by a different token.
+	Upsert(ctx context.Context, d CustomDomain) error
+	// SubdomainFor returns the subdomain a custom domain maps to, or ErrNotFound.
+	SubdomainFor(ctx context.Context, domain string) (string, error)
+	// List returns every custom-domain mapping.
+	List(ctx context.Context) ([]CustomDomain, error)
+	// Delete removes a mapping. Deleting an absent domain is not an error.
+	Delete(ctx context.Context, domain string) error
 }
 
 // TunnelStore persists live tunnel records. It is the authority on which

@@ -18,6 +18,7 @@ type DB struct {
 	tokens       *tokenStore
 	reservations *reservationStore
 	tunnels      *tunnelStore
+	domains      *domainStore
 }
 
 // scanner is the common Scan surface of pgx.Row and pgx.Rows, letting one
@@ -56,6 +57,7 @@ func Open(ctx context.Context, cfg config.Postgres) (*DB, error) {
 	db.tokens = &tokenStore{pool: pool}
 	db.reservations = &reservationStore{pool: pool}
 	db.tunnels = &tunnelStore{pool: pool}
+	db.domains = &domainStore{pool: pool}
 	return db, nil
 }
 
@@ -73,6 +75,9 @@ func (db *DB) Reservations() core.ReservationStore { return db.reservations }
 
 // Tunnels returns the TunnelStore backed by this pool.
 func (db *DB) Tunnels() core.TunnelStore { return db.tunnels }
+
+// Domains returns the DomainStore backed by this pool.
+func (db *DB) Domains() core.DomainStore { return db.domains }
 
 // Close drains and closes the pool.
 func (db *DB) Close() { db.pool.Close() }

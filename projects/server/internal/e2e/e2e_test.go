@@ -139,8 +139,8 @@ func newStack(t *testing.T, tune func(*config.Config)) *stack {
 	tokens := &flakyTokens{TokenStore: store.Tokens()}
 
 	reg := registry.NewLocal()
-	gw := gateway.New(cfg, logger, tokens, store.Reservations(), store.Tunnels(), reg)
-	ing := ingress.New(cfg, logger, reg, store.Tunnels(), store.Reservations())
+	gw := gateway.New(cfg, logger, tokens, store.Reservations(), store.Tunnels(), store.Domains(), reg)
+	ing := ingress.New(cfg, logger, reg, store.Tunnels(), store.Reservations(), store.Domains())
 
 	gwMux := http.NewServeMux()
 	gwMux.Handle(cfg.Gateway.Path, gw.Handler())

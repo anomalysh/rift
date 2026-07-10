@@ -14,12 +14,14 @@ import (
 	"github.com/anomalysh/rift/projects/server/internal/core"
 )
 
-// Store implements core.TokenStore, core.ReservationStore and core.TunnelStore.
+// Store implements core.TokenStore, core.ReservationStore, core.TunnelStore and
+// core.DomainStore.
 type Store struct {
 	mu           sync.RWMutex
-	tokens       map[string]core.Token       // by id
-	reservations map[string]core.Reservation // by subdomain
-	tunnels      map[string]core.Tunnel      // by id
+	tokens       map[string]core.Token        // by id
+	reservations map[string]core.Reservation  // by subdomain
+	tunnels      map[string]core.Tunnel       // by id
+	domains      map[string]core.CustomDomain // by domain
 }
 
 // New returns an empty store.
@@ -28,6 +30,7 @@ func New() *Store {
 		tokens:       make(map[string]core.Token),
 		reservations: make(map[string]core.Reservation),
 		tunnels:      make(map[string]core.Tunnel),
+		domains:      make(map[string]core.CustomDomain),
 	}
 }
 
@@ -39,6 +42,9 @@ func (s *Store) Reservations() core.ReservationStore { return (*reservationStore
 
 // Tunnels implements the tunnel port.
 func (s *Store) Tunnels() core.TunnelStore { return (*tunnelStore)(s) }
+
+// Domains implements the custom-domain port.
+func (s *Store) Domains() core.DomainStore { return (*domainStore)(s) }
 
 type tokenStore Store
 
@@ -251,9 +257,50 @@ func (s *tunnelStore) DeleteByNode(_ context.Context, nodeID string) (int, error
 	return n, nil
 }
 
+type domainStore Store
+
+func (s *domainStore) Upsert(_ context.Context, d core.CustomDomain) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.domains[d.Domain]; ok && existing.TokenID != d.TokenID {
+		return fmt.Errorf("memory: domain %q: %w", d.Domain, core.ErrDomainOwned)
+	}
+	s.domains[d.Domain] = d
+	return nil
+}
+
+func (s *domainStore) SubdomainFor(_ context.Context, domain string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	d, ok := s.domains[domain]
+	if !ok {
+		return "", fmt.Errorf("memory: domain %q: %w", domain, core.ErrNotFound)
+	}
+	return d.Subdomain, nil
+}
+
+func (s *domainStore) List(context.Context) ([]core.CustomDomain, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]core.CustomDomain, 0, len(s.domains))
+	for _, d := range s.domains {
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Domain < out[j].Domain })
+	return out, nil
+}
+
+func (s *domainStore) Delete(_ context.Context, domain string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.domains, domain)
+	return nil
+}
+
 // Compile-time proof that the store satisfies every port.
 var (
 	_ core.TokenStore       = (*tokenStore)(nil)
 	_ core.ReservationStore = (*reservationStore)(nil)
 	_ core.TunnelStore      = (*tunnelStore)(nil)
+	_ core.DomainStore      = (*domainStore)(nil)
 )
