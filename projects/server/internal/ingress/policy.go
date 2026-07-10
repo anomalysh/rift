@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 
 	"github.com/anomalysh/rift/projects/server/internal/core"
@@ -87,6 +88,20 @@ func (i *Ingress) enforce(w http.ResponseWriter, r *http.Request, sess core.Sess
 			w.Header().Set("WWW-Authenticate", `Basic realm="rift"`)
 			i.writeGatewayError(w, r, http.StatusUnauthorized, "unauthorized",
 				"Authentication is required to reach this tunnel.")
+			return false
+		}
+	}
+
+	// A5: rate limit. Keyed per tunnel, or per tunnel+client-IP when per_ip.
+	if rl := compiled.RateLimit(); rl != nil {
+		key := sub
+		if rl.PerIP {
+			key = sub + "|" + i.clientIP(r)
+		}
+		if !i.limiter.allow(key, rl.RPS, rl.Burst) {
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(rl.RPS)))
+			i.writeGatewayError(w, r, http.StatusTooManyRequests, "rate_limited",
+				"Too many requests to this tunnel; slow down and retry.")
 			return false
 		}
 	}

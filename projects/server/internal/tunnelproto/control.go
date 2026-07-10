@@ -42,6 +42,7 @@ const (
 	ShutdownTokenRevoked     ShutdownReason = "token_revoked"
 	ShutdownHeartbeatTimeout ShutdownReason = "heartbeat_timeout"
 	ShutdownReplaced         ShutdownReason = "replaced"
+	ShutdownPolicyExpired    ShutdownReason = "policy_expired"
 )
 
 // ResetCode explains why a stream was aborted.

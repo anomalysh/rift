@@ -47,6 +47,9 @@ type Ingress struct {
 	// keyed by tunnel ID, so the stateless enforce() gate parses once per tunnel.
 	policies *policyCache
 
+	// limiter enforces per-tunnel (or per-IP) request rate limits (A5).
+	limiter *rateLimiter
+
 	// ready reports whether this node's dependencies are usable. Nil means
 	// "nothing to check", which is what the tests and a store-less build want.
 	ready ReadyFunc
@@ -91,6 +94,7 @@ func New(
 		breaker:  newBreaker(),
 		trusted:  parseTrusted(cfg.Ingress.TrustedProxyIPs),
 		policies: newPolicyCache(),
+		limiter:  newRateLimiter(),
 	}
 }
 

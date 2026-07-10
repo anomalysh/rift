@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -27,6 +28,7 @@ func enforceTestIngress() *Ingress {
 		logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 		trusted:  parseTrusted(nil),
 		policies: newPolicyCache(),
+		limiter:  newRateLimiter(),
 	}
 }
 
@@ -119,6 +121,52 @@ func TestEnforceBasicAuth(t *testing.T) {
 	r.SetBasicAuth("alice", "s3cret")
 	if !i.enforce(w, r, sess, "auth") {
 		t.Fatalf("the correct credential was rejected (status %d)", w.Code)
+	}
+}
+
+func TestEnforceRateLimit(t *testing.T) {
+	i := enforceTestIngress()
+	// Freeze the clock so no tokens refill mid-test.
+	i.limiter.now = func() time.Time { return time.Unix(0, 0) }
+	sess := fakeSession{tunnel: core.Tunnel{ID: "rl", Policy: core.Policy{
+		RateLimit: &core.RateLimit{RPS: 1, Burst: 2},
+	}}}
+
+	// Burst of 2 is admitted, the third is throttled with Retry-After.
+	for n := 1; n <= 2; n++ {
+		w := httptest.NewRecorder()
+		if !i.enforce(w, requestFrom("203.0.113.9"), sess, "rl") {
+			t.Fatalf("request %d within the burst was throttled", n)
+		}
+	}
+	w := httptest.NewRecorder()
+	if i.enforce(w, requestFrom("203.0.113.9"), sess, "rl") {
+		t.Fatal("a request past the burst was admitted")
+	}
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", w.Code)
+	}
+	if w.Header().Get("Retry-After") == "" {
+		t.Fatal("429 is missing the Retry-After header")
+	}
+}
+
+func TestEnforceRateLimitPerIP(t *testing.T) {
+	i := enforceTestIngress()
+	i.limiter.now = func() time.Time { return time.Unix(0, 0) }
+	sess := fakeSession{tunnel: core.Tunnel{ID: "rlip", Policy: core.Policy{
+		RateLimit: &core.RateLimit{RPS: 1, Burst: 1, PerIP: true},
+	}}}
+
+	// Each IP gets its own bucket: A exhausts its token, B is still admitted.
+	if !i.enforce(httptest.NewRecorder(), requestFrom("203.0.113.1"), sess, "rlip") {
+		t.Fatal("IP A first request throttled")
+	}
+	if i.enforce(httptest.NewRecorder(), requestFrom("203.0.113.1"), sess, "rlip") {
+		t.Fatal("IP A second request should be throttled")
+	}
+	if !i.enforce(httptest.NewRecorder(), requestFrom("203.0.113.2"), sess, "rlip") {
+		t.Fatal("IP B must have its own bucket and be admitted")
 	}
 }
 

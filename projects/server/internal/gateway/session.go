@@ -72,6 +72,12 @@ type session struct {
 
 	lastSeenNanos atomic.Int64
 
+	// requestsServed counts proxied requests, for the A4 --once/--max-requests
+	// lifetime bound. ttlTimer, when set, retires the tunnel after the A4 --ttl
+	// wall-clock budget.
+	requestsServed atomic.Int64
+	ttlTimer       *time.Timer
+
 	wg sync.WaitGroup
 }
 
@@ -89,11 +95,28 @@ func newSession(conn *websocket.Conn, t core.Tunnel, cfg *config.Config, tunnels
 		streams: make(map[uint64]*stream),
 	}
 	s.lastSeenNanos.Store(time.Now().UnixNano())
+	// A4: retire the tunnel after a wall-clock TTL. The timer fires Close, which
+	// is idempotent, so a session that closes first simply makes it a no-op.
+	if ttl := t.Policy.TTLSeconds; ttl > 0 {
+		s.ttlTimer = time.AfterFunc(time.Duration(ttl)*time.Second, func() {
+			s.logger.Info("tunnel reached its ttl", slog.Int("ttl_seconds", ttl))
+			_ = s.Close(string(tunnelproto.ShutdownPolicyExpired))
+		})
+	}
 	return s
 }
 
 // Tunnel implements core.Session.
 func (s *session) Tunnel() core.Tunnel { return s.tunnel }
+
+// maxRequests returns the A4 request quota for this tunnel: 1 for --once, the
+// configured cap for --max-requests, or 0 (unbounded).
+func (s *session) maxRequests() int64 {
+	if s.tunnel.Policy.Once {
+		return 1
+	}
+	return int64(s.tunnel.Policy.MaxRequests)
+}
 
 // Close implements core.Session. It requests teardown and returns immediately;
 // it never touches the socket. Safe to call repeatedly, from any goroutine,
@@ -101,6 +124,9 @@ func (s *session) Tunnel() core.Tunnel { return s.tunnel }
 func (s *session) Close(reason string) error {
 	s.closeOnce.Do(func() {
 		s.closeReason.Store(reason)
+		if s.ttlTimer != nil {
+			s.ttlTimer.Stop()
+		}
 		close(s.closing)
 	})
 	return nil
@@ -455,6 +481,16 @@ func (s *session) RoundTrip(req *http.Request) (*http.Response, error) {
 	case <-s.closing:
 		return nil, errSessionClosed
 	default:
+	}
+
+	// A4: --once / --max-requests. Requests 1..max are served; the one that would
+	// exceed the quota is refused and retires the tunnel, so subsequent requests
+	// 404 rather than error.
+	if maxReq := s.maxRequests(); maxReq > 0 {
+		if s.requestsServed.Add(1) > maxReq {
+			_ = s.Close(string(tunnelproto.ShutdownPolicyExpired))
+			return nil, errSessionClosed
+		}
 	}
 
 	ctx := req.Context()

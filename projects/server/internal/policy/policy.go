@@ -25,13 +25,14 @@ type Compiled struct {
 	allow []*net.IPNet
 	deny  []*net.IPNet
 	basic []core.BasicAuthCred
+	rate  *core.RateLimit
 }
 
 // Compile parses a policy's CIDRs and validates them, returning an error naming
 // the offending entry so a misconfigured tunnel fails loudly at connect time
 // rather than silently admitting or rejecting every visitor.
 func Compile(p core.Policy) (*Compiled, error) {
-	c := &Compiled{basic: p.BasicAuth}
+	c := &Compiled{basic: p.BasicAuth, rate: p.RateLimit}
 	var err error
 	if c.allow, err = parseCIDRs(p.AllowIPs); err != nil {
 		return nil, fmt.Errorf("allow_ips: %w", err)
@@ -39,8 +40,14 @@ func Compile(p core.Policy) (*Compiled, error) {
 	if c.deny, err = parseCIDRs(p.DenyIPs); err != nil {
 		return nil, fmt.Errorf("deny_ips: %w", err)
 	}
+	if c.rate != nil && c.rate.RPS <= 0 {
+		return nil, fmt.Errorf("rate_limit: rps must be > 0, got %v", c.rate.RPS)
+	}
 	return c, nil
 }
+
+// RateLimit returns the tunnel's rate limit, or nil if unlimited.
+func (c *Compiled) RateLimit() *core.RateLimit { return c.rate }
 
 // Validate reports whether a policy is well-formed (its CIDRs parse), so the
 // gateway can reject a misconfigured tunnel at connect time rather than let it
@@ -51,9 +58,9 @@ func Validate(p core.Policy) error {
 }
 
 // Empty reports whether the stateless policy admits everyone (no IP rules, no
-// basic auth), so the ingress can skip the whole check.
+// basic auth, no rate limit), so the ingress can skip the whole check.
 func (c *Compiled) Empty() bool {
-	return c == nil || (len(c.allow) == 0 && len(c.deny) == 0 && len(c.basic) == 0)
+	return c == nil || (len(c.allow) == 0 && len(c.deny) == 0 && len(c.basic) == 0 && c.rate == nil)
 }
 
 // AllowsIP applies A3: a deny match rejects; if any allow range is set the
