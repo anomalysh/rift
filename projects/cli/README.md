@@ -121,6 +121,40 @@ so `rift http 3000 | …` yields just the URL line.
 
 Flags accept both `--flag value` and `--flag=value` forms.
 
+#### Visitor access (enforced at the edge)
+
+These attach a policy to the tunnel that the server enforces before a request
+ever reaches your machine. Passwords are bcrypt-hashed by the agent, so the
+plaintext never leaves your host.
+
+| Flag                     | Meaning                                                      |
+| ------------------------ | ------------------------------------------------------------ |
+| `--basic-auth user:pass` | require HTTP Basic auth (repeatable for multiple users)      |
+| `--allow-ip <cidr>`      | only admit visitors in this IP/CIDR (repeatable; default-deny) |
+| `--deny-ip <cidr>`       | reject visitors in this IP/CIDR (repeatable)                 |
+| `--rate-limit 20/s`      | throttle visitors; over-limit gets `429` + `Retry-After`     |
+| `--ttl 30m`              | retire the tunnel after this long (`30m`, `1h`, `90s`)       |
+| `--once`                 | retire the tunnel after the first request                    |
+| `--max-requests <n>`     | retire the tunnel after N requests                           |
+
+#### Traffic shaping (applied by the agent)
+
+These transform requests and responses as rift forwards them, without the local
+service needing to change.
+
+| Flag                            | Meaning                                                   |
+| ------------------------------- | --------------------------------------------------------- |
+| `--set-request-header "K: v"`   | add/replace a request header sent upstream (repeatable)   |
+| `--del-request-header <name>`   | drop a request header before the upstream (repeatable)    |
+| `--set-response-header "K: v"`  | add/replace a header on the response (repeatable)         |
+| `--del-response-header <name>`  | drop a header from the response (repeatable)              |
+| `--cors`                        | answer CORS preflights and add CORS headers               |
+| `--respond "/health=200:ok"`    | serve a fixed response for a path (repeatable)            |
+| `--redirect "/old=/new"`        | redirect a path (`/old=301:/new` to set the code)         |
+| `--route "/api=4000"`           | route a path prefix to another local port (repeatable)    |
+| `--breaker`                     | fail fast with `503` after repeated upstream failures     |
+| `--breaker-threshold <n>`       | consecutive failures before the circuit opens (default 5) |
+
 ## Configuration
 
 Settings are resolved from four layers. **Higher layers win.**

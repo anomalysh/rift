@@ -16,6 +16,7 @@ import { EXIT, VERSION } from "./constants.ts";
 import { renderCompletion, renderManPage } from "./docgen.ts";
 import { createLogger } from "./logger.ts";
 import { buildPolicy } from "./policy.ts";
+import { buildTrafficPolicy, TrafficController } from "./traffic.ts";
 
 function fail(message: string, code: number): never {
   process.stderr.write(message.endsWith("\n") ? message : `${message}\n`);
@@ -89,6 +90,12 @@ async function main(): Promise<void> {
     fail(`rift: ${built.error}\nRun 'rift --help' for usage.`, EXIT.USAGE);
   }
 
+  // Compile the agent-side traffic policy (T1-T3, T5, T6) from the same flags.
+  const traffic = buildTrafficPolicy(parsed.flags);
+  if ("error" in traffic) {
+    fail(`rift: ${traffic.error}\nRun 'rift --help' for usage.`, EXIT.USAGE);
+  }
+
   const clientOpts = {
     config,
     protocol: parsed.protocol,
@@ -97,6 +104,9 @@ async function main(): Promise<void> {
     ...(parsed.subdomain !== undefined ? { subdomain: parsed.subdomain } : {}),
     ...("policy" in built && built.policy !== undefined
       ? { policy: built.policy }
+      : {}),
+    ...("policy" in traffic && traffic.policy !== undefined
+      ? { traffic: new TrafficController(traffic.policy) }
       : {}),
   };
   const client = new TunnelClient(clientOpts);

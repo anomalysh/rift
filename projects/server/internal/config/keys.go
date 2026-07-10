@@ -19,6 +19,10 @@ const (
 	KeyIngressIdleTimeout     = EnvPrefix + "INGRESS_IDLE_TIMEOUT"
 	KeyIngressMaxHeaderBytes  = EnvPrefix + "INGRESS_MAX_HEADER_BYTES"
 	KeyIngressTrustedProxyIPs = EnvPrefix + "INGRESS_TRUSTED_PROXY_IPS"
+	// KeyErrorPageDir points at a directory of branded gateway error pages
+	// (T4). A file named "<status>.html" (e.g. 502.html), or "error.html" as a
+	// catch-all, replaces the built-in plain-text body for that status.
+	KeyErrorPageDir = EnvPrefix + "ERROR_PAGE_DIR"
 
 	// Gateway: WebSocket endpoint that tunnel agents dial.
 	KeyGatewayAddr = EnvPrefix + "GATEWAY_ADDR"

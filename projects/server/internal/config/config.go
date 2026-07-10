@@ -63,6 +63,9 @@ type Ingress struct {
 	// TrustedProxyIPs are the peers whose X-Forwarded-For we believe. Empty
 	// means trust nobody and use the socket's remote address.
 	TrustedProxyIPs []string
+	// ErrorPageDir is a directory of branded error pages (T4). Empty disables
+	// the feature and the built-in plain-text/JSON error bodies are served.
+	ErrorPageDir string
 }
 
 // Gateway is the WebSocket listener that tunnel agents dial.
@@ -232,6 +235,7 @@ func Load() (*Config, error) {
 			IdleTimeout:     l.duration(KeyIngressIdleTimeout, DefaultIngressIdleTimeout),
 			MaxHeaderBytes:  l.integer(KeyIngressMaxHeaderBytes, DefaultIngressMaxHeaderBytes),
 			TrustedProxyIPs: l.csv(KeyIngressTrustedProxyIPs, nil),
+			ErrorPageDir:    l.str(KeyErrorPageDir, ""),
 		},
 		Gateway: Gateway{
 			Addr:             l.str(KeyGatewayAddr, DefaultGatewayAddr),

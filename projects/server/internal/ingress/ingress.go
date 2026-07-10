@@ -50,6 +50,10 @@ type Ingress struct {
 	// limiter enforces per-tunnel (or per-IP) request rate limits (A5).
 	limiter *rateLimiter
 
+	// errorPages holds branded gateway error templates (T4); nil serves the
+	// built-in plain-text/JSON bodies.
+	errorPages *errorPages
+
 	// ready reports whether this node's dependencies are usable. Nil means
 	// "nothing to check", which is what the tests and a store-less build want.
 	ready ReadyFunc
@@ -91,10 +95,11 @@ func New(
 				ResponseHeaderTimeout: cfg.Tunnel.RequestTimeout,
 			},
 		},
-		breaker:  newBreaker(),
-		trusted:  parseTrusted(cfg.Ingress.TrustedProxyIPs),
-		policies: newPolicyCache(),
-		limiter:  newRateLimiter(),
+		breaker:    newBreaker(),
+		trusted:    parseTrusted(cfg.Ingress.TrustedProxyIPs),
+		policies:   newPolicyCache(),
+		limiter:    newRateLimiter(),
+		errorPages: loadErrorPages(cfg.Ingress.ErrorPageDir, logger),
 	}
 }
 
@@ -463,9 +468,22 @@ func (i *Ingress) writeRoundTripError(w http.ResponseWriter, r *http.Request, su
 }
 
 func (i *Ingress) writeGatewayError(w http.ResponseWriter, r *http.Request, status int, code, message string) {
+	// A JSON client wants a machine-readable body regardless of any branding.
 	if strings.Contains(r.Header.Get("Accept"), "application/json") {
 		writeJSONError(w, status, code, message)
 		return
+	}
+	// T4: a branded HTML page, if one is configured for this status. The
+	// substituted values (status, code, message) are all server-controlled
+	// constants, so there is no untrusted markup to escape.
+	if i.errorPages != nil {
+		if body, ok := i.errorPages.render(status, code, message); ok {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, body)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")

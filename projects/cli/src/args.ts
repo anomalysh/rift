@@ -32,6 +32,18 @@ export interface FlagConfig {
   once?: boolean;
   maxRequests?: string;
   rateLimit?: string;
+  // Traffic policy (T1-T3, T5, T6), applied agent-side by the forwarder.
+  // Repeatable flags accumulate; buildTrafficPolicy parses and validates them.
+  setRequestHeader?: string[];
+  delRequestHeader?: string[];
+  setResponseHeader?: string[];
+  delResponseHeader?: string[];
+  cors?: boolean;
+  respond?: string[];
+  redirect?: string[];
+  route?: string[];
+  breaker?: boolean;
+  breakerThreshold?: string;
 }
 
 export type ParsedArgs =
@@ -66,6 +78,15 @@ const VALUE_FLAGS = new Set([
   "--ttl",
   "--max-requests",
   "--rate-limit",
+  // Traffic-policy value flags. The header/respond/redirect/route ones repeat.
+  "--set-request-header",
+  "--del-request-header",
+  "--set-response-header",
+  "--del-response-header",
+  "--respond",
+  "--redirect",
+  "--route",
+  "--breaker-threshold",
 ]);
 
 // `--set-*` flags do not open a tunnel: they persist a value to the config file
@@ -122,6 +143,14 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     }
     if (arg === "--once") {
       flags.once = true;
+      continue;
+    }
+    if (arg === "--cors") {
+      flags.cors = true;
+      continue;
+    }
+    if (arg === "--breaker") {
+      flags.breaker = true;
       continue;
     }
 
@@ -275,6 +304,30 @@ function applyValueFlag(
       return null;
     case "--rate-limit":
       flags.rateLimit = value;
+      return null;
+    case "--set-request-header":
+      flags.setRequestHeader = [...(flags.setRequestHeader ?? []), value];
+      return null;
+    case "--del-request-header":
+      flags.delRequestHeader = [...(flags.delRequestHeader ?? []), value];
+      return null;
+    case "--set-response-header":
+      flags.setResponseHeader = [...(flags.setResponseHeader ?? []), value];
+      return null;
+    case "--del-response-header":
+      flags.delResponseHeader = [...(flags.delResponseHeader ?? []), value];
+      return null;
+    case "--respond":
+      flags.respond = [...(flags.respond ?? []), value];
+      return null;
+    case "--redirect":
+      flags.redirect = [...(flags.redirect ?? []), value];
+      return null;
+    case "--route":
+      flags.route = [...(flags.route ?? []), value];
+      return null;
+    case "--breaker-threshold":
+      flags.breakerThreshold = value;
       return null;
     default:
       return `unknown flag: ${name}`;

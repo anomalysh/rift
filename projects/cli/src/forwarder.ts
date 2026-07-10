@@ -18,6 +18,7 @@ import type {
   ResponseHead,
   StreamReset,
 } from "./protocol.ts";
+import type { SyntheticResponse, TrafficController } from "./traffic.ts";
 
 const EMPTY = new Uint8Array(0);
 
@@ -62,6 +63,8 @@ export interface RequestStreamDeps {
   readonly logger: Logger;
   /** Called exactly once when the stream is fully retired. */
   readonly onDone: (streamId: bigint) => void;
+  /** Agent-side traffic policy (headers, CORS, mock, routing, breaker). */
+  readonly traffic?: TrafficController;
 }
 
 // The Fetch standard requires `duplex: "half"` when the request body is a
@@ -188,10 +191,43 @@ export class RequestStream implements Stream {
   }
 
   private async run(): Promise<void> {
-    const { host, port, tls } = this.deps.target;
+    const traffic = this.deps.traffic;
+    // T2/T3: a mock, redirect, or CORS preflight the agent answers itself,
+    // never touching the local service.
+    if (traffic !== undefined) {
+      const synthetic = traffic.synthesize(
+        this.head.method,
+        this.head.path,
+        this.head.headers,
+      );
+      if (synthetic !== null) {
+        this.sendSynthetic(synthetic);
+        this.finish();
+        return;
+      }
+    }
+
+    const { host, tls } = this.deps.target;
+    // T5: a path prefix can route to a different local port; the breaker (T6)
+    // and dial both use the resolved port.
+    const port = traffic?.routePort(this.head.path) ?? this.deps.target.port;
+
+    // T6: if this upstream's circuit is open, fail fast with 503 instead of
+    // eating a full dial timeout on a service known to be down.
+    if (traffic?.breakerTripped(port) === true) {
+      this.deps.logger.warn(
+        `circuit open for upstream :${port}, refusing stream ${this.streamId}`,
+      );
+      this.sendSynthetic(traffic.breakerResponse(this.head.headers));
+      this.finish();
+      return;
+    }
+
     const scheme = tls === true ? "https" : "http";
     const url = `${scheme}://${host}:${port}${this.head.path}`;
     const headers = buildRequestHeaders(this.head.headers);
+    // T1: rewrite outbound request headers before the fetch.
+    traffic?.decorateRequest(headers);
     const init: FetchInit = {
       method: this.head.method,
       headers,
@@ -231,10 +267,14 @@ export class RequestStream implements Stream {
       if (this.aborted) {
         return;
       }
-      const resHead: ResponseHead = {
-        status: response.status,
-        headers: responseHeaderMap(response.headers),
-      };
+      // The upstream answered: this port's circuit is healthy again (T6).
+      traffic?.recordResult(port, true);
+      let headers = responseHeaderMap(response.headers);
+      // T1/T2: rewrite response headers and add CORS decoration.
+      if (traffic !== undefined) {
+        headers = traffic.decorateResponse(headers, this.head.headers);
+      }
+      const resHead: ResponseHead = { status: response.status, headers };
       this.deps.sink.sendJson(FrameType.RES_HEAD, this.streamId, resHead);
       this.headSent = true;
 
@@ -250,6 +290,9 @@ export class RequestStream implements Stream {
       // Before RES_HEAD the local service was unreachable (ECONNREFUSED / DNS);
       // after it, the failure is mid-stream and internal to this exchange.
       if (!this.headSent) {
+        // A connect-time failure counts against the breaker (T6). A mid-stream
+        // failure does not: the service was reachable, so the circuit is fine.
+        traffic?.recordResult(port, false);
         this.deps.logger.warn(
           `upstream unreachable for stream ${this.streamId}: ${message}`,
         );
@@ -316,6 +359,24 @@ export class RequestStream implements Stream {
     ) {
       await sleep(DRAIN_POLL_INTERVAL_MS);
     }
+  }
+
+  /**
+   * Emit a response the agent produced itself (mock, redirect, CORS preflight,
+   * or open-circuit 503) as RES_HEAD [+ RES_BODY] + RES_END, bypassing the
+   * upstream fetch entirely.
+   */
+  private sendSynthetic(res: SyntheticResponse): void {
+    if (this.aborted || !this.deps.sink.isOpen()) {
+      return;
+    }
+    const resHead: ResponseHead = { status: res.status, headers: res.headers };
+    this.deps.sink.sendJson(FrameType.RES_HEAD, this.streamId, resHead);
+    this.headSent = true;
+    if (res.body.length > 0) {
+      this.deps.sink.send(FrameType.RES_BODY, this.streamId, res.body);
+    }
+    this.deps.sink.send(FrameType.RES_END, this.streamId, EMPTY);
   }
 
   private sendReset(code: ResetCodeValue, message: string): void {

@@ -45,6 +45,7 @@ import {
   type Hello,
   isKnownFrameType,
 } from "./protocol.ts";
+import type { TrafficController } from "./traffic.ts";
 import { formatRetryDelay, type SessionInfo } from "./ui.ts";
 import { UpgradeStream } from "./upgrade.ts";
 
@@ -56,6 +57,8 @@ export interface ClientOptions {
   readonly logger: Logger;
   /** Visitor-access policy declared to the gateway in the Hello (A2-A5). */
   readonly policy?: WirePolicy;
+  /** Agent-side traffic policy applied by the forwarder (T1-T3, T5, T6). */
+  readonly traffic?: TrafficController;
 }
 
 /** Raised for non-recoverable client failures (surfaced as a nonzero exit). */
@@ -80,6 +83,7 @@ function isLoopbackHost(host: string): boolean {
 export class TunnelClient {
   private readonly config: ResolvedConfig;
   private readonly policy: WirePolicy | undefined;
+  private readonly traffic: TrafficController | undefined;
   private readonly logger: Logger;
   private readonly port: number;
   private readonly protocol: SupportedProtocol;
@@ -113,6 +117,7 @@ export class TunnelClient {
   constructor(opts: ClientOptions) {
     this.config = opts.config;
     this.policy = opts.policy;
+    this.traffic = opts.traffic;
     this.logger = opts.logger;
     this.port = opts.port;
     this.protocol = opts.protocol;
@@ -470,6 +475,7 @@ export class TunnelClient {
       onDone: (id: bigint) => {
         this.streams.delete(id);
       },
+      ...(this.traffic !== undefined ? { traffic: this.traffic } : {}),
     };
     let stream: Stream;
     if (head.raw) {
