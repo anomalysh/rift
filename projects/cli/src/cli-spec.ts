@@ -124,9 +124,13 @@ export const CLI_SPEC: CliSpec = {
     "The completions and man subcommands, and the --set-* flags, need neither " +
       "a token nor a server: they print or persist and exit without opening a " +
       "tunnel.",
+    "`rift start [name...]` opens one or more named tunnels declared in a " +
+      "rift.yml (or .yaml/.toml/.json) file in the working directory, running " +
+      "each concurrently. With no names, every declared tunnel is opened.",
   ],
   synopsis: [
     "rift <protocol> <port> [subdomain] [options]",
+    "rift start [name...]",
     "rift --set-token <token> | --set-server <url> | --set-host <host> | --set-log-level <level>",
     "rift completions <bash|zsh|fish>",
     "rift man",

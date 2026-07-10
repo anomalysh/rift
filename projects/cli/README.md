@@ -106,6 +106,32 @@ The port must be an integer in `1..65535`.
 The tunnel URL banner is printed to **stdout**; all diagnostics go to **stderr**,
 so `rift http 3000 | …` yields just the URL line.
 
+### Named tunnels (`rift start`)
+
+Declare several tunnels in a `rift.yml` (or `.yaml` / `.toml` / `.json`) file in
+the working directory and open them together:
+
+```yaml
+tunnels:
+  web:
+    port: 3000
+    subdomain: myweb
+  api:
+    port: 4000
+    cors: true
+    basic-auth: "user:pass"
+```
+
+```
+rift start           # open every declared tunnel
+rift start web api    # open just these
+```
+
+Each entry takes the same fields as the command line: `proto` (default `http`),
+`port`, `subdomain`, and any flag below by its long name (a boolean flag like
+`cors: true`, a repeatable one as a list). Every tunnel runs concurrently with
+its output tagged by name.
+
 ### Flags
 
 | Flag              | Meaning                                             |

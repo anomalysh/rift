@@ -198,3 +198,33 @@ export function createLogger(level: LogLevel): Logger {
     ? createTuiLogger(level)
     : createPlainLogger(level);
 }
+
+/**
+ * A plain logger for one tunnel in a multi-tunnel `rift start` run (D3). The
+ * interactive dashboard is a single sticky panel and cannot multiplex, so each
+ * tunnel logs greppable lines tagged with its name instead. Every message,
+ * banner, and session line is prefixed with `[name] `.
+ */
+export function createNamedLogger(name: string, level: LogLevel): Logger {
+  const base = createPlainLogger(level);
+  const tag = `[${name}] `;
+  const prefixLines = (text: string): string =>
+    text
+      .split("\n")
+      .map((line) => (line === "" ? line : tag + line))
+      .join("\n");
+  return {
+    debug: (m, ...r) => base.debug(tag + m, ...r),
+    info: (m, ...r) => base.info(tag + m, ...r),
+    warn: (m, ...r) => base.warn(tag + m, ...r),
+    error: (m, ...r) => base.error(tag + m, ...r),
+    banner: (text) => base.banner(prefixLines(text)),
+    // A compact one-liner per tunnel instead of the full multi-line banner, so
+    // several tunnels coming up do not scroll each other away.
+    session: (info) =>
+      base.banner(`${tag}tunnel up: ${info.url} -> ${info.forwardTo}`),
+    status: () => {},
+    metrics: () => {},
+    close: () => {},
+  };
+}

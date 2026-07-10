@@ -57,6 +57,7 @@ export type ParsedArgs =
       flags: FlagConfig;
     }
   | { kind: "set-config"; updates: PartialConfig }
+  | { kind: "start"; names: string[] }
   | { kind: "man" }
   | { kind: "completions"; shell: Shell }
   | { kind: "help" }
@@ -205,6 +206,12 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       };
     }
     return { kind: "set-config", updates };
+  }
+
+  // `rift start [name...]` opens named tunnels from the project config (D3).
+  // The per-tunnel flags live in the config file, so start itself takes none.
+  if (positionals[0] === "start") {
+    return { kind: "start", names: positionals.slice(1) };
   }
 
   // Doc subcommands print and exit; they take no tunnel flags.
