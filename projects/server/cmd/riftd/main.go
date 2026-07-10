@@ -155,6 +155,15 @@ func run() error {
 		}()
 	}
 
+	// The h2c gRPC listener is likewise a raw TCP acceptor on its own goroutine.
+	if cfg.GRPC.Enabled {
+		go func() {
+			if err := gw.ServeGRPCTunnels(ctx); err != nil {
+				logger.Error("grpc tunnel listener stopped", slog.Any("error", err))
+			}
+		}()
+	}
+
 	errCh := make(chan error, len(servers))
 	var wg sync.WaitGroup
 	for _, ns := range servers {

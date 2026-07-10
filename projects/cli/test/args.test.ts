@@ -125,8 +125,8 @@ describe("bad protocol", () => {
     }
   });
 
-  test("accepts https, tcp, tls and udp", () => {
-    for (const proto of ["https", "tcp", "tls", "udp"] as const) {
+  test("accepts https, tcp, tls, udp and grpc", () => {
+    for (const proto of ["https", "tcp", "tls", "udp", "grpc"] as const) {
       const parsed = parseArgs([proto, "3000"]);
       expect(parsed.kind).toBe("run");
       if (parsed.kind === "run") {

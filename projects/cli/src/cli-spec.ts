@@ -157,6 +157,10 @@ export const CLI_SPEC: CliSpec = {
       name: "udp",
       blurb: "forward raw UDP datagrams, reached on an allocated public port",
     },
+    {
+      name: "grpc",
+      blurb: "forward a local gRPC (h2c) server, routed by subdomain",
+    },
   ],
   positionals: [
     {

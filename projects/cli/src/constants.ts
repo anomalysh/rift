@@ -108,6 +108,7 @@ export const SUPPORTED_PROTOCOLS = [
   "tcp",
   "tls",
   "udp",
+  "grpc",
 ] as const;
 export type SupportedProtocol = (typeof SUPPORTED_PROTOCOLS)[number];
 
@@ -123,6 +124,9 @@ export const PROTOCOL_DIALER = {
   tcp: { wire: "tcp", upstreamTls: false },
   tls: { wire: "tls", upstreamTls: false },
   udp: { wire: "udp", upstreamTls: false },
+  // grpc is a raw h2c passthrough: the agent pipes cleartext HTTP/2 bytes to
+  // the local gRPC server, which speaks h2c on the target port (P7).
+  grpc: { wire: "grpc", upstreamTls: false },
 } as const satisfies Record<
   SupportedProtocol,
   { wire: string; upstreamTls: boolean }

@@ -83,6 +83,11 @@ const (
 	KeyTLSTunnelListenAddr    = EnvPrefix + "TLS_TUNNEL_LISTEN_ADDR"
 	KeyTLSTunnelAdvertisePort = EnvPrefix + "TLS_TUNNEL_ADVERTISE_PORT"
 
+	// gRPC tunnels (h2c, routed by the HTTP/2 :authority on a shared listener).
+	KeyGRPCEnabled       = EnvPrefix + "GRPC_ENABLED"
+	KeyGRPCListenAddr    = EnvPrefix + "GRPC_LISTEN_ADDR"
+	KeyGRPCAdvertisePort = EnvPrefix + "GRPC_ADVERTISE_PORT"
+
 	// TLS. These configure the reverse proxy in front of this server, not this
 	// server's own listeners, which never terminate TLS. The server reads them
 	// anyway so that a broken TLS configuration fails at boot with one clear

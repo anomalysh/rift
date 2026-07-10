@@ -60,6 +60,11 @@ const (
 	// proxy on 443; the operator must open it on the host firewall.
 	DefaultTLSTunnelListenAddr = ":8443"
 
+	DefaultGRPCEnabled = false
+	// A dedicated cleartext HTTP/2 (h2c) port for gRPC tunnels; the operator
+	// must open it on the host firewall.
+	DefaultGRPCListenAddr = ":8090"
+
 	DefaultPublicScheme = SchemeHTTPS
 
 	DefaultHeartbeatInterval = 15 * time.Second

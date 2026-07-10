@@ -189,6 +189,18 @@ func (g *Gateway) serve(r *http.Request, conn *websocket.Conn) {
 		bindAddr = net.JoinHostPort(
 			core.Hostname(tunnel.Subdomain, g.cfg.Tunnel.BaseDomain),
 			strconv.Itoa(g.cfg.TLSTunnel.Port()))
+
+	case core.ProtocolGRPC:
+		if !g.cfg.GRPC.Enabled {
+			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeUnsupportedProtocol,
+				"grpc tunnels are not enabled on this server")
+			return
+		}
+		// Like tls, a grpc tunnel needs no per-tunnel listener: the shared h2c
+		// listener routes by :authority. It is reached at its subdomain host.
+		bindAddr = net.JoinHostPort(
+			core.Hostname(tunnel.Subdomain, g.cfg.Tunnel.BaseDomain),
+			strconv.Itoa(g.cfg.GRPC.Port()))
 	}
 
 	ok := tunnelproto.HelloOK{

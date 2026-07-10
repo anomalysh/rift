@@ -5,6 +5,7 @@ package e2e
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -28,6 +29,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/hpack"
 
 	"github.com/anomalysh/rift/projects/server/internal/auth"
 	"github.com/anomalysh/rift/projects/server/internal/config"
@@ -997,6 +1000,101 @@ func TestTLSPassthroughCompletesHandshake(t *testing.T) {
 	}
 	if string(buf) != string(msg) {
 		t.Fatalf("echo = %q, want %q", buf, msg)
+	}
+}
+
+// A grpc tunnel must route an h2c connection by its :authority to the agent and
+// carry the raw HTTP/2 bytes both ways, so streaming and trailers survive. The
+// agent echoes; a real gRPC server would speak h2c on its side.
+func TestGRPCTunnelRoutesAndPipes(t *testing.T) {
+	const host = "grpcapp." + testBaseDomain
+
+	s := newStack(t, func(c *config.Config) {
+		c.GRPC.Enabled = true
+		c.GRPC.ListenAddr = "127.0.0.1:0"
+		c.GRPC.AdvertisePort = 8090
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	grpcLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("grpc listen: %v", err)
+	}
+	go func() { _ = s.gw.ServeGRPCTunnelsListener(ctx, grpcLn) }()
+
+	// A raw-echo agent stands in for the local h2c gRPC server.
+	a, err := dialAgentProto(t, ctx, s.gatewayWS, s.token, "grpcapp", "grpc", nil)
+	if err != nil {
+		t.Fatalf("dial grpc agent: %v", err)
+	}
+	defer a.close()
+
+	if want := host + ":8090"; a.hello.BindAddr != want {
+		t.Fatalf("hello_ok bind_addr = %q, want %q", a.hello.BindAddr, want)
+	}
+
+	// Build a real h2c client request: preface, SETTINGS, and a HEADERS frame
+	// whose :authority names the tunnel host, then a payload marker.
+	var stream bytes.Buffer
+	stream.WriteString(http2.ClientPreface)
+	fr := http2.NewFramer(&stream, nil)
+	if err := fr.WriteSettings(); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	var hbuf bytes.Buffer
+	enc := hpack.NewEncoder(&hbuf)
+	for _, hf := range []hpack.HeaderField{
+		{Name: ":method", Value: "POST"},
+		{Name: ":scheme", Value: "http"},
+		{Name: ":path", Value: "/helloworld.Greeter/SayHello"},
+		{Name: ":authority", Value: host},
+		{Name: "content-type", Value: "application/grpc"},
+	} {
+		if err := enc.WriteField(hf); err != nil {
+			t.Fatalf("hpack encode: %v", err)
+		}
+	}
+	if err := fr.WriteHeaders(http2.HeadersFrameParam{
+		StreamID: 1, BlockFragment: hbuf.Bytes(), EndHeaders: true,
+	}); err != nil {
+		t.Fatalf("write headers: %v", err)
+	}
+	marker := []byte("grpc-payload-marker")
+	stream.Write(marker)
+
+	conn, err := net.Dial("tcp", grpcLn.Addr().String())
+	if err != nil {
+		t.Fatalf("dial grpc listener: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+
+	sent := stream.Bytes()
+	if _, err := conn.Write(sent); err != nil {
+		t.Fatalf("write h2c stream: %v", err)
+	}
+	// The agent echoes the entire stream back, so routing consumed the HEADERS
+	// (to route), replayed them, and the pipe carried the marker both ways.
+	echoed := make([]byte, len(sent))
+	if _, err := io.ReadFull(conn, echoed); err != nil {
+		t.Fatalf("read echoed h2c stream: %v", err)
+	}
+	if !bytes.Equal(echoed, sent) {
+		t.Fatal("echoed bytes did not match what was sent through the grpc tunnel")
+	}
+	if !bytes.Contains(echoed, marker) {
+		t.Fatal("payload marker did not survive the round trip")
+	}
+}
+
+func TestGRPCTunnelRejectedWhenDisabled(t *testing.T) {
+	s := newStack(t, nil) // GRPC.Enabled defaults to false
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := dialAgentProto(t, ctx, s.gatewayWS, s.token, "grpcapp", "grpc", nil)
+	if err == nil {
+		t.Fatal("expected grpc handshake to be rejected when disabled")
 	}
 }
 

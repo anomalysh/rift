@@ -28,12 +28,17 @@ const (
 	// gateway allocates for the tunnel. Each client flow is carried as a
 	// length-delimited datagram stream over a raw tunnel stream (P4).
 	ProtocolUDP Protocol = "udp"
+	// ProtocolGRPC tunnels cleartext HTTP/2 (h2c), routed by the request's
+	// :authority to a subdomain and passed through to the agent's local gRPC
+	// server. Piping the bytes raw preserves HTTP/2 streaming and trailers,
+	// which gRPC uses for grpc-status (P7).
+	ProtocolGRPC Protocol = "grpc"
 )
 
 // Valid reports whether the protocol is one this build can serve.
 func (p Protocol) Valid() bool {
 	switch p {
-	case ProtocolHTTP, ProtocolTCP, ProtocolTLS, ProtocolUDP:
+	case ProtocolHTTP, ProtocolTCP, ProtocolTLS, ProtocolUDP, ProtocolGRPC:
 		return true
 	default:
 		return false

@@ -29,6 +29,8 @@ func EnvDefaults() []EnvDefault {
 		{KeyUDPPortMax, strconv.Itoa(DefaultUDPPortMax)},
 		{KeyTLSTunnelEnabled, strconv.FormatBool(DefaultTLSTunnelEnabled)},
 		{KeyTLSTunnelListenAddr, DefaultTLSTunnelListenAddr},
+		{KeyGRPCEnabled, strconv.FormatBool(DefaultGRPCEnabled)},
+		{KeyGRPCListenAddr, DefaultGRPCListenAddr},
 		{KeyIngressReadTimeout, DefaultIngressReadTimeout.String()},
 		{KeyIngressMaxHeaderBytes, strconv.Itoa(DefaultIngressMaxHeaderBytes)},
 		{KeyMaxRequestBodyBytes, strconv.FormatInt(DefaultMaxRequestBodyBytes, 10)},

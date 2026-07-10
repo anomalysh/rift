@@ -35,6 +35,7 @@ type Config struct {
 	TCP       TCP
 	UDP       UDP
 	TLSTunnel TLSTunnel
+	GRPC      GRPC
 	Tunnel    Tunnel
 
 	// SubdomainRules is derived from Tunnel settings and validated at boot.
@@ -221,6 +222,33 @@ func (t TLSTunnel) Port() int {
 	return 0
 }
 
+// GRPC configures cleartext-HTTP/2 (h2c) gRPC tunnels (P7). When enabled the
+// gateway listens on ListenAddr, reads each connection's first HTTP/2 HEADERS
+// frame to route by its :authority to the grpc tunnel on that subdomain, and
+// pipes the raw h2c bytes through -- so streaming and trailers (grpc-status)
+// are preserved end to end. The agent relays to the local h2c gRPC server.
+type GRPC struct {
+	Enabled    bool
+	ListenAddr string
+	// AdvertisePort is the public port clients dial (sub.<base>:port). Defaults
+	// to the port in ListenAddr when zero.
+	AdvertisePort int
+}
+
+// Port returns the public port a grpc tunnel is advertised on, falling back to
+// the port in ListenAddr.
+func (g GRPC) Port() int {
+	if g.AdvertisePort > 0 {
+		return g.AdvertisePort
+	}
+	if _, p, err := net.SplitHostPort(g.ListenAddr); err == nil {
+		if n, err := strconv.Atoi(p); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
 // Tunnel holds the behavioural knobs of the tunnelling layer.
 type Tunnel struct {
 	BaseDomain   string
@@ -316,6 +344,11 @@ func Load() (*Config, error) {
 			Enabled:       l.boolean(KeyTLSTunnelEnabled, DefaultTLSTunnelEnabled),
 			ListenAddr:    l.str(KeyTLSTunnelListenAddr, DefaultTLSTunnelListenAddr),
 			AdvertisePort: l.integer(KeyTLSTunnelAdvertisePort, 0),
+		},
+		GRPC: GRPC{
+			Enabled:       l.boolean(KeyGRPCEnabled, DefaultGRPCEnabled),
+			ListenAddr:    l.str(KeyGRPCListenAddr, DefaultGRPCListenAddr),
+			AdvertisePort: l.integer(KeyGRPCAdvertisePort, 0),
 		},
 		TLS: TLS{
 			// Deliberately no default here: development gets one below,

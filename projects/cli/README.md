@@ -98,12 +98,15 @@ rift http 3000 myapp         # request the subdomain "myapp"
 rift https 8443              # tunnel a local HTTPS server (self-signed ok)
 rift tcp 5432                # forward a raw TCP port (e.g. Postgres)
 rift udp 51820               # forward a raw UDP port (e.g. WireGuard)
+rift grpc 50051              # forward a local gRPC (h2c) server
 ```
 
-The protocol is `http`, `https`, `tcp`, `tls`, or `udp`. `https` is an `http`
-tunnel whose agent dials the local service over TLS — the public URL is still
-HTTPS. `tcp` and `udp` are reached on a public port the gateway allocates.
-The port must be an integer in `1..65535`.
+The protocol is `http`, `https`, `tcp`, `tls`, `udp`, or `grpc`. `https` is an
+`http` tunnel whose agent dials the local service over TLS — the public URL is
+still HTTPS. `tcp` and `udp` are reached on a public port the gateway allocates.
+`grpc` tunnels a cleartext-HTTP/2 (h2c) gRPC server, routed by subdomain: the
+gateway pipes the raw h2c bytes through, so streaming and trailers (grpc-status)
+are preserved end to end. The port must be an integer in `1..65535`.
 
 The tunnel URL banner is printed to **stdout**; all diagnostics go to **stderr**,
 so `rift http 3000 | …` yields just the URL line.
