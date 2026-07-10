@@ -97,10 +97,12 @@ rift http 3000               # tunnel localhost:3000 with a random subdomain
 rift http 3000 myapp         # request the subdomain "myapp"
 rift https 8443              # tunnel a local HTTPS server (self-signed ok)
 rift tcp 5432                # forward a raw TCP port (e.g. Postgres)
+rift udp 51820               # forward a raw UDP port (e.g. WireGuard)
 ```
 
-The protocol is `http`, `https`, `tcp`, or `tls`. `https` is an `http` tunnel
-whose agent dials the local service over TLS — the public URL is still HTTPS.
+The protocol is `http`, `https`, `tcp`, `tls`, or `udp`. `https` is an `http`
+tunnel whose agent dials the local service over TLS — the public URL is still
+HTTPS. `tcp` and `udp` are reached on a public port the gateway allocates.
 The port must be an integer in `1..65535`.
 
 The tunnel URL banner is printed to **stdout**; all diagnostics go to **stderr**,

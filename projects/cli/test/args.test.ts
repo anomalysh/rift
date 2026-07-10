@@ -118,15 +118,15 @@ describe("bad port", () => {
 
 describe("bad protocol", () => {
   test("rejects an unsupported protocol and names what is supported", () => {
-    const parsed = parseArgs(["udp", "3000"]);
+    const parsed = parseArgs(["ftp", "3000"]);
     expect(parsed.kind).toBe("error");
     if (parsed.kind === "error") {
       expect(parsed.message).toContain("http");
     }
   });
 
-  test("accepts https, tcp and tls", () => {
-    for (const proto of ["https", "tcp", "tls"] as const) {
+  test("accepts https, tcp, tls and udp", () => {
+    for (const proto of ["https", "tcp", "tls", "udp"] as const) {
       const parsed = parseArgs([proto, "3000"]);
       expect(parsed.kind).toBe("run");
       if (parsed.kind === "run") {

@@ -46,6 +46,7 @@ import {
   isKnownFrameType,
 } from "./protocol.ts";
 import type { TrafficController } from "./traffic.ts";
+import { UdpStream } from "./udp.ts";
 import { formatRetryDelay, type SessionInfo } from "./ui.ts";
 import { UpgradeStream } from "./upgrade.ts";
 
@@ -485,7 +486,17 @@ export class TunnelClient {
       ...(this.traffic !== undefined ? { traffic: this.traffic } : {}),
     };
     let stream: Stream;
-    if (head.raw) {
+    if (head.raw && this.protocol === "udp") {
+      // A udp tunnel carries each client flow as a raw stream of length-
+      // delimited datagrams, relayed to a local UDP socket (P4).
+      this.logger.debug(`REQ_HEAD udp flow ${streamId}`);
+      stream = new UdpStream(streamId, {
+        target: deps.target,
+        sink: deps.sink,
+        logger: deps.logger,
+        onDone: deps.onDone,
+      });
+    } else if (head.raw) {
       this.logger.debug(`REQ_HEAD raw stream ${streamId}`);
       stream = new UpgradeStream(streamId, head, deps);
     } else if (head.upgrade) {

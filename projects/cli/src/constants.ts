@@ -102,7 +102,13 @@ export type ResetCodeValue = (typeof ResetCode)[keyof typeof ResetCode];
  *  so it is `http` on the wire); `tcp` is reached on a gateway-allocated port;
  *  `tls` is SNI-routed and passed through to a local service that terminates
  *  TLS. */
-export const SUPPORTED_PROTOCOLS = ["http", "https", "tcp", "tls"] as const;
+export const SUPPORTED_PROTOCOLS = [
+  "http",
+  "https",
+  "tcp",
+  "tls",
+  "udp",
+] as const;
 export type SupportedProtocol = (typeof SUPPORTED_PROTOCOLS)[number];
 
 /** How each CLI protocol keyword is dialed: the value it carries on the wire and
@@ -116,6 +122,7 @@ export const PROTOCOL_DIALER = {
   https: { wire: "http", upstreamTls: true },
   tcp: { wire: "tcp", upstreamTls: false },
   tls: { wire: "tls", upstreamTls: false },
+  udp: { wire: "udp", upstreamTls: false },
 } as const satisfies Record<
   SupportedProtocol,
   { wire: string; upstreamTls: boolean }

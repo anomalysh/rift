@@ -45,6 +45,16 @@ const (
 	// without being so aggressive it wastes packets. 0 disables it.
 	DefaultTCPKeepAliveSeconds = 30
 
+	DefaultUDPEnabled    = false
+	DefaultUDPListenHost = "0.0.0.0"
+	// A separate 101-port UDP window; the operator must open it on the host
+	// firewall. UDP and TCP ports are independent namespaces.
+	DefaultUDPPortMin = 20200
+	DefaultUDPPortMax = 20300
+	// A UDP flow (one client address) is retired after this idle period, since
+	// UDP has no close to observe.
+	DefaultUDPFlowTimeout = 60 * time.Second
+
 	DefaultTLSTunnelEnabled = false
 	// A dedicated port so passthrough TLS does not collide with the reverse
 	// proxy on 443; the operator must open it on the host firewall.

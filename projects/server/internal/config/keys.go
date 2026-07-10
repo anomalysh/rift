@@ -70,6 +70,14 @@ const (
 	KeyTCPNoDelay          = EnvPrefix + "TCP_NODELAY"
 	KeyTCPKeepAliveSeconds = EnvPrefix + "TCP_KEEPALIVE_SECONDS"
 
+	// UDP tunnels (raw datagrams reached on an allocated public UDP port).
+	KeyUDPEnabled       = EnvPrefix + "UDP_ENABLED"
+	KeyUDPListenHost    = EnvPrefix + "UDP_LISTEN_HOST"
+	KeyUDPAdvertiseHost = EnvPrefix + "UDP_ADVERTISE_HOST"
+	KeyUDPPortMin       = EnvPrefix + "UDP_PORT_MIN"
+	KeyUDPPortMax       = EnvPrefix + "UDP_PORT_MAX"
+	KeyUDPFlowTimeout   = EnvPrefix + "UDP_FLOW_TIMEOUT"
+
 	// TLS passthrough tunnels (SNI-routed raw TLS on a shared listener).
 	KeyTLSTunnelEnabled       = EnvPrefix + "TLS_TUNNEL_ENABLED"
 	KeyTLSTunnelListenAddr    = EnvPrefix + "TLS_TUNNEL_LISTEN_ADDR"

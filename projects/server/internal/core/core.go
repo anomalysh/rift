@@ -24,12 +24,16 @@ const (
 	// ProtocolTLS tunnels raw TLS, routed by the ClientHello SNI to a subdomain
 	// and passed through to the agent, which terminates TLS.
 	ProtocolTLS Protocol = "tls"
+	// ProtocolUDP tunnels raw UDP datagrams, reached on a public UDP port the
+	// gateway allocates for the tunnel. Each client flow is carried as a
+	// length-delimited datagram stream over a raw tunnel stream (P4).
+	ProtocolUDP Protocol = "udp"
 )
 
 // Valid reports whether the protocol is one this build can serve.
 func (p Protocol) Valid() bool {
 	switch p {
-	case ProtocolHTTP, ProtocolTCP, ProtocolTLS:
+	case ProtocolHTTP, ProtocolTCP, ProtocolTLS, ProtocolUDP:
 		return true
 	default:
 		return false
@@ -37,7 +41,8 @@ func (p Protocol) Valid() bool {
 }
 
 // IsRaw reports whether the protocol is carried as a raw byte stream rather
-// than as HTTP request/response exchanges.
+// than as HTTP request/response exchanges. UDP is datagram-oriented and framed
+// separately, so it is deliberately excluded here.
 func (p Protocol) IsRaw() bool { return p == ProtocolTCP || p == ProtocolTLS }
 
 // String implements fmt.Stringer.

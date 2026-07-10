@@ -40,6 +40,10 @@ type Gateway struct {
 	// are disabled.
 	tcp *tcpForwarder
 
+	// udp accepts public UDP datagrams for udp tunnels. Nil when udp tunnels
+	// are disabled.
+	udp *udpForwarder
+
 	mu       sync.Mutex
 	sessions map[*session]struct{}
 }
@@ -63,6 +67,7 @@ func New(
 		domains:      domains,
 		registry:     reg,
 		tcp:          newTCPForwarder(cfg, logger),
+		udp:          newUDPForwarder(cfg, logger),
 		sessions:     make(map[*session]struct{}),
 	}
 }
@@ -156,6 +161,22 @@ func (g *Gateway) serve(r *http.Request, conn *websocket.Conn) {
 		}
 		bindAddr = addr
 		defer g.tcp.release(sess)
+
+	case core.ProtocolUDP:
+		if g.udp == nil {
+			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeUnsupportedProtocol,
+				"udp tunnels are not enabled on this server")
+			return
+		}
+		addr, err := g.udp.bind(sess)
+		if err != nil {
+			g.logger.Error("could not allocate udp port", slog.Any("error", err))
+			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeInternal,
+				"could not allocate a public udp port")
+			return
+		}
+		bindAddr = addr
+		defer g.udp.release(sess)
 
 	case core.ProtocolTLS:
 		if !g.cfg.TLSTunnel.Enabled {

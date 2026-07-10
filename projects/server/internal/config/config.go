@@ -33,6 +33,7 @@ type Config struct {
 	Cluster   Cluster
 	TLS       TLS
 	TCP       TCP
+	UDP       UDP
 	TLSTunnel TLSTunnel
 	Tunnel    Tunnel
 
@@ -170,6 +171,29 @@ func (t TCP) Advertise(baseDomain string) string {
 	return baseDomain
 }
 
+// UDP configures raw UDP tunnels (P4). When enabled the gateway allocates a
+// public port from [PortMin, PortMax] for each udp tunnel, binds it on
+// ListenHost, and forwards each client flow's datagrams to the agent. The port
+// range must be opened on the host firewall.
+type UDP struct {
+	Enabled       bool
+	ListenHost    string
+	AdvertiseHost string
+	PortMin       int
+	PortMax       int
+	// FlowTimeout retires a client flow after this idle period.
+	FlowTimeout time.Duration
+}
+
+// Advertise returns the public host clients dial for a udp tunnel, falling back
+// to the base domain when no explicit advertise host is set.
+func (u UDP) Advertise(baseDomain string) string {
+	if u.AdvertiseHost != "" {
+		return u.AdvertiseHost
+	}
+	return baseDomain
+}
+
 // TLSTunnel configures raw TLS passthrough tunnels. When enabled the gateway
 // listens on ListenAddr, reads each connection's ClientHello SNI to find the
 // tls tunnel on that subdomain, and pipes the still-encrypted bytes through to
@@ -279,6 +303,14 @@ func Load() (*Config, error) {
 			PortMax:          l.integer(KeyTCPPortMax, DefaultTCPPortMax),
 			NoDelay:          l.boolean(KeyTCPNoDelay, DefaultTCPNoDelay),
 			KeepAliveSeconds: l.integer(KeyTCPKeepAliveSeconds, DefaultTCPKeepAliveSeconds),
+		},
+		UDP: UDP{
+			Enabled:       l.boolean(KeyUDPEnabled, DefaultUDPEnabled),
+			ListenHost:    l.str(KeyUDPListenHost, DefaultUDPListenHost),
+			AdvertiseHost: l.str(KeyUDPAdvertiseHost, ""),
+			PortMin:       l.integer(KeyUDPPortMin, DefaultUDPPortMin),
+			PortMax:       l.integer(KeyUDPPortMax, DefaultUDPPortMax),
+			FlowTimeout:   l.duration(KeyUDPFlowTimeout, DefaultUDPFlowTimeout),
 		},
 		TLSTunnel: TLSTunnel{
 			Enabled:       l.boolean(KeyTLSTunnelEnabled, DefaultTLSTunnelEnabled),

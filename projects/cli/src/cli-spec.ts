@@ -153,6 +153,10 @@ export const CLI_SPEC: CliSpec = {
       name: "tls",
       blurb: "forward a TLS stream, routed by SNI, to the local port",
     },
+    {
+      name: "udp",
+      blurb: "forward raw UDP datagrams, reached on an allocated public port",
+    },
   ],
   positionals: [
     {
