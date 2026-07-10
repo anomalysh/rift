@@ -79,6 +79,8 @@ func (g *Gateway) handleTLSTunnel(ctx context.Context, conn net.Conn) {
 		_ = conn.Close()
 	}()
 
+	tuneTCPConn(conn, g.cfg.TCP, g.logger)
+
 	// Bound the SNI peek so a client that connects and stalls cannot pin a
 	// goroutine (and its port) indefinitely.
 	_ = conn.SetReadDeadline(time.Now().Add(g.cfg.Gateway.HandshakeTimeout))

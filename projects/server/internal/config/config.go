@@ -154,6 +154,11 @@ type TCP struct {
 	AdvertiseHost string
 	PortMin       int
 	PortMax       int
+	// NoDelay disables Nagle's algorithm on accepted connections (P1).
+	NoDelay bool
+	// KeepAliveSeconds is the TCP keep-alive period on accepted connections;
+	// 0 disables keep-alives (P1).
+	KeepAliveSeconds int
 }
 
 // Advertise returns the public host clients dial for a tcp tunnel, falling back
@@ -267,11 +272,13 @@ func Load() (*Config, error) {
 			PeerSecret: l.str(KeyPeerSecret, ""),
 		},
 		TCP: TCP{
-			Enabled:       l.boolean(KeyTCPEnabled, DefaultTCPEnabled),
-			ListenHost:    l.str(KeyTCPListenHost, DefaultTCPListenHost),
-			AdvertiseHost: l.str(KeyTCPAdvertiseHost, ""),
-			PortMin:       l.integer(KeyTCPPortMin, DefaultTCPPortMin),
-			PortMax:       l.integer(KeyTCPPortMax, DefaultTCPPortMax),
+			Enabled:          l.boolean(KeyTCPEnabled, DefaultTCPEnabled),
+			ListenHost:       l.str(KeyTCPListenHost, DefaultTCPListenHost),
+			AdvertiseHost:    l.str(KeyTCPAdvertiseHost, ""),
+			PortMin:          l.integer(KeyTCPPortMin, DefaultTCPPortMin),
+			PortMax:          l.integer(KeyTCPPortMax, DefaultTCPPortMax),
+			NoDelay:          l.boolean(KeyTCPNoDelay, DefaultTCPNoDelay),
+			KeepAliveSeconds: l.integer(KeyTCPKeepAliveSeconds, DefaultTCPKeepAliveSeconds),
 		},
 		TLSTunnel: TLSTunnel{
 			Enabled:       l.boolean(KeyTLSTunnelEnabled, DefaultTLSTunnelEnabled),

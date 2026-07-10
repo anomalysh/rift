@@ -123,6 +123,8 @@ func (f *tcpForwarder) accept(ctx context.Context, sess *session, ln net.Listene
 func (f *tcpForwarder) handle(ctx context.Context, sess *session, conn net.Conn) {
 	defer func() { _ = conn.Close() }()
 
+	tuneTCPConn(conn, f.cfg.TCP, f.logger)
+
 	tconn, err := sess.OpenRaw(ctx)
 	if err != nil {
 		f.logger.Debug("could not open raw stream for tcp connection", slog.Any("error", err))

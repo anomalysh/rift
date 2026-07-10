@@ -64,6 +64,11 @@ const (
 	KeyTCPAdvertiseHost = EnvPrefix + "TCP_ADVERTISE_HOST"
 	KeyTCPPortMin       = EnvPrefix + "TCP_PORT_MIN"
 	KeyTCPPortMax       = EnvPrefix + "TCP_PORT_MAX"
+	// Socket tuning for accepted public TCP connections (P1). These apply to
+	// both raw tcp and SNI-routed tls tunnels, since both carry latency-
+	// sensitive byte streams.
+	KeyTCPNoDelay          = EnvPrefix + "TCP_NODELAY"
+	KeyTCPKeepAliveSeconds = EnvPrefix + "TCP_KEEPALIVE_SECONDS"
 
 	// TLS passthrough tunnels (SNI-routed raw TLS on a shared listener).
 	KeyTLSTunnelEnabled       = EnvPrefix + "TLS_TUNNEL_ENABLED"

@@ -142,6 +142,10 @@ export class UpgradeStream implements Stream {
       this.terminateSocket();
       return;
     }
+    // P1: disable Nagle on the upstream socket. These streams (raw tcp, tls
+    // passthrough, WebSocket) are interactive, so coalescing small writes only
+    // adds latency. setNoDelay may be unsupported on some transports; ignore it.
+    sock.setNoDelay(true);
     if (this.raw) {
       // No handshake: the connection is live and every byte is payload.
       this.headParsed = true;

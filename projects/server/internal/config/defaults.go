@@ -38,6 +38,12 @@ const (
 	// A 101-port default range; the operator must open it on the host firewall.
 	DefaultTCPPortMin = 20000
 	DefaultTCPPortMax = 20100
+	// Nagle off by default: interactive byte streams (SSH, database wire
+	// protocols) care more about latency than about coalescing tiny writes.
+	DefaultTCPNoDelay = true
+	// A 30s keep-alive prunes half-open connections through NAT/firewalls
+	// without being so aggressive it wastes packets. 0 disables it.
+	DefaultTCPKeepAliveSeconds = 30
 
 	DefaultTLSTunnelEnabled = false
 	// A dedicated port so passthrough TLS does not collide with the reverse
