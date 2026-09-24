@@ -83,7 +83,7 @@ PUBLIC_RESOLVER="1.1.1.1"
 
 resolve() {
 	# resolve NAME TYPE [RESOLVER]
-	dig +short "${3:+@$3}" "$2" "$1" 2>/dev/null | grep -vE '\.$' | grep . || true
+	dig +short ${3:+"@$3"} "$2" "$1" 2>/dev/null | grep -vE '\.$' | grep . || true
 }
 
 log_info "checking DNS for *.$base (expected target: ${host:-<unset>})"
