@@ -102,7 +102,7 @@ echo "rewrote $key" >&2
 '
 
 printf '%s\n%s\n' "$key" "$new_secret" |
-	env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" "$remote_rewrite" ||
+	rift_ssh "$RIFT_VPS_HOST" "$remote_rewrite" ||
 	die "failed to rewrite $key on the host"
 
 # `docker compose restart` keeps the existing container and so the environment
@@ -113,7 +113,7 @@ log_info "recreating riftd to pick up the new $key"
 recreate_cmd="cd '$REMOTE_DIR/deploy' || exit 1
 $RIFT_REMOTE_COMPOSE_PRELUDE
 docker compose \$compose_files up -d --no-build --force-recreate riftd"
-env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" "$recreate_cmd" ||
+rift_ssh "$RIFT_VPS_HOST" "$recreate_cmd" ||
 	die "riftd recreate failed; the new $key is written but not yet active"
 
 printf '%s\n' "$new_secret" >&2

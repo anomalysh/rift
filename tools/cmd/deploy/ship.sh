@@ -195,7 +195,7 @@ stage_harden() {
 	# abort: running harden.sh on a stale or partial tools/ could lock SSH.
 	run rift_push_tools "$host" ||
 		die "failed to ship tools/ to $host; not running harden on a stale copy"
-	run env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" \
+	run rift_ssh "$host" \
 		"bash /opt/rift/tools/cmd/host/harden.sh --force"
 }
 

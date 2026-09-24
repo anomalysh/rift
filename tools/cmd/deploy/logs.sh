@@ -75,4 +75,4 @@ remote="cd '$REMOTE_DIR/deploy' && docker compose -f docker-compose.yml -f docke
 [ -n "$since" ] && remote="$remote --since '$since'"
 [ -n "$service" ] && remote="$remote '$service'"
 
-exec env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" "$remote"
+rift_ssh "$RIFT_VPS_HOST" "$remote"

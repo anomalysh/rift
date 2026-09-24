@@ -48,7 +48,7 @@ load_env
 require_env RIFT_VPS_HOST
 
 # Fail early if there is no rollback image to restore.
-if ! env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" \
+if ! rift_ssh "$RIFT_VPS_HOST" \
 	"docker image inspect rift-riftd:rollback >/dev/null 2>&1"; then
 	die "no rollback image on the host (rift-riftd:rollback). A deploy must run first to save one."
 fi
@@ -71,7 +71,7 @@ $RIFT_REMOTE_COMPOSE_PRELUDE
 docker tag rift-riftd:rollback rift-riftd
 docker compose \$compose_files up -d --no-build --force-recreate riftd"
 log_info "restoring rift-riftd:rollback and restarting riftd"
-env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" "$rollback_cmd" ||
+rift_ssh "$RIFT_VPS_HOST" "$rollback_cmd" ||
 	die "rollback failed while restarting riftd"
 
 if [ "$do_verify" = true ] && [ -x "$RIFT_TOOLS_DIR/cmd/deploy/verify.sh" ]; then

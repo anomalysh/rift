@@ -132,39 +132,55 @@ rift_timeout() {
 	fi
 }
 
+# rift_env_file_val FILE KEY -- KEY's value in the env FILE, or empty if either
+# is absent. .env is compose's env-file format, not shell -- an unquoted value
+# containing spaces would break `.` -- so the value is read out with sed rather
+# than sourced. It strips an optional leading `export `, surrounding quotes and a
+# trailing ` # comment`, as compose does, so `RIFT_TCP_ENABLED=true  # on` reads
+# as true. Plain POSIX sh: RIFT_REMOTE_COMPOSE_PRELUDE ships it to the VPS.
+rift_env_file_val() {
+	[ -f "$1" ] || return 0
+	sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$2[[:space:]]*=[[:space:]]*//p" "$1" |
+		tail -n 1 | sed "s/[[:space:]]\{1,\}#.*$//" | tr -d "\"'\r"
+}
+
+# rift_ssh HOST [CMD...] / rift_scp HOST [ARGS...] -- run ssh.sh / scp.sh (their
+# auth, options and connection mux) against HOST, which overrides RIFT_VPS_HOST
+# for that one call. Passing the host explicitly also exports it, which a bare
+# `"$RIFT_TOOLS_DIR/cmd/remote/ssh.sh"` call would silently not do for an
+# unexported shell variable.
+rift_ssh() {
+	local host="$1"
+	shift
+	RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" "$@"
+}
+rift_scp() {
+	local host="$1"
+	shift
+	RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/scp.sh" "$@"
+}
+
 # RIFT_REMOTE_COMPOSE_PRELUDE -- a POSIX-sh snippet, run ON THE VPS from
 # /opt/rift/deploy, that sets $compose_files to the compose files this host's
-# .env enables. deploy.sh, rollback.sh and rotate.sh all splice it in, so a
-# rollback or a secret rotation recreates riftd with exactly the overlays the
-# deploy used (dropping docker-compose.tcp.yml there would silently unpublish
-# every raw-tunnel port).
+# .env enables. deploy.sh (including --plan), rollback.sh and rotate.sh all
+# splice it in, so a rollback or a secret rotation recreates riftd with exactly
+# the overlays the deploy used (dropping docker-compose.tcp.yml there would
+# silently unpublish every raw-tunnel port). The .env reader and the boolean
+# test are the local functions themselves, serialized with `declare -f`, so the
+# VPS parses .env exactly as harden.sh and the local tools do.
 #
-# .env is compose's env-file format, not shell -- an unquoted value containing
-# spaces would break `.` -- so values are read out with sed rather than sourced.
-# It strips an optional leading `export `, surrounding quotes and a trailing
-# ` # comment`, as compose does, so `RIFT_TCP_ENABLED=true  # on` reads as true.
 # Each feature adds ONLY its own ports, gated on its own flag, mirroring how
 # harden.sh opens them. The overlays must come last: docker-compose.prod clears
 # riftd's ports with `ports: !reset []`, and a later !reset would wipe the
 # tunnel ports they add.
 # shellcheck disable=SC2034,SC2016
-RIFT_REMOTE_COMPOSE_PRELUDE='set -e
-rift_env_val() {
-	[ -f .env ] || return 0
-	sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$1[[:space:]]*=[[:space:]]*//p" .env |
-		tail -n 1 | sed "s/[[:space:]]\{1,\}#.*$//" | tr -d "\"'\''\r"
-}
-rift_is_true() {
-	case "$(printf "%s" "${1:-}" | tr "[:upper:]" "[:lower:]")" in
-	1 | true | yes | on) return 0 ;;
-	*) return 1 ;;
-	esac
-}
-compose_files="-f docker-compose.yml -f docker-compose.prod.yml"
-if rift_is_true "$(rift_env_val RIFT_TCP_ENABLED)"; then
+RIFT_REMOTE_COMPOSE_PRELUDE="set -e
+$(declare -f rift_env_file_val is_true)
+"'compose_files="-f docker-compose.yml -f docker-compose.prod.yml"
+if is_true "$(rift_env_file_val .env RIFT_TCP_ENABLED)"; then
 	compose_files="$compose_files -f docker-compose.tcp.yml"
 fi
-if rift_is_true "$(rift_env_val RIFT_TLS_TUNNEL_ENABLED)"; then
+if is_true "$(rift_env_file_val .env RIFT_TLS_TUNNEL_ENABLED)"; then
 	compose_files="$compose_files -f docker-compose.tls.yml"
 fi'
 
@@ -177,10 +193,8 @@ fi'
 #   * Files are extracted as root-owned (--no-same-owner) so a VPS account whose
 #     UID happens to match the operator's local UID cannot edit scripts root runs.
 rift_push_tools() {
-	local host="$1"
 	tar -C "$RIFT_REPO_ROOT" --exclude='tools/.ssh' --exclude='__pycache__' -czf - tools |
-		env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" \
-			"set -e; mkdir -p /opt/rift; rm -rf /opt/rift/tools.new; mkdir /opt/rift/tools.new
+		rift_ssh "$1" "set -e; mkdir -p /opt/rift; rm -rf /opt/rift/tools.new; mkdir /opt/rift/tools.new
 tar --no-same-owner -C /opt/rift/tools.new --strip-components=1 -xzf -
 rm -rf /opt/rift/tools; mv /opt/rift/tools.new /opt/rift/tools"
 }

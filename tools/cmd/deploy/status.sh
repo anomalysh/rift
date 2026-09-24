@@ -60,7 +60,7 @@ if command -v free >/dev/null 2>&1; then
 fi
 '
 
-out="$(env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" "$remote_script")" ||
+out="$(rift_ssh "$RIFT_VPS_HOST" "$remote_script")" ||
 	die "could not reach the VPS (check RIFT_VPS_HOST and your key)"
 
 section="" down=0 seen=0

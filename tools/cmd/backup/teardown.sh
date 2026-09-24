@@ -93,16 +93,16 @@ if [ "$do_backup" = true ]; then
 	log_info "taking a final backup on $host"
 	rift_run rift_push_tools "$host" ||
 		die "could not ship tools/ to $host for the backup; aborted, nothing destroyed"
-	rift_run env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" \
+	rift_run rift_ssh "$host" \
 		"bash /opt/rift/tools/cmd/backup/backup.sh" ||
 		die "final backup failed on $host; aborted, nothing destroyed"
 	if ! is_true "${RIFT_DRY_RUN:-}"; then
-		latest="$(env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" \
+		latest="$(rift_ssh "$host" \
 			"ls -1d /opt/rift/backups/rift-* 2>/dev/null | tail -n 1")" ||
 			die "could not locate the backup on $host; aborted, nothing destroyed"
 		[ -n "$latest" ] || die "no backup found on $host after backing up; aborted, nothing destroyed"
 		(umask 077 && mkdir -p "$RIFT_REPO_ROOT/backups")
-		env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/scp.sh" --pull -r \
+		rift_scp "$host" --pull -r \
 			"$latest" "$RIFT_REPO_ROOT/backups/" ||
 			die "could not download $latest; aborted, nothing destroyed"
 		log_info "final backup saved to $RIFT_REPO_ROOT/backups/$(basename "$latest")"

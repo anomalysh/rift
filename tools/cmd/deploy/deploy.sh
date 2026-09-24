@@ -4,7 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/../../lib/common.sh"
-SSH="$RIFT_TOOLS_DIR/cmd/remote/ssh.sh"
 
 REMOTE_DIR="/opt/rift"
 
@@ -60,27 +59,22 @@ require_env RIFT_VPS_HOST
 if [ "$plan" = true ]; then
 	log_info "=== deploy plan for ${RIFT_VPS_USER:-root}@$RIFT_VPS_HOST:$REMOTE_DIR ==="
 
-	"$SSH" 'docker image inspect rift-riftd:rollback >/dev/null 2>&1 &&
+	rift_ssh "$RIFT_VPS_HOST" 'docker image inspect rift-riftd:rollback >/dev/null 2>&1 &&
 		echo "  rollback: rift-riftd:rollback is present (rollback.sh can restore it)" ||
 		echo "  rollback: no saved image yet (first deploy, or none since this feature landed)"' || true
 
-	# Which overlays the remote .env would add, using the same flag logic as the
-	# real deploy below.
-	"$SSH" "
-		cd '$REMOTE_DIR/deploy' 2>/dev/null || { echo '  compose: no $REMOTE_DIR/deploy yet'; exit 0; }
-		files='-f docker-compose.yml -f docker-compose.prod.yml'
-		val() { [ -f .env ] && sed -n \"s/^[[:space:]]*\$1[[:space:]]*=[[:space:]]*//p\" .env | tail -n1 | tr -d \"\\\"'\\r\"; }
-		istrue() { case \"\$(printf %s \"\${1:-}\" | tr A-Z a-z)\" in 1|true|yes|on) return 0;; *) return 1;; esac; }
-		istrue \"\$(val RIFT_TCP_ENABLED)\" && files=\"\$files -f docker-compose.tcp.yml\"
-		istrue \"\$(val RIFT_TLS_TUNNEL_ENABLED)\" && files=\"\$files -f docker-compose.tls.yml\"
-		echo \"  compose: docker compose \$files up -d --build\"
-	" || true
+	# Which overlays the remote .env would add: the real deploy's own prelude.
+	rift_ssh "$RIFT_VPS_HOST" "cd '$REMOTE_DIR/deploy' 2>/dev/null || { echo '  compose: no $REMOTE_DIR/deploy yet'; exit 0; }
+$RIFT_REMOTE_COMPOSE_PRELUDE
+echo \"  compose: docker compose \$compose_files up -d --build\"" || true
 
-	# .env key-set diff, names only (values never leave the boxes).
-	remote_keys="$("$SSH" "grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' '$REMOTE_DIR/deploy/.env' 2>/dev/null | sed 's/=\$//' | sort -u" || true)"
+	# .env key-set diff, names only (values never leave the boxes). Both sides
+	# list the names with the same function.
+	remote_keys="$(rift_ssh "$RIFT_VPS_HOST" "$(declare -f rift_env_keys)
+rift_env_keys '$REMOTE_DIR/deploy/.env'" || true)"
 	local_env="${RIFT_ENV_FILE:-$RIFT_REPO_ROOT/.env}"
 	if [ -f "$local_env" ]; then
-		local_keys="$(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$local_env" | sed 's/=$//' | sort -u)"
+		local_keys="$(rift_env_keys "$local_env")"
 		only_local="$(comm -23 <(printf '%s\n' "$local_keys") <(printf '%s\n' "$remote_keys"))"
 		only_remote="$(comm -13 <(printf '%s\n' "$local_keys") <(printf '%s\n' "$remote_keys"))"
 		[ -n "$only_local" ] && log_warn "  .env keys set locally but NOT on the VPS:$(printf ' %s' $only_local)"
@@ -99,12 +93,12 @@ log_info "target: ${RIFT_VPS_USER:-root}@$RIFT_VPS_HOST:$REMOTE_DIR (dry-run=$dr
 if [ "$dry_run" = true ]; then
 	log_info "[dry-run] would ensure $REMOTE_DIR/deploy exists"
 else
-	"$SSH" "mkdir -p '$REMOTE_DIR/deploy'"
+	rift_ssh "$RIFT_VPS_HOST" "mkdir -p '$REMOTE_DIR/deploy'"
 fi
 
 # 2. Best-effort check that the operator's secrets file is present.
 if [ "$dry_run" != true ]; then
-	if "$SSH" "test -f '$REMOTE_DIR/deploy/.env'"; then
+	if rift_ssh "$RIFT_VPS_HOST" "test -f '$REMOTE_DIR/deploy/.env'"; then
 		log_info "found $REMOTE_DIR/deploy/.env"
 	else
 		log_warn "no $REMOTE_DIR/deploy/.env on the VPS; compose will fail on required vars."
@@ -129,7 +123,7 @@ if [ "$dry_run" = true ]; then
 	log_info "[dry-run] would run: ${tar_cmd[*]} | ssh 'tar --no-same-owner -C $REMOTE_DIR -xzf -'"
 else
 	log_info "syncing projects/server/ and deploy/ to $REMOTE_DIR"
-	"${tar_cmd[@]}" | "$SSH" "tar --no-same-owner -C '$REMOTE_DIR' -xzf -"
+	"${tar_cmd[@]}" | rift_ssh "$RIFT_VPS_HOST" "tar --no-same-owner -C '$REMOTE_DIR' -xzf -"
 fi
 
 # 4. Build and (re)start the stack.
@@ -138,20 +132,19 @@ fi
 # raw-tunnel overlays live in the untracked $REMOTE_DIR/deploy/.env, which never
 # leaves the box. See RIFT_REMOTE_COMPOSE_PRELUDE in tools/lib/common.sh, shared
 # with rollback.sh and rotate.sh so every recreate uses the same overlays.
-remote_prelude="$RIFT_REMOTE_COMPOSE_PRELUDE"
 
 # Before rebuilding, tag the currently-running riftd image as :rollback so
 # tools/rollback.sh can restore it if this deploy turns out bad. Best-effort: a
 # first-ever deploy has no image yet, which is fine.
 compose_up="cd '$REMOTE_DIR/deploy' || exit 1
-$remote_prelude
+$RIFT_REMOTE_COMPOSE_PRELUDE
 docker image inspect rift-riftd >/dev/null 2>&1 && docker tag rift-riftd rift-riftd:rollback || true
 docker compose \$compose_files up -d --build"
 if [ "$dry_run" = true ]; then
 	log_info "[dry-run] would run on VPS: tag rift-riftd:rollback, then docker compose -f docker-compose.yml -f docker-compose.prod.yml [-f docker-compose.tcp.yml] [-f docker-compose.tls.yml] up -d --build"
 else
 	log_info "building and starting the stack on the VPS"
-	"$SSH" "$compose_up"
+	rift_ssh "$RIFT_VPS_HOST" "$compose_up"
 fi
 
 # 5. Reload Caddy.
@@ -163,15 +156,15 @@ fi
 # fallback when the admin API is unreachable.
 caddy_reload="docker exec rift-caddy-1 caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile"
 caddy_restart="cd '$REMOTE_DIR/deploy' || exit 1
-$remote_prelude
+$RIFT_REMOTE_COMPOSE_PRELUDE
 docker compose \$compose_files restart caddy"
 if [ "$dry_run" = true ]; then
 	log_info "[dry-run] would reload Caddy: $caddy_reload"
 else
 	log_info "reloading Caddy configuration"
-	if ! "$SSH" "$caddy_reload"; then
+	if ! rift_ssh "$RIFT_VPS_HOST" "$caddy_reload"; then
 		log_warn "caddy reload failed; restarting the container instead"
-		"$SSH" "$caddy_restart"
+		rift_ssh "$RIFT_VPS_HOST" "$caddy_restart"
 	fi
 fi
 

@@ -19,16 +19,15 @@ SSH_KEY_USER="${RIFT_HARDEN_SSH_USER:-root}"
 
 # env_file_val KEY -- KEY's value from the operator's .env, empty if unset.
 #
-# Reads rather than sources: .env is compose's env-file format, not shell, so an
-# unquoted value containing spaces would break `.`, and sourcing it would leak
-# every secret into the apt/sshd/nft children this script execs. The VPS layout
-# (ship.sh puts tools at /opt/rift/tools) is checked first, then a repo checkout.
+# Reads (with rift_env_file_val, the parser the deploy's compose prelude also
+# uses, so the firewall and the published ports agree on every flag) rather than
+# sources: sourcing would leak every secret into the apt/sshd/nft children this
+# script execs. The VPS layout (ship.sh puts tools at /opt/rift/tools) is
+# checked first, then a repo checkout.
 env_file_val() {
-	local key="$1" file val
+	local file val
 	for file in "$RIFT_REPO_ROOT/deploy/.env" "$RIFT_REPO_ROOT/.env"; do
-		[ -f "$file" ] || continue
-		val="$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$file" |
-			tail -n 1 | tr -d "\"'\r")"
+		val="$(rift_env_file_val "$file" "$1")"
 		if [ -n "$val" ]; then
 			printf '%s' "$val"
 			return 0

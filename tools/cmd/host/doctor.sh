@@ -89,10 +89,9 @@ else
 	# riftd silently ignores. The reverse -- example keys absent from .env -- is
 	# noise, because .env.example intentionally lists every optional tunable.
 	# Values are never read here.
-	set_keys() { grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$1" 2>/dev/null | sed 's/=$//' | sort -u; }
 	known_keys() { grep -oE '^#?[A-Za-z_][A-Za-z0-9_]*=' "$1" 2>/dev/null | sed 's/^#//;s/=$//' | sort -u; }
 	if [ -f "$example" ]; then
-		unknown="$(comm -23 <(set_keys "$env_file") <(known_keys "$example"))"
+		unknown="$(comm -23 <(rift_env_keys "$env_file") <(known_keys "$example"))"
 		if [ -n "$unknown" ]; then
 			warn "keys in your .env that .env.example does not document (typo?):"
 			printf '          %s\n' "$unknown"
