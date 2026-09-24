@@ -123,7 +123,9 @@ fi
 #    Caddy's DNS-01 propagation check (which may use the local view) will never
 #    agree with the CA (which uses the public view) and issuance will hang.
 if [ "$tls_mode" = "dns01" ]; then
-	auth_ns="$(resolve "$base" NS "$PUBLIC_RESOLVER" | head -1)"
+	# Not resolve(): it drops dotted answers (CNAME targets), and every NS
+	# answer is a dotted name, so it would always come back empty.
+	auth_ns="$(dig +short "@$PUBLIC_RESOLVER" NS "$base" 2>/dev/null | grep . | head -1 || true)"
 	if [ -n "$auth_ns" ]; then
 		auth_view="$(resolve "$wildcard_probe" A "$auth_ns")"
 		pub_view="$a"

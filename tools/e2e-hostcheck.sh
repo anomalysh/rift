@@ -276,7 +276,7 @@ SH
 	run_harden lockout
 	check "harden refuses without a usable key" "$([ "$HRC" -ne 0 ] && echo nonzero || echo zero)" "nonzero"
 	check "no ssh drop-in was written" \
-		"$(dexec bash -c 'test -e /etc/ssh/sshd_config.d/99-rift.conf && echo yes || echo no')" "no"
+		"$(dexec bash -c 'test -e /etc/ssh/sshd_config.d/00-rift.conf && echo yes || echo no')" "no"
 	check "password auth is still enabled" \
 		"$(dexec sshd -T 2>/dev/null | awk '/^passwordauthentication /{print $2}')" "yes"
 }
@@ -293,7 +293,7 @@ phase_workstation() {
 	check "harden refuses without the provisioning marker" \
 		"$([ "$HRC" -ne 0 ] && echo nonzero || echo zero)" "nonzero"
 	check "no ssh drop-in was written" \
-		"$(dexec bash -c 'test -e /etc/ssh/sshd_config.d/99-rift.conf && echo yes || echo no')" "no"
+		"$(dexec bash -c 'test -e /etc/ssh/sshd_config.d/00-rift.conf && echo yes || echo no')" "no"
 	check "no nftables config was written" \
 		"$(dexec bash -c 'test -e /etc/docker/daemon.json && echo yes || echo no')" "no"
 }

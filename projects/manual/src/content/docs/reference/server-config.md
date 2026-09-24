@@ -143,8 +143,8 @@ place. The TLS provider credentials (`RIFT_DNS_*`, `RIFT_ACMEDNS_*`,
 | `RIFT_ACME_CA_URL`        | Caddy              | ACME directory URL when `internal-ca`.                            |
 | `RIFT_ACME_CA_ROOT`       | Caddy              | PEM signing the ACME server's own HTTPS cert when `internal-ca`.   |
 | `RIFT_CADDY_IMAGE`        | compose            | Caddy image tag (`dns01` needs a plugin-built image).             |
-| `RIFT_CADDY_DNS_PLUGINS`  | `build-caddy.sh`   | Space-separated Go module paths to compile into the Caddy image.  |
-| `RIFT_CADDY_VERSION`      | `build-caddy.sh`   | Caddy major version or tag to build.                              |
+| `RIFT_CADDY_DNS_PLUGINS`  | `make build-caddy` | Space-separated Go module paths to compile into the Caddy image.  |
+| `RIFT_CADDY_VERSION`      | `make build-caddy` | Caddy major version or tag to build.                              |
 | `RIFT_UPSTREAM_HOST`      | Caddy              | Compose service name Caddy proxies to (default `riftd`).          |
 | `RIFT_INGRESS_PORT`       | Caddy              | Upstream ingress port Caddy dials. Must match `RIFT_INGRESS_ADDR`. |
 | `RIFT_GATEWAY_PORT`       | Caddy              | Upstream gateway port Caddy dials. Must match `RIFT_GATEWAY_ADDR`. |

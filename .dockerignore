@@ -14,8 +14,8 @@ projects/manual/node_modules
 .env.*
 **/.env.*
 !.env.example
-*.pem
-*.key
+**/*.pem
+**/*.key
 backups
 rift-*-db.dump
 rift-*-caddy.tar.gz

@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMMANDS=$(
 	cat <<'TSV'
 provision create        cmd/provision/provision.sh  Create a VPS and wait for SSH
-provision destroy       cmd/provision/provision.sh  Destroy an instance (pass --destroy <id>)
+provision destroy       cmd/provision/provision.sh  Destroy an instance (pass <id>)
 provision key           cmd/provision/key.sh        Generate a deploy key and install it on the VPS
 host      harden        cmd/host/harden.sh          Host-harden the VPS (sshd, nftables, fail2ban)
 host      check-dns     cmd/host/check-dns.sh       Advisory DNS / split-horizon check
@@ -99,6 +99,16 @@ script="$(lookup "$group" "$verb")"
 # `deploy plan` is `remote-deploy.sh --plan`; wire that one alias explicitly.
 if [ "$group" = deploy ] && [ "$verb" = plan ]; then
 	set -- --plan "$@"
+fi
+
+# `provision destroy` shares provision.sh with `provision create`, whose default
+# action is to CREATE (and bill) an instance. Map the verb to --destroy and
+# refuse to run without an id, so a bare `rift-ops provision destroy` can never
+# fall through to creating a VPS.
+if [ "$group" = provision ] && [ "$verb" = destroy ]; then
+	[ "$#" -gt 0 ] && [ "${1#-}" = "$1" ] ||
+		die "usage: rift-ops provision destroy <instance-id> [--provider NAME]"
+	[ "$1" = --destroy ] || set -- --destroy "$@"
 fi
 
 exec bash "$SCRIPT_DIR/$script" "$@"

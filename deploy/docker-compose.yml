@@ -98,9 +98,12 @@ services:
       RIFT_TLS_TUNNEL_ADVERTISE_PORT: ${RIFT_TLS_TUNNEL_ADVERTISE_PORT:-8443}
     ports:
       # Local only. The prod override clears these with `ports: !reset []`.
-      - "8080:8080" # ingress
-      - "8081:8081" # gateway
-      - "8082:8082" # admin (never published in production)
+      # Bound to loopback: this stack runs with a publicly known admin token,
+      # and Docker's published ports bypass host firewalls such as ufw, so
+      # 0.0.0.0 would let anyone on the LAN mint tunnel tokens.
+      - "127.0.0.1:8080:8080" # ingress
+      - "127.0.0.1:8081:8081" # gateway
+      - "127.0.0.1:8082:8082" # admin (never published in production)
     depends_on:
       postgres:
         condition: service_healthy

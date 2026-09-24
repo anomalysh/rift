@@ -44,8 +44,8 @@ while [ "$#" -gt 0 ]; do
 	shift
 done
 
-require_env RIFT_VPS_HOST
 load_env
+require_env RIFT_VPS_HOST
 
 # Fail early if there is no rollback image to restore.
 if ! env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" \
@@ -62,10 +62,14 @@ fi
 
 # Re-point the deploy tag at the saved image and restart riftd without a rebuild,
 # so compose uses the restored image rather than recompiling the current source.
-rollback_cmd="set -e
-cd '$REMOTE_DIR/deploy'
+#
+# The overlays come from the same prelude deploy.sh uses: recreating riftd with
+# only the base and prod files would drop the tcp/tls overlays and unpublish
+# every raw-tunnel port.
+rollback_cmd="cd '$REMOTE_DIR/deploy' || exit 1
+$RIFT_REMOTE_COMPOSE_PRELUDE
 docker tag rift-riftd:rollback rift-riftd
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build --force-recreate riftd"
+docker compose \$compose_files up -d --no-build --force-recreate riftd"
 log_info "restoring rift-riftd:rollback and restarting riftd"
 env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" "$rollback_cmd" ||
 	die "rollback failed while restarting riftd"

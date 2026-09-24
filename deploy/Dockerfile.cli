@@ -11,7 +11,7 @@ FROM oven/bun:1.3.14 AS build
 WORKDIR /src
 
 COPY projects/cli/ ./
-RUN bun install
+RUN bun install --frozen-lockfile
 
 # `bun build --compile` bakes the Bun runtime and all sources into one binary.
 # Assumes the CLI entrypoint is projects/cli/src/index.ts (adjust if the CLI differs).

@@ -103,9 +103,9 @@ else
 fi
 
 printf '\n=== dns (advisory) ===\n'
-if [ -x "$RIFT_TOOLS_DIR/check-dns.sh" ] && [ -f "$env_file" ]; then
+if [ -x "$RIFT_TOOLS_DIR/cmd/host/check-dns.sh" ] && [ -f "$env_file" ]; then
 	# check-dns is itself advisory and never fails; surface a one-line summary.
-	if bash "$RIFT_TOOLS_DIR/check-dns.sh" >/dev/null 2>&1; then
+	if bash "$RIFT_TOOLS_DIR/cmd/host/check-dns.sh" >/dev/null 2>&1; then
 		ok "check-dns.sh ran (see 'make check-dns' for detail)"
 	else
 		warn "check-dns.sh reported an issue (run 'make check-dns' for detail)"

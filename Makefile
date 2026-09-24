@@ -71,7 +71,7 @@ rollback: ## Roll riftd back to the previous image saved by the last deploy (ARG
 	@$(LOAD_ENV) bash tools/rift-ops deploy rollback $(ARGS)
 
 rotate-secret: ## Rotate a secret on the VPS: make rotate-secret WHICH=admin (or peer)
-	@$(LOAD_ENV) bash tools/rift-ops secret rotate $(WHICH) $(ARGS)
+	@$(LOAD_ENV) bash tools/rift-ops secret rotate "$(WHICH)" $(ARGS)
 
 teardown: ## Destroy the provisioned instance + local state (ARGS=--backup --yes)
 	@$(LOAD_ENV) bash tools/rift-ops backup teardown $(ARGS)
@@ -80,7 +80,7 @@ provision-key: ## Generate a deploy key and install it on the VPS
 	@$(LOAD_ENV) bash tools/rift-ops provision key
 
 mint-token: ## Mint an admin token: make mint-token NAME=alice
-	@$(LOAD_ENV) bash tools/rift-ops secret mint-token $(NAME)
+	@$(LOAD_ENV) bash tools/rift-ops secret mint-token "$(NAME)"
 
 # --- guided setup & pipeline -------------------------------------------------
 setup: ## Interactive wizard: generate an untracked .env (ARGS=--force)
@@ -120,7 +120,7 @@ backup: ## Back up Postgres + caddy_data (ARGS=--retain 14)
 	bash tools/rift-ops backup backup $(ARGS)
 
 restore: ## Restore a backup: make restore FROM=/opt/rift/backups/rift-<ts> (ARGS=--yes)
-	bash tools/rift-ops backup restore --from $(FROM) $(ARGS)
+	bash tools/rift-ops backup restore --from "$(FROM)" $(ARGS)
 
 # --- container images --------------------------------------------------------
 publish-images: ## Build (ARGS=--push to publish) the ghcr container images

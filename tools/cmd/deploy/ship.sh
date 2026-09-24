@@ -193,7 +193,7 @@ stage_harden() {
 	# --force because the real host has no hostcheck marker (that guard exists
 	# to stop the script running on a developer laptop). A failed upload must
 	# abort: running harden.sh on a stale or partial tools/ could lock SSH.
-	run env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/scp.sh" -r "$RIFT_TOOLS_DIR" "/opt/rift/tools" ||
+	run rift_push_tools "$host" ||
 		die "failed to ship tools/ to $host; not running harden on a stale copy"
 	run env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" \
 		"bash /opt/rift/tools/cmd/host/harden.sh --force"

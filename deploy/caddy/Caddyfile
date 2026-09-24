@@ -30,16 +30,22 @@
 
 	import /etc/caddy/modes/{$RIFT_TLS_MODE}.global.caddy
 
-	# Long-lived streams are the entire point of this service. Any non-zero
-	# read/write/idle timeout here would silently sever a WebSocket tunnel or a
-	# slow streamed response, so every server timeout is disabled. Liveness is
-	# enforced by riftd's own application-level heartbeat, not by the proxy.
+	# Long-lived streams are the entire point of this service. A read_body or
+	# write timeout would silently sever a WebSocket tunnel or a slow streamed
+	# response, so those two are disabled; liveness is enforced by riftd's own
+	# application-level heartbeat, not by the proxy.
+	#
+	# read_header and idle stay bounded: neither touches an upgraded WebSocket
+	# or a response in flight. read_header only covers the request headers, and
+	# idle only the gap between requests on a keep-alive connection. Unbounded,
+	# they let a client hold sockets open forever by trickling headers or idling
+	# (slowloris) until the proxy runs out of file descriptors.
 	servers {
 		timeouts {
 			read_body 0
-			read_header 0
+			read_header 10s
 			write 0
-			idle 0
+			idle 5m
 		}
 	}
 }

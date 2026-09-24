@@ -3,12 +3,12 @@
 # Caddy's DNS solvers are compile-time modules, so "support many providers"
 # means building the binary with the ones you need. Only RIFT_TLS_MODE=dns01
 # requires this image at all; the http01, self and internal modes run on stock
-# Caddy. Build it with tools/build-caddy.sh, which reads RIFT_CADDY_DNS_PLUGINS
+# Caddy. Build it with `tools/rift-ops release caddy`, which reads RIFT_CADDY_DNS_PLUGINS
 # from your .env.
 #
 # The build is deliberately not run on the deployment host: compiling Caddy
 # wants more memory than a small VPS has, and shipping a Go toolchain to
-# production is a needless surface. build-caddy.sh builds locally and can load
+# production is a needless surface. `rift-ops release caddy` builds locally and can load
 # the image onto the remote host over SSH.
 
 ARG CADDY_VERSION=2
@@ -37,11 +37,16 @@ COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 # cannot parse the provider snippet.
 ARG RIFT_CADDY_DNS_PLUGINS="github.com/caddy-dns/rfc2136 github.com/caddy-dns/acmedns"
 RUN set -eux; \
-	caddy list-modules | grep -q '^dns.providers\.' || { \
-		echo "no dns.providers modules compiled in"; exit 1; \
-	}; \
+	modules="$(caddy list-modules)"; \
+	for plugin in ${RIFT_CADDY_DNS_PLUGINS}; do \
+		# caddy-dns modules register as dns.providers.<last path element>.
+		name="${plugin##*/}"; name="${name%%@*}"; \
+		printf '%s\n' "$modules" | grep -qx "dns.providers.${name}" || { \
+			echo "requested plugin ${plugin} did not register dns.providers.${name}"; exit 1; \
+		}; \
+	done; \
 	echo "compiled DNS providers:"; \
-	caddy list-modules | grep '^dns.providers\.'
+	printf '%s\n' "$modules" | grep '^dns.providers\.'
 
 # OCI image metadata. The publish workflow (and tools/publish-images.sh) inject
 # real values via --build-arg; the defaults keep a plain `docker build` emitting

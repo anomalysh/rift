@@ -18,12 +18,13 @@ usage() {
 Usage: rift-ops backup teardown [--backup] [--yes] [--state-file F] [--dry-run]
 
 Tear down the rift instance recorded in the state file:
-  1. (with --backup) take a final backup of the running stack first;
+  1. (with --backup) back up the stack on the instance and download it to
+     ./backups/ first; any backup failure aborts before destroying anything;
   2. destroy the cloud instance (provider DELETE; idempotent);
   3. remove the local state file and stale SSH control sockets.
 
 Options:
-  --backup        Run 'make backup' against the local stack before destroying.
+  --backup        Back up the instance's stack and pull it to ./backups/ first.
   --yes           Do not prompt for confirmation (for scripts).
   --state-file F  State file to read the instance id from (default: $STATE_FILE_DEFAULT).
   --dry-run       Print what would happen, change nothing.
@@ -82,19 +83,36 @@ if [ "$assume_yes" != true ] && [ "$dry_run" != true ]; then
 	[ "$reply" = "$instance_id" ] || die "confirmation did not match; aborted"
 fi
 
-# 1. Final backup (best effort; a failed backup must not block the destroy the
-# operator explicitly asked for, but it is loud about it).
+# 1. Final backup, taken ON the instance (the stack lives there, not here) and
+# pulled down to ./backups/ before anything is destroyed. Backups on the VPS
+# (/opt/rift/backups) die with it, so a backup that is not safely local is no
+# backup: any failure aborts the teardown with the instance untouched.
 if [ "$do_backup" = true ]; then
-	log_info "taking a final backup of the local stack"
-	if ! rift_run bash "$RIFT_TOOLS_DIR/backup.sh"; then
-		log_warn "final backup failed; continuing with teardown (instance still destroyed)"
+	host="${ipv4:-${RIFT_VPS_HOST:-}}"
+	[ -n "$host" ] || die "--backup: no host (state file has no ipv4 and RIFT_VPS_HOST is unset)"
+	log_info "taking a final backup on $host"
+	rift_run rift_push_tools "$host" ||
+		die "could not ship tools/ to $host for the backup; aborted, nothing destroyed"
+	rift_run env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" \
+		"bash /opt/rift/tools/cmd/backup/backup.sh" ||
+		die "final backup failed on $host; aborted, nothing destroyed"
+	if ! is_true "${RIFT_DRY_RUN:-}"; then
+		latest="$(env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" \
+			"ls -1d /opt/rift/backups/rift-* 2>/dev/null | tail -n 1")" ||
+			die "could not locate the backup on $host; aborted, nothing destroyed"
+		[ -n "$latest" ] || die "no backup found on $host after backing up; aborted, nothing destroyed"
+		(umask 077 && mkdir -p "$RIFT_REPO_ROOT/backups")
+		env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/scp.sh" --pull -r \
+			"$latest" "$RIFT_REPO_ROOT/backups/" ||
+			die "could not download $latest; aborted, nothing destroyed"
+		log_info "final backup saved to $RIFT_REPO_ROOT/backups/$(basename "$latest")"
 	fi
 fi
 
 # 2. Destroy the instance (idempotent: provision.sh --destroy treats an
 # already-gone id as success).
 log_info "destroying instance $instance_id"
-rift_run bash "$RIFT_TOOLS_DIR/provision.sh" --destroy "$instance_id" ${provider:+--provider "$provider"}
+rift_run bash "$RIFT_TOOLS_DIR/cmd/provision/provision.sh" --destroy "$instance_id" ${provider:+--provider "$provider"}
 
 # 3. Local cleanup: the state file (so a later provision starts clean) and the
 # SSH control sockets pointed at a host that no longer exists.

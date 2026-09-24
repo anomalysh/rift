@@ -527,7 +527,7 @@ say "Next steps:"
 if [ "$IS_PROD" = true ]; then
 	if [ "$TLS_MODE" = "dns01" ]; then
 		say "  1. Build a Caddy image with the '$PROVIDER' DNS plugin:  make build-caddy"
-		say "       (runs tools/build-caddy.sh; set RIFT_CADDY_IMAGE to the tag it prints)"
+		say "       (runs tools/rift-ops release caddy; set RIFT_CADDY_IMAGE to the tag it prints)"
 		say "  2. Fill in the '$PROVIDER' credentials in $OUT if you left any blank."
 		say "  3. Deploy to the VPS:                                   make deploy"
 		say "       (runs tools/remote-deploy.sh)"

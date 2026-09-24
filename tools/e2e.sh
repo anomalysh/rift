@@ -240,8 +240,7 @@ ensure_caddy_dns_image() {
 	fi
 	log_info "building $CADDY_DNS_IMAGE with the rfc2136 solver (this compiles Caddy)"
 	RIFT_CADDY_DNS_PLUGINS="github.com/caddy-dns/rfc2136" \
-		RIFT_CADDY_IMAGE="$CADDY_DNS_IMAGE" \
-		"$SCRIPT_DIR/build-caddy.sh" >/dev/null 2>&1 ||
+		bash "$SCRIPT_DIR/cmd/release/caddy.sh" --image "$CADDY_DNS_IMAGE" >/dev/null 2>&1 ||
 		die "could not build $CADDY_DNS_IMAGE"
 }
 

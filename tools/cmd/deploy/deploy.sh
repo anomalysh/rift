@@ -113,6 +113,9 @@ fi
 
 # 3. Ship projects/server/ and deploy/ (excluding local-only artifacts). The remote .env
 #    is not in our tree, so extraction overlays files without clobbering it.
+#    Root extracts with --no-same-owner: tar would otherwise keep the operator's
+#    local UIDs, letting a VPS account with a matching UID edit the compose files
+#    and server source that the next root-run `docker compose up --build` executes.
 tar_cmd=(tar -C "$RIFT_REPO_ROOT"
 	--exclude='deploy/caddy/data'
 	--exclude='deploy/caddy/config'
@@ -122,45 +125,19 @@ tar_cmd=(tar -C "$RIFT_REPO_ROOT"
 	-czf - projects/server deploy)
 
 if [ "$dry_run" = true ]; then
-	log_info "[dry-run] would run: ${tar_cmd[*]} | ssh 'tar -C $REMOTE_DIR -xzf -'"
+	log_info "[dry-run] would run: ${tar_cmd[*]} | ssh 'tar --no-same-owner -C $REMOTE_DIR -xzf -'"
 else
 	log_info "syncing projects/server/ and deploy/ to $REMOTE_DIR"
-	"${tar_cmd[@]}" | "$SSH" "tar -C '$REMOTE_DIR' -xzf -"
+	"${tar_cmd[@]}" | "$SSH" "tar --no-same-owner -C '$REMOTE_DIR' -xzf -"
 fi
 
 # 4. Build and (re)start the stack.
 #
 # Which compose files to stack is decided ON THE VPS: the flags that select the
 # raw-tunnel overlays live in the untracked $REMOTE_DIR/deploy/.env, which never
-# leaves the box. .env is compose's env-file format, not shell — an unquoted
-# value containing spaces would break `.` — so the booleans are read out with
-# sed rather than sourced. Each feature adds ONLY its own ports, gated on its own
-# flag, mirroring how tools/harden.sh opens them; publishing the other feature's
-# ports would bind dead host ports the firewall never opens. The overlays must
-# come last: docker-compose.prod clears riftd's ports with `ports: !reset []`,
-# and a later !reset would wipe the tunnel ports they add.
-remote_prelude=$(
-	cat <<'SNIPPET'
-set -e
-rift_env_val() {
-	[ -f .env ] || return 0
-	sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" .env | tail -n 1 | tr -d "\"'\r"
-}
-rift_is_true() {
-	case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
-	1 | true | yes | on) return 0 ;;
-	*) return 1 ;;
-	esac
-}
-compose_files="-f docker-compose.yml -f docker-compose.prod.yml"
-if rift_is_true "$(rift_env_val RIFT_TCP_ENABLED)"; then
-	compose_files="$compose_files -f docker-compose.tcp.yml"
-fi
-if rift_is_true "$(rift_env_val RIFT_TLS_TUNNEL_ENABLED)"; then
-	compose_files="$compose_files -f docker-compose.tls.yml"
-fi
-SNIPPET
-)
+# leaves the box. See RIFT_REMOTE_COMPOSE_PRELUDE in tools/lib/common.sh, shared
+# with rollback.sh and rotate.sh so every recreate uses the same overlays.
+remote_prelude="$RIFT_REMOTE_COMPOSE_PRELUDE"
 
 # Before rebuilding, tag the currently-running riftd image as :rollback so
 # tools/rollback.sh can restore it if this deploy turns out bad. Best-effort: a

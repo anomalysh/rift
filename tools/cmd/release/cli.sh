@@ -40,6 +40,8 @@ dist/release/<version>/.
 Options:
   --version <v>   Override the release version (default: projects/cli/package.json).
   --clean         Remove the version output directory before building.
+  --strict        Fail if any target is skipped (CI releases use this, so a
+                  release never ships silently missing a platform).
   -h, --help      Show this help and exit.
 
 Environment:
@@ -53,7 +55,7 @@ pkg_version() {
 }
 
 main() {
-	local version="" clean=0
+	local version="" clean=0 strict=0
 	while [ $# -gt 0 ]; do
 		case "$1" in
 		--version)
@@ -67,6 +69,10 @@ main() {
 			;;
 		--clean)
 			clean=1
+			shift
+			;;
+		--strict)
+			strict=1
 			shift
 			;;
 		-h | --help)
@@ -127,6 +133,9 @@ main() {
 	rm -f "$out"/*.map
 
 	[ "${#built[@]}" -gt 0 ] || die "no targets built successfully"
+	if [ "$strict" -eq 1 ] && [ "${#skipped[@]}" -gt 0 ]; then
+		die "--strict: refusing to release without targets: ${skipped[*]}"
+	fi
 
 	regen_docs
 	package_artifacts "$out" "${built[@]}"

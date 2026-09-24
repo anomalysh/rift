@@ -41,6 +41,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 require_cmd awk
+load_env
 require_env RIFT_VPS_HOST
 
 # One round trip: run a small script on the VPS that prints container state (one

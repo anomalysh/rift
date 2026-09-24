@@ -58,6 +58,27 @@ done
 # The rift-ops dispatcher has no .sh extension but is the same contract.
 check_help "$RIFT_TOOLS_DIR/rift-ops"
 
+printf '\n=== referenced scripts exist ===\n'
+# --help never reaches the code paths that call sibling scripts, so a rename
+# (tools/release.sh -> cmd/release/cli.sh, ...) left callers pointing at files
+# that no longer exist, failing only in the release, e2e and teardown runs that
+# needed them. Resolve every RIFT_TOOLS_DIR- and SCRIPT_DIR-relative .sh path
+# literal against the directory it names and assert the file is there.
+while IFS=: read -r file _ ref; do
+	case "$ref" in
+	'$RIFT_TOOLS_DIR/'*) path="$RIFT_TOOLS_DIR/${ref#\$RIFT_TOOLS_DIR/}" ;;
+	'$SCRIPT_DIR/'*) path="$(dirname "$file")/${ref#\$SCRIPT_DIR/}" ;;
+	*) continue ;;
+	esac
+	if [ -f "$path" ]; then
+		pass=$((pass + 1))
+	else
+		printf '    FAIL  %s references missing %s\n' "${file#"$RIFT_REPO_ROOT"/}" "$ref"
+		fail=$((fail + 1))
+	fi
+done < <(grep -rnoE '\$(RIFT_TOOLS_DIR|SCRIPT_DIR)/[A-Za-z0-9_./-]+\.sh' \
+	"$RIFT_TOOLS_DIR" --include='*.sh' --include=rift-ops)
+
 printf '\n=== summary ===\n  passed=%d failed=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || die "smoke test failed"
 log_info "smoke test passed"

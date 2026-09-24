@@ -56,13 +56,17 @@ register_cleanup() {
 	_RIFT_CLEANUP_CMDS+=("$1")
 }
 
-# rift_mktemp_dir [TEMPLATE] — make a temp directory and register its removal, so
-# a script never leaks one on an early exit or a signal.
+# rift_mktemp_dir VAR [TEMPLATE] — make a temp directory, store its path in the
+# variable named VAR, and register its removal, so a script never leaks one on an
+# early exit or a signal. It assigns by name rather than printing the path
+# because `d="$(rift_mktemp_dir)"` would run register_cleanup inside the command
+# substitution's subshell, whose EXIT trap deletes the directory the moment the
+# substitution returns.
 rift_mktemp_dir() {
-	local d
-	d="$(mktemp -d "${1:-${TMPDIR:-/tmp}/rift.XXXXXX}")"
-	register_cleanup "rm -rf \"$d\""
-	printf '%s' "$d"
+	local _rift_d
+	_rift_d="$(mktemp -d "${2:-${TMPDIR:-/tmp}/rift.XXXXXX}")"
+	register_cleanup "rm -rf \"$_rift_d\""
+	printf -v "$1" '%s' "$_rift_d"
 }
 
 # rift_run CMD... — run a mutating command, unless RIFT_DRY_RUN is truthy, in

@@ -13,6 +13,9 @@
 # backup each run and exits non-zero on any failure, because a cron job that
 # fails silently is worse than no cron job.
 set -euo pipefail
+# The caddy archive holds the ACME account key and every TLS private key; the
+# dump holds token hashes. Nothing this script writes may be group/world-readable.
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh

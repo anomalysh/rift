@@ -25,7 +25,7 @@ WORKDIR /src
 COPY projects/cli/ ./projects/cli/
 COPY tools/ ./tools/
 
-RUN cd projects/cli && bun install
+RUN cd projects/cli && bun install --frozen-lockfile
 
 # Build every target into /src/dist/release/<version>/. --clean makes the layer
 # deterministic regardless of any stale output copied in.

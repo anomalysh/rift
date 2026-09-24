@@ -117,6 +117,59 @@ RIFT_SSH_OPTS=(
 	-o ControlPersist=5m
 )
 
+# RIFT_REMOTE_COMPOSE_PRELUDE -- a POSIX-sh snippet, run ON THE VPS from
+# /opt/rift/deploy, that sets $compose_files to the compose files this host's
+# .env enables. deploy.sh, rollback.sh and rotate.sh all splice it in, so a
+# rollback or a secret rotation recreates riftd with exactly the overlays the
+# deploy used (dropping docker-compose.tcp.yml there would silently unpublish
+# every raw-tunnel port).
+#
+# .env is compose's env-file format, not shell -- an unquoted value containing
+# spaces would break `.` -- so values are read out with sed rather than sourced.
+# It strips an optional leading `export `, surrounding quotes and a trailing
+# ` # comment`, as compose does, so `RIFT_TCP_ENABLED=true  # on` reads as true.
+# Each feature adds ONLY its own ports, gated on its own flag, mirroring how
+# harden.sh opens them. The overlays must come last: docker-compose.prod clears
+# riftd's ports with `ports: !reset []`, and a later !reset would wipe the
+# tunnel ports they add.
+# shellcheck disable=SC2034,SC2016
+RIFT_REMOTE_COMPOSE_PRELUDE='set -e
+rift_env_val() {
+	[ -f .env ] || return 0
+	sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$1[[:space:]]*=[[:space:]]*//p" .env |
+		tail -n 1 | sed "s/[[:space:]]\{1,\}#.*$//" | tr -d "\"'\''\r"
+}
+rift_is_true() {
+	case "$(printf "%s" "${1:-}" | tr "[:upper:]" "[:lower:]")" in
+	1 | true | yes | on) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+compose_files="-f docker-compose.yml -f docker-compose.prod.yml"
+if rift_is_true "$(rift_env_val RIFT_TCP_ENABLED)"; then
+	compose_files="$compose_files -f docker-compose.tcp.yml"
+fi
+if rift_is_true "$(rift_env_val RIFT_TLS_TUNNEL_ENABLED)"; then
+	compose_files="$compose_files -f docker-compose.tls.yml"
+fi'
+
+# rift_push_tools HOST -- replace /opt/rift/tools on HOST with this checkout's
+# tools/, for the scripts that must run ON the box (harden.sh, backup.sh).
+#   * It REPLACES rather than copies into: `scp -r tools /opt/rift/tools` onto an
+#     existing directory nests a stale tools/tools and runs the old scripts.
+#   * It never ships tools/.ssh: that private deploy key is shared by every
+#     provisioned host and must not be left on one of them.
+#   * Files are extracted as root-owned (--no-same-owner) so a VPS account whose
+#     UID happens to match the operator's local UID cannot edit scripts root runs.
+rift_push_tools() {
+	local host="$1"
+	tar -C "$RIFT_REPO_ROOT" --exclude='tools/.ssh' --exclude='__pycache__' -czf - tools |
+		env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" \
+			"set -e; mkdir -p /opt/rift; rm -rf /opt/rift/tools.new; mkdir /opt/rift/tools.new
+tar --no-same-owner -C /opt/rift/tools.new --strip-components=1 -xzf -
+rm -rf /opt/rift/tools; mv /opt/rift/tools.new /opt/rift/tools"
+}
+
 # Runtime primitives (repo root, load_env, register_cleanup, rift_run). Sourced
 # here so every script that sources common.sh gets them without a second source
 # line; keep this last, after common.sh's own definitions it depends on.

@@ -33,7 +33,7 @@ esac
 require_cmd python3 sha256sum
 
 PORT="${RIFT_E2E_INSTALL_PORT:-18099}"
-WORK="$(rift_mktemp_dir)"
+rift_mktemp_dir WORK
 RELEASE="$WORK/release/v0.1.0"
 mkdir -p "$RELEASE"
 

@@ -104,10 +104,16 @@ printf '%s\n%s\n' "$key" "$new_secret" |
 	env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" "$remote_rewrite" ||
 	die "failed to rewrite $key on the host"
 
-log_info "restarting riftd to pick up the new $key"
-env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" \
-	"cd '$REMOTE_DIR/deploy' && docker compose -f docker-compose.yml -f docker-compose.prod.yml restart riftd" ||
-	die "riftd restart failed; the new $key is written but not yet active"
+# `docker compose restart` keeps the existing container and so the environment
+# it was CREATED with: the old secret would stay live. Only recreating the
+# container re-reads .env. Use the deploy's overlay set so the recreate does not
+# drop the raw-tunnel ports.
+log_info "recreating riftd to pick up the new $key"
+recreate_cmd="cd '$REMOTE_DIR/deploy' || exit 1
+$RIFT_REMOTE_COMPOSE_PRELUDE
+docker compose \$compose_files up -d --no-build --force-recreate riftd"
+env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" "$recreate_cmd" ||
+	die "riftd recreate failed; the new $key is written but not yet active"
 
 printf '%s\n' "$new_secret" >&2
 log_info "$key rotated. The value above is the ONLY copy shown; it is now in $REMOTE_DIR/deploy/.env."
