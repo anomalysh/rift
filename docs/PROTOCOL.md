@@ -86,6 +86,14 @@ data frame before it has replied to `hello`.
 
 * `subdomain` is optional. When empty the gateway allocates a random one.
 * `local_port` is informational; it is never used for routing.
+* `domains` (optional) lists BYO custom hostnames to route to this tunnel. The
+  gateway accepts at most `RIFT_MAX_CUSTOM_DOMAINS_PER_TUNNEL` (default 10)
+  RFC 1035 names, never the base domain, a name under it, or the gateway
+  hostname (`invalid_domain`). A domain registered to another token that is
+  still active is refused (`domain_owned`); one whose token was revoked,
+  expired or deleted is taken over. The ingress serves a domain only while a
+  tunnel of the token that registered it holds the mapped subdomain. If the
+  domains are rejected, the subdomain claimed for this hello is released.
 * `protocol` is the wire protocol (`http`, `tcp`, or `tls`). Whether the agent
   dials its local upstream over plain HTTP or HTTPS is an **agent-local** choice
   (the CLI's `http` vs `https` keyword) that never appears on the wire:
@@ -114,8 +122,8 @@ Sent, then the connection is closed.
 ```
 
 Codes: `unauthorized`, `subdomain_taken`, `subdomain_reserved`,
-`subdomain_invalid`, `tunnel_limit`, `unsupported_protocol`,
-`unsupported_version`, `internal`.
+`subdomain_invalid`, `tunnel_limit`, `unsupported_protocol`, `invalid_policy`,
+`invalid_domain`, `domain_owned`, `unsupported_version`, `internal`.
 
 ### `ping` / `pong` — heartbeat
 

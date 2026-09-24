@@ -95,6 +95,14 @@ data frame before replying to `hello`.
 `subdomain` is optional — when empty the gateway allocates a random one.
 `local_port` is informational and never used for routing.
 
+`domains` is optional and lists BYO custom hostnames to route to this tunnel.
+The gateway accepts at most `RIFT_MAX_CUSTOM_DOMAINS_PER_TUNNEL` (default 10)
+valid DNS names, never the base domain, a name under it, or the gateway hostname
+(`invalid_domain`). A domain registered to another token that is still active is
+refused (`domain_owned`); one whose token was revoked, expired or deleted is
+taken over. A domain is served only while a tunnel of the token that registered
+it holds the mapped subdomain.
+
 ### `hello_ok` — gateway → agent
 
 ```json
@@ -116,8 +124,8 @@ Sent, then the connection is closed.
 ```
 
 Codes: `unauthorized`, `subdomain_taken`, `subdomain_reserved`,
-`subdomain_invalid`, `tunnel_limit`, `unsupported_protocol`,
-`unsupported_version`, `internal`. See
+`subdomain_invalid`, `tunnel_limit`, `unsupported_protocol`, `invalid_policy`,
+`invalid_domain`, `domain_owned`, `unsupported_version`, `internal`. See
 [Troubleshooting](/operations/troubleshooting/#handshake-was-rejected) for what
 each means and what to do about it.
 
