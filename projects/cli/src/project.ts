@@ -22,6 +22,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { isSupportedProtocol } from "./args.ts";
 import { CLI_SPEC } from "./cli-spec.ts";
 import { isLoopbackHost } from "./config.ts";
 import { ENV, SUPPORTED_PROTOCOLS } from "./constants.ts";
@@ -87,10 +88,6 @@ export const PROJECT_FORBIDDEN_KEYS: ReadonlyMap<string, string> = new Map([
 /** Spec lookup for a flag key (without dashes). */
 function specOption(key: string): { takesValue: boolean } | undefined {
   return CLI_SPEC.options.find((o) => o.long === `--${key}`);
-}
-
-function isSupportedProtocol(v: string): boolean {
-  return (SUPPORTED_PROTOCOLS as readonly string[]).includes(v);
 }
 
 export interface ProjectConfig {

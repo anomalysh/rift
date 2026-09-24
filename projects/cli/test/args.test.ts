@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { parseArgs } from "../src/args.ts";
+import { type FlagConfig, flagKey, parseArgs } from "../src/args.ts";
+import { CLI_SPEC } from "../src/cli-spec.ts";
 
 describe("valid invocations", () => {
   test("protocol and port only", () => {
@@ -311,5 +312,86 @@ describe("--allow-insecure-transport", () => {
     if (parsed.kind === "run") {
       expect(parsed.flags.allowInsecureTransport).toBe(true);
     }
+  });
+});
+
+// The parser reads its flag surface from CLI_SPEC. Before, args.ts kept its own
+// hand-written flag lists, so a flag added to the spec (and so to --help, the
+// man page, and completions) could still be rejected as unknown.
+describe("parser and CLI spec agree", () => {
+  // Every FlagConfig key, spelled out: the compiler rejects a missing or
+  // extra key, so this list and the interface cannot drift either.
+  const ALL_FLAG_KEYS: Record<keyof FlagConfig, true> = {
+    token: true,
+    tokenFile: true,
+    server: true,
+    host: true,
+    logLevel: true,
+    insecure: true,
+    upstreamInsecure: true,
+    allowInsecureTransport: true,
+    basicAuth: true,
+    allowIp: true,
+    denyIp: true,
+    ttl: true,
+    once: true,
+    maxRequests: true,
+    rateLimit: true,
+    setRequestHeader: true,
+    delRequestHeader: true,
+    setResponseHeader: true,
+    delResponseHeader: true,
+    cors: true,
+    corsOrigin: true,
+    respond: true,
+    redirect: true,
+    route: true,
+    breaker: true,
+    breakerThreshold: true,
+    domain: true,
+  };
+  const runOptions = CLI_SPEC.options.filter((o) => o.kind === "run");
+
+  test("every run flag maps onto exactly one FlagConfig key", () => {
+    expect(runOptions.map((o) => flagKey(o.long)).sort()).toEqual(
+      Object.keys(ALL_FLAG_KEYS).sort(),
+    );
+  });
+
+  for (const option of runOptions) {
+    test(`${option.long} is accepted and lands in flags.${flagKey(option.long)}`, () => {
+      const value = option.long === "--log-level" ? "debug" : "v";
+      const argv = option.takesValue
+        ? ["http", "3000", `${option.long}=${value}`, option.long, value]
+        : ["http", "3000", option.long];
+      const parsed = parseArgs(argv);
+      expect(parsed.kind).toBe("run");
+      if (parsed.kind !== "run") return;
+      const got = (parsed.flags as Record<string, unknown>)[
+        flagKey(option.long)
+      ];
+      if (!option.takesValue) {
+        expect(got).toBe(true);
+      } else if (option.repeatable === true) {
+        expect(got).toEqual([value, value]);
+      } else {
+        expect(got).toBe(value);
+      }
+    });
+  }
+
+  test("repeatable flags are exactly the ones whose help says so", () => {
+    for (const option of CLI_SPEC.options) {
+      expect(`${option.long} ${option.repeatable === true}`).toBe(
+        `${option.long} ${option.help.includes("repeatable")}`,
+      );
+    }
+  });
+
+  test("a switch given a value is not a flag", () => {
+    expect(parseArgs(["http", "3000", "--cors=yes"])).toEqual({
+      kind: "error",
+      message: "unknown flag: --cors",
+    });
   });
 });

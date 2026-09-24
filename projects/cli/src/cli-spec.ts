@@ -41,6 +41,8 @@ export interface CliOption {
   readonly short?: string;
   /** Whether the option consumes the following token as its value. */
   readonly takesValue: boolean;
+  /** A value option that may be given more than once, accumulating a list. */
+  readonly repeatable?: boolean;
   /** Value placeholder shown in docs (e.g. "token", "url", "level"). */
   readonly placeholder?: string;
   /** One-line help, reused verbatim as the completion description. */
@@ -249,6 +251,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--basic-auth",
       takesValue: true,
+      repeatable: true,
       placeholder: "user:pass",
       help: "require HTTP Basic auth to reach the tunnel (repeatable)",
       kind: "run",
@@ -256,6 +259,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--allow-ip",
       takesValue: true,
+      repeatable: true,
       placeholder: "cidr",
       help: "only admit visitors in this IP/CIDR (repeatable; default-deny)",
       kind: "run",
@@ -263,6 +267,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--deny-ip",
       takesValue: true,
+      repeatable: true,
       placeholder: "cidr",
       help: "reject visitors in this IP/CIDR (repeatable)",
       kind: "run",
@@ -297,6 +302,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--set-request-header",
       takesValue: true,
+      repeatable: true,
       placeholder: "h",
       help: 'add/replace a request header sent upstream ("Name: value", repeatable)',
       kind: "run",
@@ -304,6 +310,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--del-request-header",
       takesValue: true,
+      repeatable: true,
       placeholder: "name",
       help: "drop a request header before it reaches the upstream (repeatable)",
       kind: "run",
@@ -311,6 +318,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--set-response-header",
       takesValue: true,
+      repeatable: true,
       placeholder: "h",
       help: 'add/replace a header on the response ("Name: value", repeatable)',
       kind: "run",
@@ -318,6 +326,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--del-response-header",
       takesValue: true,
+      repeatable: true,
       placeholder: "name",
       help: "drop a header from the response (repeatable)",
       kind: "run",
@@ -331,6 +340,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--cors-origin",
       takesValue: true,
+      repeatable: true,
       placeholder: "origin",
       help: "allow credentialed CORS from this origin, e.g. https://app.example (repeatable; implies --cors)",
       kind: "run",
@@ -338,6 +348,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--respond",
       takesValue: true,
+      repeatable: true,
       placeholder: "rule",
       help: 'serve a fixed response for a path ("/health=200:ok", repeatable)',
       kind: "run",
@@ -345,6 +356,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--redirect",
       takesValue: true,
+      repeatable: true,
       placeholder: "rule",
       help: 'redirect a path ("/old=/new" or "/old=301:/new", repeatable)',
       kind: "run",
@@ -352,6 +364,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--route",
       takesValue: true,
+      repeatable: true,
       placeholder: "rule",
       help: 'route a path prefix to another local port ("/api=4000", repeatable)',
       kind: "run",
@@ -372,6 +385,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--domain",
       takesValue: true,
+      repeatable: true,
       placeholder: "host",
       help: "route a BYO custom domain to this tunnel (repeatable; CNAME it first)",
       kind: "run",
