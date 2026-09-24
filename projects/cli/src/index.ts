@@ -211,7 +211,13 @@ async function main(): Promise<void> {
  * since the interactive dashboard cannot multiplex several tunnels.
  */
 async function runStart(names: string[]): Promise<void> {
-  const project = loadProjectConfig(process.cwd());
+  let project: ReturnType<typeof loadProjectConfig>;
+  try {
+    project = loadProjectConfig(process.cwd());
+  } catch (err) {
+    // Unreadable or malformed: a usage error to fix, not a crash to report.
+    fail(`rift: ${errorMessage(err)}`, EXIT.USAGE);
+  }
   if (project === null) {
     fail(
       "rift: no rift.yml (or .yaml/.toml/.json) found in this directory.",

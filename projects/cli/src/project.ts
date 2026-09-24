@@ -25,6 +25,7 @@ import { join } from "node:path";
 import { CLI_SPEC } from "./cli-spec.ts";
 import { isLoopbackHost } from "./config.ts";
 import { ENV, SUPPORTED_PROTOCOLS } from "./constants.ts";
+import { errorMessage } from "./logger.ts";
 import { isRecord } from "./protocol.ts";
 
 /** Config file names tried in order in the working directory. */
@@ -110,15 +111,22 @@ export function findProjectConfig(cwd: string): string | null {
   return null;
 }
 
-/** Parse a project config file by extension. Throws Error on malformed input. */
+/**
+ * Parse a project config file by extension. Throws an Error naming the file on
+ * malformed input; the parsers' own SyntaxErrors do not say which file failed.
+ */
 export function parseProjectConfig(text: string, path: string): ProjectConfig {
   let doc: unknown;
-  if (path.endsWith(".json")) {
-    doc = JSON.parse(text);
-  } else if (path.endsWith(".toml")) {
-    doc = Bun.TOML.parse(text);
-  } else {
-    doc = Bun.YAML.parse(text);
+  try {
+    if (path.endsWith(".json")) {
+      doc = JSON.parse(text);
+    } else if (path.endsWith(".toml")) {
+      doc = Bun.TOML.parse(text);
+    } else {
+      doc = Bun.YAML.parse(text);
+    }
+  } catch (err) {
+    throw new Error(`${path}: ${errorMessage(err)}`);
   }
   if (!isRecord(doc) || !isRecord(doc.tunnels)) {
     throw new Error(`${path}: expected a top-level "tunnels" mapping`);

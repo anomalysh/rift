@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { parseArgs } from "../src/args.ts";
 import { CLI_SPEC } from "../src/cli-spec.ts";
@@ -188,6 +191,39 @@ describe("project files cannot redirect or weaken the token's path", () => {
       expect(PROJECT_KEYS.has(key) || PROJECT_FORBIDDEN_KEYS.has(key)).toBe(
         true,
       );
+    }
+  });
+});
+
+// Regression: a malformed rift.yml escaped runStart as a raw SyntaxError, so
+// `rift start` crashed with a stack trace that did not name the file.
+describe("malformed project file", () => {
+  test("parse errors name the file", () => {
+    expect(() =>
+      parseProjectConfig("tunnels:\n  web: [unclosed\n", "/x/rift.yml"),
+    ).toThrow(/^\/x\/rift\.yml: /);
+    expect(() => parseProjectConfig("{", "/x/rift.json")).toThrow(
+      /^\/x\/rift\.json: /,
+    );
+  });
+
+  test("rift start reports a usage error, not a stack trace", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rift-start-"));
+    try {
+      writeFileSync(join(dir, "rift.yml"), "tunnels:\n  web: [unclosed\n");
+      const proc = Bun.spawn(
+        [process.execPath, join(import.meta.dir, "../src/index.ts"), "start"],
+        { cwd: dir, stdout: "pipe", stderr: "pipe" },
+      );
+      const [code, stderr] = await Promise.all([
+        proc.exited,
+        new Response(proc.stderr).text(),
+      ]);
+      expect(code).toBe(2);
+      expect(stderr).toStartWith(`rift: ${join(dir, "rift.yml")}: `);
+      expect(stderr).not.toContain("    at ");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
