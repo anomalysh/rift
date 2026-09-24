@@ -56,6 +56,25 @@ load_env() {
 	export _RIFT_ENV_LOADED="$_le_file"
 }
 
+# rift_state_file — the pipeline state file provision.sh writes and ship.sh and
+# teardown.sh read: RIFT_STATE_FILE, else <repo>/.rift/state.json.
+rift_state_file() { printf '%s' "${RIFT_STATE_FILE:-$RIFT_REPO_ROOT/.rift/state.json}"; }
+
+# rift_state_get FILE KEY — one top-level field of the JSON state FILE, or empty
+# if the file, the field or valid JSON is missing. FILE and KEY reach Python as
+# argv, never spliced into its source, so no path can break (or inject into) it.
+rift_state_get() {
+	[ -f "$1" ] || return 0
+	python3 - "$1" "$2" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+print(d.get(sys.argv[2]) or "")
+PY
+}
+
 # --- composable cleanup trap ------------------------------------------------
 #
 # register_cleanup CMD queues a shell command to run when the script exits, for

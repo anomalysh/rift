@@ -11,8 +11,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # fresh. Destructive and irreversible for the instance, so it always confirms
 # unless --yes is given, mirroring restore.sh's gate.
 
-STATE_FILE_DEFAULT="$RIFT_REPO_ROOT/.rift/state.json"
-
 usage() {
 	cat >&2 <<EOF
 Usage: rift-ops backup teardown [--backup] [--yes] [--state-file F] [--dry-run]
@@ -26,14 +24,15 @@ Tear down the rift instance recorded in the state file:
 Options:
   --backup        Back up the instance's stack and pull it to ./backups/ first.
   --yes           Do not prompt for confirmation (for scripts).
-  --state-file F  State file to read the instance id from (default: $STATE_FILE_DEFAULT).
+  --state-file F  State file to read the instance id from (default: \$RIFT_STATE_FILE,
+                  else .rift/state.json).
   --dry-run       Print what would happen, change nothing.
 
 Environment: RIFT_LINODE_TOKEN (or the provider's token) for the destroy call.
 EOF
 }
 
-do_backup=false assume_yes=false dry_run=false state_file="$STATE_FILE_DEFAULT"
+do_backup=false assume_yes=false dry_run=false state_file=""
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 	-h | --help)
@@ -55,25 +54,13 @@ done
 require_cmd python3
 load_env
 export RIFT_DRY_RUN="$dry_run"
-
-# state_get KEY — read one string field from the JSON state file, or empty.
-state_get() {
-	[ -f "$state_file" ] || return 0
-	python3 -c "
-import json, sys
-try:
-    d = json.load(open('$state_file'))
-except Exception:
-    sys.exit(0)
-print(d.get('$1', '') or '')
-" 2>/dev/null || true
-}
+state_file="${state_file:-$(rift_state_file)}"
 
 [ -f "$state_file" ] || die "no state file at $state_file -- nothing recorded to tear down"
-instance_id="$(state_get instance_id)"
-provider="$(state_get provider)"
-name="$(state_get name)"
-ipv4="$(state_get ipv4)"
+instance_id="$(rift_state_get "$state_file" instance_id)"
+provider="$(rift_state_get "$state_file" provider)"
+name="$(rift_state_get "$state_file" name)"
+ipv4="$(rift_state_get "$state_file" ipv4)"
 [ -n "$instance_id" ] || die "state file $state_file has no instance_id"
 
 log_warn "about to DESTROY instance '$name' (id $instance_id, $ipv4) via provider '${provider:-?}'"
@@ -118,6 +105,6 @@ rift_run bash "$RIFT_TOOLS_DIR/cmd/provision/provision.sh" --destroy "$instance_
 # SSH control sockets pointed at a host that no longer exists.
 log_info "removing local state and stale SSH control sockets"
 rift_run rm -f "$state_file"
-rift_run rm -f "${RIFT_SSH_CONTROL_DIR:-$HOME/.ssh/rift-cm}"/* 2>/dev/null || true
+rift_run rm -f "$RIFT_SSH_CONTROL_DIR"/* || true
 
 log_info "teardown complete"

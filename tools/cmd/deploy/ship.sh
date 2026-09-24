@@ -18,7 +18,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # pipeline fails.
 
 STAGES=(provision harden deploy verify)
-STATE_FILE_DEFAULT="$RIFT_REPO_ROOT/.rift/state.json"
 
 usage() {
 	cat >&2 <<EOF
@@ -37,7 +36,7 @@ Options:
   --from STAGE   Start at STAGE (one of: ${STAGES[*]}).
   --only STAGE   Run just STAGE.
   --host IP      Skip provision; harden/deploy/verify this existing host.
-  --state-file F Default: $STATE_FILE_DEFAULT
+  --state-file F Default: \$RIFT_STATE_FILE, else .rift/state.json.
   --dry-run      Print what each stage would do; change nothing.
   --yes          Do not prompt before the destructive-ish stages.
 
@@ -49,7 +48,7 @@ EOF
 from_stage=""
 only_stage=""
 host=""
-state_file="$STATE_FILE_DEFAULT"
+state_file=""
 dry_run=false
 assume_yes=false
 
@@ -91,40 +90,38 @@ while [ "$#" -gt 0 ]; do
 done
 
 load_env
-
-# state_get KEY -- read a value from the JSON state file, or empty.
-state_get() {
-	[ -f "$state_file" ] || return 0
-	python3 -c "import json,sys
-try:
-    d=json.load(open('$state_file'))
-except Exception:
-    sys.exit(0)
-print(d.get('$1',''))" 2>/dev/null || true
-}
+state_file="${state_file:-$(rift_state_file)}"
+# The stages' side effects go through rift_run. Exported, so an RIFT_DRY_RUN=1
+# left in the caller's environment cannot silently skip a stage that this run
+# then records as complete.
+export RIFT_DRY_RUN="$dry_run"
 
 # state_mark_stage STAGE -- record a stage as complete.
 state_mark_stage() {
 	[ "$dry_run" = true ] && return 0
 	mkdir -p "$(dirname "$state_file")"
-	python3 -c "import json,os
-p='$state_file'
+	python3 - "$state_file" "$1" <<'PY'
+import json, sys
+path, stage = sys.argv[1], sys.argv[2]
 try:
-    d=json.load(open(p))
+    d = json.load(open(path))
 except Exception:
-    d={}
-d.setdefault('stages',{})['$1']=True
-json.dump(d,open(p,'w'),indent=2)"
+    d = {}
+d.setdefault("stages", {})[stage] = True
+json.dump(d, open(path, "w"), indent=2)
+PY
 }
 
 stage_done() {
-	[ "$(state_get 'stages' | grep -c "'$1': True" 2>/dev/null || true)" != "0" ] 2>/dev/null || true
-	python3 -c "import json,sys
+	[ -f "$state_file" ] || return 1
+	python3 - "$state_file" "$1" <<'PY' 2>/dev/null
+import json, sys
 try:
-    d=json.load(open('$state_file'))
+    d = json.load(open(sys.argv[1]))
 except Exception:
     sys.exit(1)
-sys.exit(0 if d.get('stages',{}).get('$1') else 1)" 2>/dev/null
+sys.exit(0 if d.get("stages", {}).get(sys.argv[2]) else 1)
+PY
 }
 
 should_run() {
@@ -157,14 +154,6 @@ confirm() {
 	[ "$ans" = "y" ] || [ "$ans" = "Y" ]
 }
 
-run() {
-	if [ "$dry_run" = true ]; then
-		log_info "[dry-run] $*"
-		return 0
-	fi
-	"$@"
-}
-
 # ---------------------------------------------------------------- stages
 
 stage_provision() {
@@ -173,16 +162,21 @@ stage_provision() {
 		return 0
 	fi
 	log_info "stage: provision"
-	run "$RIFT_TOOLS_DIR/cmd/provision/provision.sh" --state-file "$state_file"
-	host="$(state_get ipv4)"
+	rift_run "$RIFT_TOOLS_DIR/cmd/provision/provision.sh" --state-file "$state_file"
+	host="$(rift_state_get "$state_file" ipv4)"
 	[ -n "$host" ] || [ "$dry_run" = true ] || die "provision did not record an ipv4 in $state_file"
 }
 
 resolve_host() {
 	[ -n "$host" ] && return 0
-	host="$(state_get ipv4)"
-	[ -n "$host" ] || [ -n "${RIFT_VPS_HOST:-}" ] || die "no host: provision first, or pass --host"
-	host="${host:-$RIFT_VPS_HOST}"
+	host="$(rift_state_get "$state_file" ipv4)"
+	host="${host:-${RIFT_VPS_HOST:-}}"
+	if [ -z "$host" ]; then
+		# A dry run of a fresh pipeline has no instance yet; say so rather than
+		# stopping the preview at the first stage after provision.
+		[ "$dry_run" = true ] || die "no host: provision first, or pass --host"
+		host="<provisioned-host>"
+	fi
 }
 
 stage_harden() {
@@ -193,16 +187,16 @@ stage_harden() {
 	# --force because the real host has no hostcheck marker (that guard exists
 	# to stop the script running on a developer laptop). A failed upload must
 	# abort: running harden.sh on a stale or partial tools/ could lock SSH.
-	run rift_push_tools "$host" ||
+	rift_run rift_push_tools "$host" ||
 		die "failed to ship tools/ to $host; not running harden on a stale copy"
-	run rift_ssh "$host" \
+	rift_run rift_ssh "$host" \
 		"bash /opt/rift/tools/cmd/host/harden.sh --force"
 }
 
 stage_deploy() {
 	resolve_host
 	log_info "stage: deploy ($host)"
-	run env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/deploy/deploy.sh"
+	rift_run env RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/deploy/deploy.sh"
 }
 
 stage_verify() {
