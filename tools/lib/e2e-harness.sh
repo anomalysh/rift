@@ -57,16 +57,43 @@ print_summary() {
 	log_info "$1 passed"
 }
 
-# wait_for_tcp PORT WHAT — block until PORT accepts a TCP connection on
-# localhost, or die after ~60s. Uses bash's /dev/tcp, so it needs no nc.
-wait_for_tcp() {
-	local port="$1" what="$2"
-	for _ in $(seq 1 60); do
-		if (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
-			exec 3<&- 3>&-
-			return 0
-		fi
+# wait_until TRIES CMD... — run CMD once a second until it succeeds; return 1 if
+# it has not after TRIES attempts. The bounded poll every harness uses instead
+# of a fixed sleep; the caller decides whether a timeout is fatal.
+wait_until() {
+	local tries="$1" _
+	shift
+	for _ in $(seq 1 "$tries"); do
+		"$@" && return 0
 		sleep 1
 	done
-	die "$what did not come up on port $port"
+	return 1
+}
+
+# tcp_open PORT — succeeds if PORT on localhost accepts a TCP connection. Uses
+# bash's /dev/tcp, so it needs no nc.
+tcp_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+# wait_for_tcp PORT WHAT — block until PORT accepts a TCP connection on
+# localhost, or die after ~60s.
+wait_for_tcp() {
+	wait_until 60 tcp_open "$1" || die "$2 did not come up on port $1"
+}
+
+# e2e_build LOG WHAT — `compose build` (the harness's own compose function),
+# output to LOG. BuildKit runs the build inside its own container, which fails
+# on hosts whose container runtime is misconfigured (a stale nvidia hook, for
+# instance). The legacy builder does not, and produces the same image, so fall
+# back to it rather than making the whole harness unusable on such a machine.
+e2e_build() {
+	local log="$1" what="$2"
+	if compose build >"$log" 2>&1; then
+		return 0
+	fi
+	log_warn "buildkit build failed; retrying with the legacy builder"
+	if DOCKER_BUILDKIT=0 compose build >>"$log" 2>&1; then
+		return 0
+	fi
+	tail -20 "$log" >&2
+	die "could not build $what"
 }

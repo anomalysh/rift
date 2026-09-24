@@ -71,23 +71,8 @@ compose() { docker compose -f "$COMPOSE_FILE" -p "$PROJECT" "$@"; }
 dexec() { compose exec -T hostcheck "$@"; }
 dscript() { compose exec -T hostcheck bash -s; }
 
-# BuildKit builds inside its own container, which fails on hosts with a
-# misconfigured runtime; the legacy builder produces the same image, so fall
-# back to it rather than making the harness unusable. Mirrors tools/e2e.sh.
-build_image() {
-	if compose build >"$TMP/build.log" 2>&1; then return 0; fi
-	log_warn "buildkit build failed; retrying with the legacy builder"
-	if DOCKER_BUILDKIT=0 compose build >>"$TMP/build.log" 2>&1; then return 0; fi
-	tail -20 "$TMP/build.log" >&2
-	die "could not build the hostcheck image"
-}
-
 wait_container() {
-	for _ in $(seq 1 30); do
-		if dexec true >/dev/null 2>&1; then return 0; fi
-		sleep 1
-	done
-	die "hostcheck container did not come up"
+	wait_until 30 dexec true >/dev/null 2>&1 || die "hostcheck container did not come up"
 }
 
 fresh_container() {
@@ -299,7 +284,7 @@ phase_workstation() {
 }
 
 log_info "building the hostcheck image (debian:trixie mirror of the VPS)"
-build_image
+e2e_build "$TMP/build.log" "the hostcheck image"
 
 phase_main
 phase_lockout

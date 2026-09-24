@@ -102,13 +102,8 @@ check_fail() {
 
 # --- postgres helpers: password stays inside the container, never on an argv ---
 wait_pg() {
-	for _ in $(seq 1 60); do
-		if compose exec -T postgres pg_isready -U rift -d rift >/dev/null 2>&1; then
-			return 0
-		fi
-		sleep 1
-	done
-	die "postgres did not become ready"
+	wait_until 60 compose exec -T postgres pg_isready -U rift -d rift >/dev/null 2>&1 ||
+		die "postgres did not become ready"
 }
 
 rsql() {
