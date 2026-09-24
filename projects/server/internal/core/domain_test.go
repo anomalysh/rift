@@ -1,6 +1,9 @@
 package core
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNormalizeDomain(t *testing.T) {
 	cases := []struct {
@@ -18,6 +21,18 @@ func TestNormalizeDomain(t *testing.T) {
 		{"a..b.com", ""},             // empty label
 		{".leading.com", ""},         // leading dot -> empty label
 		{"https://app.acme.com", ""}, // a URL, not a host
+		// RFC 1035 shape.
+		{"-app.acme.com", ""},                              // leading hyphen in a label
+		{"app-.acme.com", ""},                              // trailing hyphen in a label
+		{"app.-acme.com", ""},                              // hyphen at a label start mid-name
+		{"xn--bcher-kva.example", "xn--bcher-kva.example"}, // punycode keeps inner hyphens
+		{strings.Repeat("a", 63) + ".com", strings.Repeat("a", 63) + ".com"},   // 63-char label is the max
+		{strings.Repeat("a", 64) + ".com", ""},                                 // 64-char label is too long
+		{strings.Repeat("a.", 126) + "com", ""},                                // 255 chars overall
+		{strings.Repeat("a.", 125) + "com", strings.Repeat("a.", 125) + "com"}, // 253 chars is the max
+		{"10.0.0.1", ""},             // an IPv4 literal is not a domain
+		{"app.acme.123", ""},         // an all-numeric TLD does not exist
+		{"1.acme.com", "1.acme.com"}, // numeric non-final labels are fine
 	}
 	for _, c := range cases {
 		if got := NormalizeDomain(c.in); got != c.want {

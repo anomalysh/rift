@@ -196,17 +196,32 @@ func Hostname(subdomain, baseDomain string) string {
 	return subdomain + "." + baseDomain
 }
 
+// DNS name limits from RFC 1035 §2.3.4, enforced on custom domains so a name
+// the resolver could never serve is refused at registration rather than
+// stored, and so an oversized Host cannot reach a store lookup.
+const (
+	maxDomainLabelLength = 63
+	maxDomainLength      = 253
+)
+
 // NormalizeDomain lower-cases a custom domain, strips surrounding whitespace,
 // any port, and a trailing dot, returning "" if the result is not a plausible
 // multi-label hostname. It is the canonical form stored and looked up for the
 // BYO-domain feature (E1).
+//
+// Beyond the character set it enforces the RFC 1035 shape: at least two
+// labels, each 1-63 characters with no leading or trailing hyphen, and at most
+// 253 characters overall. The final label must not be all digits: no TLD is
+// numeric, and refusing one keeps an IPv4 literal such as 10.0.0.1 from ever
+// being registered as a "domain" (the ingress treats IP-literal Hosts as its
+// own internal names).
 func NormalizeDomain(domain string) string {
 	d := strings.ToLower(strings.TrimSpace(domain))
 	if i := strings.LastIndexByte(d, ':'); i != -1 && !strings.Contains(d[i:], "]") {
 		d = d[:i]
 	}
 	d = strings.TrimSuffix(d, ".")
-	if d == "" || !strings.Contains(d, ".") {
+	if d == "" || len(d) > maxDomainLength || !strings.Contains(d, ".") {
 		return ""
 	}
 	// Reject anything that is not a bare hostname (no scheme, path, or spaces).
@@ -216,11 +231,21 @@ func NormalizeDomain(domain string) string {
 		}
 		return ""
 	}
-	// A leading/trailing dot or an empty label ("a..b") is not a valid host.
-	for _, label := range strings.Split(d, ".") {
-		if label == "" {
+	labels := strings.Split(d, ".")
+	if len(labels) < 2 {
+		return ""
+	}
+	for _, label := range labels {
+		// A leading/trailing dot or an empty label ("a..b") is not a valid host.
+		if label == "" || len(label) > maxDomainLabelLength {
 			return ""
 		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return ""
+		}
+	}
+	if strings.Trim(labels[len(labels)-1], "0123456789") == "" {
+		return ""
 	}
 	return d
 }
