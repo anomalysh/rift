@@ -63,9 +63,7 @@ type udpForwarder struct {
 	maxFlows      int
 	maxFlowsPerIP int
 
-	mu    sync.Mutex
-	free  []int
-	binds map[*session]*udpBind
+	ports *portPool[*udpBind]
 }
 
 type udpBind struct {
@@ -108,51 +106,34 @@ func newUDPForwarder(cfg *config.Config, logger *slog.Logger) *udpForwarder {
 	if !cfg.UDP.Enabled {
 		return nil
 	}
-	free := make([]int, 0, cfg.UDP.PortMax-cfg.UDP.PortMin+1)
-	for p := cfg.UDP.PortMin; p <= cfg.UDP.PortMax; p++ {
-		free = append(free, p)
-	}
 	return &udpForwarder{
 		cfg:           cfg,
 		logger:        logger.With(slog.String("component", "udp")),
 		maxFlows:      maxUDPFlowsPerBind,
 		maxFlowsPerIP: maxUDPFlowsPerIP,
-		free:          free,
-		binds:         make(map[*session]*udpBind),
+		ports:         newPortPool[*udpBind](cfg.UDP.PortMin, cfg.UDP.PortMax),
 	}
 }
 
 // bind allocates a UDP port, listens on it, and starts forwarding datagrams for
-// sess. It returns the public host:port the agent should advertise.
+// sess. It returns the public host:port the agent should advertise. A port that
+// the OS reports as unavailable is skipped rather than failing the whole bind.
 func (f *udpForwarder) bind(sess *session) (string, error) {
-	f.mu.Lock()
-
-	var (
-		port int
-		conn *net.UDPConn
-	)
-	for len(f.free) > 0 {
-		port = f.free[0]
-		f.free = f.free[1:]
-		addr := &net.UDPAddr{IP: net.ParseIP(f.cfg.UDP.ListenHost), Port: port}
-		c, err := net.ListenUDP("udp", addr)
+	ctx, cancel := context.WithCancel(context.Background())
+	b, port, ok := f.ports.acquire(sess, func(port int) (*udpBind, error) {
+		conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP(f.cfg.UDP.ListenHost), Port: port})
 		if err != nil {
-			f.logger.Warn("udp port unavailable, skipping", slog.Int("port", port), slog.Any("error", err))
-			continue
+			return nil, err
 		}
-		conn = c
-		break
-	}
-	if conn == nil {
-		f.mu.Unlock()
+		return &udpBind{port: port, conn: conn, stop: cancel,
+			flows: make(map[string]*udpFlow), perIP: make(map[string]int)}, nil
+	}, func(port int, err error) {
+		f.logger.Warn("udp port unavailable, skipping", slog.Int("port", port), slog.Any("error", err))
+	})
+	if !ok {
+		cancel()
 		return "", errNoUDPPorts
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	b := &udpBind{port: port, conn: conn, stop: cancel,
-		flows: make(map[string]*udpFlow), perIP: make(map[string]int)}
-	f.binds[sess] = b
-	f.mu.Unlock()
 
 	go f.readLoop(ctx, sess, b)
 	go f.sweep(ctx, b)
@@ -164,16 +145,10 @@ func (f *udpForwarder) bind(sess *session) (string, error) {
 // release closes sess's listener and every flow, returning its port to the
 // pool. Idempotent.
 func (f *udpForwarder) release(sess *session) {
-	f.mu.Lock()
-	b, ok := f.binds[sess]
+	b, ok := f.ports.release(sess)
 	if !ok {
-		f.mu.Unlock()
 		return
 	}
-	delete(f.binds, sess)
-	f.free = append(f.free, b.port)
-	f.mu.Unlock()
-
 	b.stop()
 	_ = b.conn.Close()
 	b.mu.Lock()

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net"
 	"strconv"
-	"sync"
 
 	"github.com/anomalysh/rift/projects/server/internal/config"
 	"github.com/anomalysh/rift/projects/server/internal/core"
@@ -22,14 +21,10 @@ var errNoTCPPorts = errors.New("gateway: no free tcp ports in the configured ran
 type tcpForwarder struct {
 	cfg    *config.Config
 	logger *slog.Logger
-
-	mu    sync.Mutex
-	free  []int
-	binds map[*session]*tcpBind
+	ports  *portPool[*tcpBind]
 }
 
 type tcpBind struct {
-	port int
 	ln   net.Listener
 	stop context.CancelFunc
 }
@@ -40,15 +35,10 @@ func newTCPForwarder(cfg *config.Config, logger *slog.Logger) *tcpForwarder {
 	if !cfg.TCP.Enabled {
 		return nil
 	}
-	free := make([]int, 0, cfg.TCP.PortMax-cfg.TCP.PortMin+1)
-	for p := cfg.TCP.PortMin; p <= cfg.TCP.PortMax; p++ {
-		free = append(free, p)
-	}
 	return &tcpForwarder{
 		cfg:    cfg,
 		logger: logger.With(slog.String("component", "tcp")),
-		free:   free,
-		binds:  make(map[*session]*tcpBind),
+		ports:  newPortPool[*tcpBind](cfg.TCP.PortMin, cfg.TCP.PortMax),
 	}
 }
 
@@ -56,33 +46,22 @@ func newTCPForwarder(cfg *config.Config, logger *slog.Logger) *tcpForwarder {
 // sess. It returns the public host:port the agent should advertise. A port that
 // the OS reports as unavailable is skipped rather than failing the whole bind.
 func (f *tcpForwarder) bind(sess *session) (string, error) {
-	f.mu.Lock()
-
-	var (
-		port int
-		ln   net.Listener
-	)
-	for len(f.free) > 0 {
-		port = f.free[0]
-		f.free = f.free[1:]
-		l, err := net.Listen("tcp", net.JoinHostPort(f.cfg.TCP.ListenHost, strconv.Itoa(port)))
+	ctx, cancel := context.WithCancel(context.Background())
+	b, port, ok := f.ports.acquire(sess, func(port int) (*tcpBind, error) {
+		ln, err := net.Listen("tcp", net.JoinHostPort(f.cfg.TCP.ListenHost, strconv.Itoa(port)))
 		if err != nil {
-			f.logger.Warn("tcp port unavailable, skipping", slog.Int("port", port), slog.Any("error", err))
-			continue
+			return nil, err
 		}
-		ln = l
-		break
-	}
-	if ln == nil {
-		f.mu.Unlock()
+		return &tcpBind{ln: ln, stop: cancel}, nil
+	}, func(port int, err error) {
+		f.logger.Warn("tcp port unavailable, skipping", slog.Int("port", port), slog.Any("error", err))
+	})
+	if !ok {
+		cancel()
 		return "", errNoTCPPorts
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	f.binds[sess] = &tcpBind{port: port, ln: ln, stop: cancel}
-	f.mu.Unlock()
-
-	go f.accept(ctx, sess, ln, port)
+	go f.accept(ctx, sess, b.ln, port)
 
 	host := f.cfg.TCP.Advertise(f.cfg.Tunnel.BaseDomain)
 	return net.JoinHostPort(host, strconv.Itoa(port)), nil
@@ -90,16 +69,10 @@ func (f *tcpForwarder) bind(sess *session) (string, error) {
 
 // release closes sess's listener and returns its port to the pool. Idempotent.
 func (f *tcpForwarder) release(sess *session) {
-	f.mu.Lock()
-	b, ok := f.binds[sess]
+	b, ok := f.ports.release(sess)
 	if !ok {
-		f.mu.Unlock()
 		return
 	}
-	delete(f.binds, sess)
-	f.free = append(f.free, b.port)
-	f.mu.Unlock()
-
 	b.stop()
 	_ = b.ln.Close()
 }
