@@ -3,13 +3,11 @@ package gateway
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
 	"net"
 	"strconv"
 
 	"github.com/anomalysh/rift/projects/server/internal/config"
-	"github.com/anomalysh/rift/projects/server/internal/core"
 )
 
 // errNoTCPPorts means every port in the configured range is in use.
@@ -97,24 +95,5 @@ func (f *tcpForwarder) handle(ctx context.Context, sess *session, conn net.Conn)
 	}
 	defer func() { _ = tconn.Close() }()
 
-	pipeRaw(conn, tconn)
-}
-
-// pipeRaw streams bytes between a public connection and a tunnel stream until
-// either side closes, then tears both ends down so the other copy unblocks.
-func pipeRaw(client net.Conn, tconn core.TunnelConn) {
-	done := make(chan struct{}, 2)
-	go func() {
-		_, _ = io.Copy(tconn, client)
-		_ = tconn.CloseWrite()
-		done <- struct{}{}
-	}()
-	go func() {
-		_, _ = io.Copy(client, tconn)
-		done <- struct{}{}
-	}()
-	<-done
-	_ = tconn.Close()
-	_ = client.Close()
-	<-done
+	pipeRaw(conn, nil, tconn)
 }

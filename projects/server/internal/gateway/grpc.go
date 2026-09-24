@@ -6,10 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"strings"
-	"time"
 
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/hpack"
@@ -20,6 +18,10 @@ import (
 // grpcMaxHeaderList bounds the HPACK header block the router will decode while
 // peeking, so a client cannot make the peek allocate without bound.
 const grpcMaxHeaderList = 1 << 20 // 1 MiB
+
+// grpcHeaderTableSize is HTTP/2's initial SETTINGS_HEADER_TABLE_SIZE, the
+// HPACK dynamic table a client may assume before the server says otherwise.
+const grpcHeaderTableSize = 4096
 
 // grpcPeekMaxFrameSize is the largest frame the routing peek will read. It is
 // HTTP/2's initial SETTINGS_MAX_FRAME_SIZE: a client may not send anything
@@ -45,6 +47,14 @@ var (
 	errPeekTooLarge  = errors.New("gateway: h2c opening flight exceeds the routing peek limit")
 )
 
+// grpcPassthrough routes by the :authority of the first HEADERS frame and
+// pipes the raw h2c bytes through.
+var grpcPassthrough = passthrough{
+	server:   "grpc-tunnel",
+	protocol: core.ProtocolGRPC,
+	peek:     peekH2Authority,
+}
+
 // ServeGRPCTunnels accepts cleartext HTTP/2 (h2c) connections, routes each by
 // the :authority of its first HEADERS frame to the grpc tunnel on that
 // subdomain, and pipes the raw h2c bytes through. Piping raw (rather than
@@ -62,75 +72,7 @@ func (g *Gateway) ServeGRPCTunnels(ctx context.Context) error {
 // ServeGRPCTunnelsListener serves h2c on an already-bound listener, so a test
 // can pass its own listener to learn the bound port.
 func (g *Gateway) ServeGRPCTunnelsListener(ctx context.Context, ln net.Listener) error {
-	stop := context.AfterFunc(ctx, func() { _ = ln.Close() })
-	defer stop()
-	g.logger.Info("listening",
-		slog.String("server", "grpc-tunnel"),
-		slog.String("addr", ln.Addr().String()))
-
-	if err := acceptLoop(ctx, ln, g.logger, func(conn net.Conn) { g.handleGRPCTunnel(ctx, conn) }); err != nil {
-		return fmt.Errorf("gateway: grpc tunnel accept: %w", err)
-	}
-	return nil
-}
-
-// handleGRPCTunnel routes and pipes one h2c connection. A recover guards the
-// goroutine: the framing/HPACK parser reads untrusted bytes, and a bug there
-// must not take the process down.
-func (g *Gateway) handleGRPCTunnel(ctx context.Context, conn net.Conn) {
-	defer func() {
-		if r := recover(); r != nil {
-			g.logger.Error("grpc tunnel handler panicked", slog.Any("recover", r))
-		}
-		_ = conn.Close()
-	}()
-
-	tuneTCPConn(conn, g.cfg.TCP, g.logger)
-
-	// Bound the routing peek so a client that connects and stalls cannot pin a
-	// goroutine indefinitely.
-	_ = conn.SetReadDeadline(time.Now().Add(g.cfg.Gateway.HandshakeTimeout))
-	authority, buffered, err := peekH2Authority(conn)
-	if err != nil {
-		g.logger.Debug("grpc tunnel: could not read :authority", slog.Any("error", err))
-		return
-	}
-	// The pipe that follows is long-lived; drop the routing deadline.
-	_ = conn.SetReadDeadline(time.Time{})
-
-	host := authority
-	if h, _, splitErr := net.SplitHostPort(authority); splitErr == nil {
-		host = h
-	}
-	sub, ok := core.SubdomainFromHost(strings.ToLower(host), g.cfg.Tunnel.BaseDomain)
-	if !ok {
-		g.logger.Debug("grpc tunnel: :authority is not under the base domain", slog.String("authority", authority))
-		return
-	}
-	sess, found := g.registry.Lookup(ctx, sub)
-	if !found {
-		g.logger.Debug("grpc tunnel: no session for authority", slog.String("subdomain", sub))
-		return
-	}
-	// Only a grpc tunnel's agent expects a raw h2c byte stream.
-	if sess.Tunnel().Protocol != core.ProtocolGRPC {
-		g.logger.Debug("grpc tunnel: subdomain is not a grpc tunnel", slog.String("subdomain", sub))
-		return
-	}
-	opener, ok := sess.(core.RawOpener)
-	if !ok {
-		return
-	}
-	tconn, err := opener.OpenRaw(ctx)
-	if err != nil {
-		g.logger.Debug("grpc tunnel: could not open raw stream", slog.String("subdomain", sub), slog.Any("error", err))
-		return
-	}
-	defer func() { _ = tconn.Close() }()
-
-	g.logger.Debug("grpc passthrough established", slog.String("subdomain", sub))
-	// Replay the preface and frames we consumed while routing, then pipe the rest.
-	pipeRawPrefixed(conn, buffered, tconn)
+	return g.servePassthrough(ctx, ln, grpcPassthrough)
 }
 
 // peekH2Authority reads the HTTP/2 client preface and the frames up to and
@@ -154,7 +96,7 @@ func peekH2Authority(conn net.Conn) (authority string, buffered []byte, err erro
 	}
 
 	fr := http2.NewFramer(io.Discard, tee)
-	fr.ReadMetaHeaders = hpack.NewDecoder(4096, nil)
+	fr.ReadMetaHeaders = hpack.NewDecoder(grpcHeaderTableSize, nil)
 	fr.MaxHeaderListSize = grpcMaxHeaderList
 	fr.SetMaxReadFrameSize(grpcPeekMaxFrameSize)
 
