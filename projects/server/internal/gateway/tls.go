@@ -46,26 +46,16 @@ func (g *Gateway) ServeTLSTunnels(ctx context.Context) error {
 // ServeTLSTunnels calls it after binding the configured address; a test can
 // pass its own listener to learn the bound port.
 func (g *Gateway) ServeTLSTunnelsListener(ctx context.Context, ln net.Listener) error {
-	go func() {
-		<-ctx.Done()
-		_ = ln.Close()
-	}()
+	stop := context.AfterFunc(ctx, func() { _ = ln.Close() })
+	defer stop()
 	g.logger.Info("listening",
 		slog.String("server", "tls-tunnel"),
 		slog.String("addr", ln.Addr().String()))
 
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return nil
-			default:
-				return fmt.Errorf("gateway: tls tunnel accept: %w", err)
-			}
-		}
-		go g.handleTLSTunnel(ctx, conn)
+	if err := acceptLoop(ctx, ln, g.logger, func(conn net.Conn) { g.handleTLSTunnel(ctx, conn) }); err != nil {
+		return fmt.Errorf("gateway: tls tunnel accept: %w", err)
 	}
+	return nil
 }
 
 // handleTLSTunnel routes and pipes one passthrough connection. A recover guards

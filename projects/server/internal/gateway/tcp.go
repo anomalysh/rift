@@ -77,19 +77,11 @@ func (f *tcpForwarder) release(sess *session) {
 	_ = b.ln.Close()
 }
 
+// accept serves sess's port until release cancels ctx and closes ln.
 func (f *tcpForwarder) accept(ctx context.Context, sess *session, ln net.Listener, port int) {
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			// A closed listener (release) is the normal way this loop ends.
-			select {
-			case <-ctx.Done():
-			default:
-				f.logger.Debug("tcp accept ended", slog.Int("port", port), slog.Any("error", err))
-			}
-			return
-		}
-		go f.handle(ctx, sess, conn)
+	err := acceptLoop(ctx, ln, f.logger, func(conn net.Conn) { f.handle(ctx, sess, conn) })
+	if err != nil {
+		f.logger.Debug("tcp accept ended", slog.Int("port", port), slog.Any("error", err))
 	}
 }
 

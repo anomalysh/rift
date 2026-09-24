@@ -145,26 +145,28 @@ func run() error {
 	rp := reaper.New(cfg, logger, db.Tunnels())
 	go rp.Run(ctx)
 
-	// The TLS passthrough listener is a raw TCP acceptor, not an http.Server, so
-	// it runs on its own goroutine and stops when ctx is cancelled.
+	// Room for every http.Server plus the two raw listeners below.
+	errCh := make(chan error, len(servers)+2)
+
+	// The TLS passthrough and h2c gRPC listeners are raw TCP acceptors, not
+	// http.Servers, so each runs on its own goroutine and stops when ctx is
+	// cancelled. Failing to listen is as fatal as it is for the http servers:
+	// staying up without it would hand agents a bind_addr nothing serves.
 	if cfg.TLSTunnel.Enabled {
 		go func() {
 			if err := gw.ServeTLSTunnels(ctx); err != nil {
-				logger.Error("tls tunnel listener stopped", slog.Any("error", err))
+				errCh <- fmt.Errorf("tls tunnel listener: %w", err)
 			}
 		}()
 	}
-
-	// The h2c gRPC listener is likewise a raw TCP acceptor on its own goroutine.
 	if cfg.GRPC.Enabled {
 		go func() {
 			if err := gw.ServeGRPCTunnels(ctx); err != nil {
-				logger.Error("grpc tunnel listener stopped", slog.Any("error", err))
+				errCh <- fmt.Errorf("grpc tunnel listener: %w", err)
 			}
 		}()
 	}
 
-	errCh := make(chan error, len(servers))
 	var wg sync.WaitGroup
 	for _, ns := range servers {
 		ns := ns

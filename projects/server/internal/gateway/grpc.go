@@ -62,26 +62,16 @@ func (g *Gateway) ServeGRPCTunnels(ctx context.Context) error {
 // ServeGRPCTunnelsListener serves h2c on an already-bound listener, so a test
 // can pass its own listener to learn the bound port.
 func (g *Gateway) ServeGRPCTunnelsListener(ctx context.Context, ln net.Listener) error {
-	go func() {
-		<-ctx.Done()
-		_ = ln.Close()
-	}()
+	stop := context.AfterFunc(ctx, func() { _ = ln.Close() })
+	defer stop()
 	g.logger.Info("listening",
 		slog.String("server", "grpc-tunnel"),
 		slog.String("addr", ln.Addr().String()))
 
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			select {
-			case <-ctx.Done():
-				return nil
-			default:
-				return fmt.Errorf("gateway: grpc tunnel accept: %w", err)
-			}
-		}
-		go g.handleGRPCTunnel(ctx, conn)
+	if err := acceptLoop(ctx, ln, g.logger, func(conn net.Conn) { g.handleGRPCTunnel(ctx, conn) }); err != nil {
+		return fmt.Errorf("gateway: grpc tunnel accept: %w", err)
 	}
+	return nil
 }
 
 // handleGRPCTunnel routes and pipes one h2c connection. A recover guards the
