@@ -9,10 +9,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # e2e-install.sh -- prove the curl|sh installer against a real (local) release
 # tree. install.sh is the highest-blast-radius script -- it drops a binary onto
-# a user's PATH -- and its trust anchor is the SHA256SUMS check. This serves a
-# fake release over http and asserts: a clean install verifies and runs, a
-# TAMPERED checksum is refused before anything touches PATH, a MISSING checksum
-# entry is refused, and --dry-run changes nothing. No network, no Docker.
+# a user's PATH -- and it guards the download with HTTPS plus a SHA256SUMS
+# integrity check. This serves a fake release over http on loopback (via the
+# test-only RIFT_INSTALL_ALLOW_HTTP=1) and asserts: a clean install verifies and
+# runs, a TAMPERED checksum is refused before anything touches PATH, a MISSING
+# checksum entry is refused, --dry-run changes nothing, and plain http is
+# refused without the opt-in. No network, no Docker.
 
 usage() {
 	cat >&2 <<'EOF'
@@ -62,8 +64,10 @@ wait_for_tcp "$PORT" "install fixture server"
 
 base="http://127.0.0.1:$PORT"
 run_install() {
-	# Isolate every install: its own dir, no inherited RIFT_INSTALL_*.
-	env -i PATH="$PATH" HOME="$WORK" \
+	# Isolate every install: its own dir, no inherited RIFT_INSTALL_*. The
+	# fixture is plain http on loopback, which install.sh refuses unless the
+	# test-only RIFT_INSTALL_ALLOW_HTTP=1 is set (it enforces https otherwise).
+	env -i PATH="$PATH" HOME="$WORK" RIFT_INSTALL_ALLOW_HTTP=1 \
 		RIFT_INSTALL_BASE_URL="$base" RIFT_INSTALL_VERSION="0.1.0" RIFT_INSTALL_DIR="$1" \
 		sh "$SCRIPT_DIR/install.sh" >"$2" 2>&1
 }
@@ -104,9 +108,25 @@ write_good_sums
 # 4. --dry-run changes nothing.
 bin4="$WORK/bin-dry"
 rc=0
-env -i PATH="$PATH" HOME="$WORK" RIFT_INSTALL_BASE_URL="$base" RIFT_INSTALL_VERSION="0.1.0" \
-	RIFT_INSTALL_DIR="$bin4" sh "$SCRIPT_DIR/install.sh" --dry-run >"$WORK/dry.log" 2>&1 || rc=$?
+env -i PATH="$PATH" HOME="$WORK" RIFT_INSTALL_ALLOW_HTTP=1 RIFT_INSTALL_BASE_URL="$base" \
+	RIFT_INSTALL_VERSION="0.1.0" RIFT_INSTALL_DIR="$bin4" \
+	sh "$SCRIPT_DIR/install.sh" --dry-run >"$WORK/dry.log" 2>&1 || rc=$?
 check "--dry-run exits zero" "$rc" "0"
 check "--dry-run installs nothing" "$([ -e "$bin4/rift" ] && echo yes || echo no)" "no"
+
+# 5. Plain http is refused without the test-only opt-in, and refused for a
+# non-loopback host even with it: downloads must be https.
+bin5="$WORK/bin-http"
+rc=0
+env -i PATH="$PATH" HOME="$WORK" RIFT_INSTALL_BASE_URL="$base" RIFT_INSTALL_VERSION="0.1.0" \
+	RIFT_INSTALL_DIR="$bin5" sh "$SCRIPT_DIR/install.sh" >"$WORK/http.log" 2>&1 || rc=$?
+check "plain http base URL is refused" "$([ "$rc" -ne 0 ] && echo yes || echo no)" "yes"
+check "no binary installed over plain http" "$([ -e "$bin5/rift" ] && echo yes || echo no)" "no"
+check_contains "installer explains the https requirement" "$(cat "$WORK/http.log")" "non-https"
+rc=0
+env -i PATH="$PATH" HOME="$WORK" RIFT_INSTALL_ALLOW_HTTP=1 \
+	RIFT_INSTALL_BASE_URL="http://example.invalid/releases" RIFT_INSTALL_VERSION="0.1.0" \
+	RIFT_INSTALL_DIR="$bin5" sh "$SCRIPT_DIR/install.sh" >"$WORK/http-remote.log" 2>&1 || rc=$?
+check "opt-in does not allow a non-loopback http host" "$([ "$rc" -ne 0 ] && echo yes || echo no)" "yes"
 
 print_summary "install e2e"

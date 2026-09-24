@@ -1,8 +1,8 @@
 #!/bin/sh
 # tools/install.sh — POSIX installer for the rift CLI (curl | sh friendly).
 #
-# Detects OS/arch/libc, downloads the matching release binary from GitHub,
-# VERIFIES its SHA256 against the published SHA256SUMS, and installs it.
+# Detects OS/arch/libc, downloads the matching release binary from GitHub over
+# HTTPS, VERIFIES its SHA256 against the published SHA256SUMS, and installs it.
 #
 #   curl -fsSL https://raw.githubusercontent.com/anomalysh/rift/master/tools/install.sh | sh
 #
@@ -12,6 +12,9 @@
 #   RIFT_INSTALL_VERSION   version to install           (default latest release)
 #   RIFT_INSTALL_DIR       install directory            (default /usr/local/bin
 #                                                        or ~/.local/bin)
+#   RIFT_INSTALL_ALLOW_HTTP=1  permit a plain-http BASE_URL, and only on
+#                          loopback (127.0.0.1 / localhost / [::1]); for the
+#                          hermetic installer test, never for real installs
 #
 # Written for POSIX sh: no arrays, no bashisms, no `local`.
 set -eu
@@ -20,6 +23,7 @@ REPO="${RIFT_INSTALL_REPO:-anomalysh/rift}"
 BASE_URL="${RIFT_INSTALL_BASE_URL:-https://github.com/${REPO}/releases/download}"
 VERSION="${RIFT_INSTALL_VERSION:-}"
 INSTALL_DIR="${RIFT_INSTALL_DIR:-}"
+ALLOW_HTTP="${RIFT_INSTALL_ALLOW_HTTP:-}"
 DRY_RUN=0
 
 log() { printf 'rift-install: %s\n' "$*" >&2; }
@@ -47,12 +51,42 @@ Environment:
 EOF
 }
 
+# Transport policy: every download is HTTPS with TLS >= 1.2, including across
+# redirects, so the binary and SHA256SUMS cannot be swapped by anyone on the
+# network path. The single exception is the hermetic installer test, which
+# serves a fake release over http on loopback (RIFT_INSTALL_ALLOW_HTTP=1).
+insecure_http_ok=0
+
+curl_get() {
+	# curl_get URL [curl args...] — fetch honouring the transport policy.
+	_url="$1"
+	shift
+	if [ "$insecure_http_ok" -eq 1 ]; then
+		curl -fsSL "$@" "$_url"
+	else
+		curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 "$@" "$_url"
+	fi
+}
+
+wget_get() {
+	# wget_get URL OUTFILE — fetch honouring the transport policy. BusyBox wget
+	# (Alpine) lacks --https-only/--secure-protocol; the URL itself is already
+	# checked to be https, so they are added only where supported.
+	if [ "$insecure_http_ok" -eq 1 ]; then
+		wget -q -O "$2" "$1"
+	elif wget --help 2>&1 | grep -q -- '--https-only'; then
+		wget -q --https-only --secure-protocol=TLSv1_2 -O "$2" "$1"
+	else
+		wget -q -O "$2" "$1"
+	fi
+}
+
 http_to_file() {
 	# http_to_file URL OUTFILE
 	if have curl; then
-		curl -fsSL "$1" -o "$2"
+		curl_get "$1" -o "$2"
 	elif have wget; then
-		wget -q -O "$2" "$1"
+		wget_get "$1" "$2"
 	else
 		err "need curl or wget to download files"
 	fi
@@ -61,9 +95,9 @@ http_to_file() {
 http_to_stdout() {
 	# http_to_stdout URL
 	if have curl; then
-		curl -fsSL "$1"
+		curl_get "$1"
 	elif have wget; then
-		wget -q -O - "$1"
+		wget_get "$1" -
 	else
 		err "need curl or wget to download files"
 	fi
@@ -114,6 +148,29 @@ while [ $# -gt 0 ]; do
 		;;
 	esac
 done
+
+# ---- source validation -----------------------------------------------------
+# REPO is spliced into URLs, so it must be a plain owner/name.
+case "$REPO" in
+*/*/* | /* | */ | *[!A-Za-z0-9._/-]*)
+	err "invalid RIFT_INSTALL_REPO '${REPO}': expected owner/name"
+	;;
+*/*) : ;;
+*) err "invalid RIFT_INSTALL_REPO '${REPO}': expected owner/name" ;;
+esac
+
+case "$BASE_URL" in
+https://*) : ;;
+http://127.0.0.1:* | http://127.0.0.1/* | http://localhost:* | http://localhost/* | http://\[::1\]:* | http://\[::1\]/*)
+	if [ "$ALLOW_HTTP" = "1" ]; then
+		insecure_http_ok=1
+		warn "RIFT_INSTALL_ALLOW_HTTP=1: downloading over plain http from loopback (testing only)"
+	else
+		err "refusing non-https RIFT_INSTALL_BASE_URL '${BASE_URL}' (set RIFT_INSTALL_ALLOW_HTTP=1 only for a local test server)"
+	fi
+	;;
+*) err "refusing non-https RIFT_INSTALL_BASE_URL '${BASE_URL}': downloads must use https://" ;;
+esac
 
 # ---- platform detection ----------------------------------------------------
 os="$(uname -s)"
@@ -204,10 +261,14 @@ http_to_file "$sums_url" "${tmp}/SHA256SUMS" || err "download failed: ${sums_url
 
 # ---- checksum verification (before anything touches PATH) ------------------
 # Refuse to install a binary whose SHA256 does not match the published
-# SHA256SUMS. Piping an unverified binary into a bin directory is a
-# supply-chain hole: a compromised mirror, a stale CDN, or a MITM could serve a
-# trojaned rift. This check is the trust anchor of the installer, so on any
-# mismatch (or a missing checksum entry) we abort rather than install.
+# SHA256SUMS. This is an INTEGRITY check, not an authenticity check: SHA256SUMS
+# comes from the same release, over the same HTTPS connection, as the binary.
+# It catches a truncated or corrupted download, a stale CDN or mirror object,
+# and a binary swapped without its sums file being updated to match. It does
+# NOT protect against whoever can publish to the release (a compromised
+# GitHub account or release pipeline) -- they can replace both files together.
+# Protection against a network attacker comes from the HTTPS-only transport
+# above. On any mismatch (or a missing checksum entry) we abort.
 expected="$(awk -v f="$artifact" '{ n=$2; sub(/^\*/, "", n); if (n==f) print $1 }' "${tmp}/SHA256SUMS")"
 [ -n "$expected" ] || err "no checksum for ${artifact} in SHA256SUMS; refusing to install"
 actual="$(sha256_of "${tmp}/${artifact}")" || err "need sha256sum or shasum to verify the download"
@@ -234,13 +295,20 @@ if [ -d "$dest_dir" ] && [ -w "$dest_dir" ]; then
 else
 	# We never run sudo on the user's behalf. Persist the verified binary
 	# outside the temp dir (so the trap does not delete it) and print the
-	# exact privileged command for the user to run themselves.
-	persist="${TMPDIR:-/tmp}/rift"
+	# exact privileged command for the user to run themselves. The directory
+	# is a fresh private mktemp one: a fixed name such as /tmp/rift could be
+	# pre-created (or symlinked) by another local user, who would then control
+	# the file the user is about to install as root.
+	persist_dir="$(mktemp -d 2>/dev/null || mktemp -d -t rift-verified)" ||
+		err "cannot create a directory to hold the verified binary"
+	persist="${persist_dir}/rift"
 	cp "${tmp}/${artifact}" "$persist"
 	chmod 0755 "$persist"
 	warn "${dest_dir} is not writable by this user; not using sudo automatically."
 	warn "the verified binary is at ${persist}. To finish, run:"
-	printf '\n    sudo install -Dm 0755 %s %s\n\n' "$persist" "$target" >&2
+	# Plain `install -m` plus a separate mkdir: macOS/BSD install has no -D.
+	printf '\n    sudo mkdir -p %s && sudo install -m 0755 %s %s\n\n' \
+		"$dest_dir" "$persist" "$target" >&2
 	warn "or re-run with a writable directory, e.g. --dir \"\$HOME/.local/bin\""
 	exit 1
 fi
