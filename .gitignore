@@ -21,6 +21,10 @@
 !deploy/**/*.example
 tools/.ssh/
 
+# Python bytecode (tools/provision-mock, tools/e2e)
+__pycache__/
+*.py[cod]
+
 # Editors / OS
 .DS_Store
 .idea/

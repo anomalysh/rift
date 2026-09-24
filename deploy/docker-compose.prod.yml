@@ -18,15 +18,27 @@ services:
     # dev port mappings inherited from the base file.
     ports: !reset []
     environment:
-      RIFT_ENV: ${RIFT_ENV:-production}
+      # Pinned, not ${RIFT_ENV:-production}: a .env copied from .env.example
+      # carries RIFT_ENV=development, which would silently skip every
+      # production-only check (admin token strength, known dev defaults, ...).
+      # Pinned, riftd refuses to boot on the base file's publicly known
+      # development admin token, so an .env that forgot RIFT_ADMIN_TOKEN fails
+      # loudly instead of exposing the admin API with a public secret.
+      RIFT_ENV: production
       RIFT_PUBLIC_SCHEME: ${RIFT_PUBLIC_SCHEME:-https}
-      # Behind Caddy, so trust the X-Forwarded-* it sets. Caddy reaches riftd by
-      # the compose service DNS name; trust that source.
-      RIFT_INGRESS_TRUSTED_PROXY_IPS: ${RIFT_INGRESS_TRUSTED_PROXY_IPS:-}
+      # Behind Caddy, so trust the X-Forwarded-For it sets. Caddy replaces any
+      # client-supplied X-Forwarded-For, so its value is the real visitor. Without
+      # this riftd sees every visitor as Caddy's container IP: IP allow/deny rules
+      # and per-IP rate limits stop working. riftd matches addresses, not names,
+      # so the default trusts Docker's private address pools; riftd's ports are
+      # not published in production, so only containers on this compose network
+      # (i.e. Caddy) can reach it. Narrow it to your network's subnet if you run
+      # other containers on it.
+      RIFT_INGRESS_TRUSTED_PROXY_IPS: ${RIFT_INGRESS_TRUSTED_PROXY_IPS:-172.16.0.0/12,192.168.0.0/16,10.0.0.0/8}
 
   caddy:
     # Stock Caddy serves the http01, self and internal TLS modes. dns01 needs a
-    # solver plugin compiled in: build one with tools/build-caddy.sh and point
+    # solver plugin compiled in: build one with `rift-ops release caddy` and point
     # RIFT_CADDY_IMAGE at it.
     image: ${RIFT_CADDY_IMAGE:-caddy:2-alpine}
     restart: unless-stopped

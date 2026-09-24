@@ -16,7 +16,6 @@ import {
   ENV,
   EXIT,
   LOG_LEVELS,
-  type LogLevel,
   SUPPORTED_PROTOCOLS,
   type SupportedProtocol,
   VERSION,
@@ -41,6 +40,8 @@ export interface CliOption {
   readonly short?: string;
   /** Whether the option consumes the following token as its value. */
   readonly takesValue: boolean;
+  /** A value option that may be given more than once, accumulating a list. */
+  readonly repeatable?: boolean;
   /** Value placeholder shown in docs (e.g. "token", "url", "level"). */
   readonly placeholder?: string;
   /** One-line help, reused verbatim as the completion description. */
@@ -127,11 +128,16 @@ export const CLI_SPEC: CliSpec = {
     "`rift start [name...]` opens one or more named tunnels declared in a " +
       "rift.yml (or .yaml/.toml/.json) file in the working directory, running " +
       "each concurrently. With no names, every declared tunnel is opened.",
+    "A project file travels with a repository, so it may only describe tunnel " +
+      "shape (protocol, port, subdomain, access and traffic policy, domains). " +
+      "The token, the gateway URL, TLS-verification and transport opt-outs, and " +
+      "a non-loopback --host are refused there; they come only from your own " +
+      "config file, environment, or command line.",
   ],
   synopsis: [
     "rift <protocol> <port> [subdomain] [options]",
     "rift start [name...]",
-    "rift --set-token <token> | --set-server <url> | --set-host <host> | --set-log-level <level>",
+    "rift --set-token <token|-> | --set-server <url> | --set-host <host> | --set-log-level <level>",
     "rift completions <bash|zsh|fish>",
     "rift man",
     "rift --version | -v",
@@ -184,15 +190,22 @@ export const CLI_SPEC: CliSpec = {
       long: "--token",
       takesValue: true,
       placeholder: "token",
-      help: "gateway auth token",
+      help: "gateway auth token (shows in ps and shell history; prefer --token-file)",
       kind: "run",
       env: ENV.TOKEN,
+    },
+    {
+      long: "--token-file",
+      takesValue: true,
+      placeholder: "path",
+      help: "read the gateway auth token from a file (surrounding whitespace trimmed)",
+      kind: "run",
     },
     {
       long: "--server",
       takesValue: true,
       placeholder: "url",
-      help: "gateway ws/wss URL",
+      help: "gateway wss:// URL (ws:// only to a loopback gateway)",
       kind: "run",
       env: ENV.SERVER,
     },
@@ -228,8 +241,16 @@ export const CLI_SPEC: CliSpec = {
       kind: "run",
     },
     {
+      long: "--allow-insecure-transport",
+      takesValue: false,
+      help: "allow a cleartext ws:// gateway that is not on loopback (sends the token unencrypted)",
+      kind: "run",
+      env: ENV.ALLOW_INSECURE_TRANSPORT,
+    },
+    {
       long: "--basic-auth",
       takesValue: true,
+      repeatable: true,
       placeholder: "user:pass",
       help: "require HTTP Basic auth to reach the tunnel (repeatable)",
       kind: "run",
@@ -237,6 +258,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--allow-ip",
       takesValue: true,
+      repeatable: true,
       placeholder: "cidr",
       help: "only admit visitors in this IP/CIDR (repeatable; default-deny)",
       kind: "run",
@@ -244,6 +266,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--deny-ip",
       takesValue: true,
+      repeatable: true,
       placeholder: "cidr",
       help: "reject visitors in this IP/CIDR (repeatable)",
       kind: "run",
@@ -278,6 +301,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--set-request-header",
       takesValue: true,
+      repeatable: true,
       placeholder: "h",
       help: 'add/replace a request header sent upstream ("Name: value", repeatable)',
       kind: "run",
@@ -285,6 +309,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--del-request-header",
       takesValue: true,
+      repeatable: true,
       placeholder: "name",
       help: "drop a request header before it reaches the upstream (repeatable)",
       kind: "run",
@@ -292,6 +317,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--set-response-header",
       takesValue: true,
+      repeatable: true,
       placeholder: "h",
       help: 'add/replace a header on the response ("Name: value", repeatable)',
       kind: "run",
@@ -299,6 +325,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--del-response-header",
       takesValue: true,
+      repeatable: true,
       placeholder: "name",
       help: "drop a header from the response (repeatable)",
       kind: "run",
@@ -306,12 +333,21 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--cors",
       takesValue: false,
-      help: "answer CORS preflights and add CORS headers to responses",
+      help: "answer CORS preflights and add CORS headers (Allow-Origin *, no credentials)",
+      kind: "run",
+    },
+    {
+      long: "--cors-origin",
+      takesValue: true,
+      repeatable: true,
+      placeholder: "origin",
+      help: "allow credentialed CORS from this origin, e.g. https://app.example (repeatable; implies --cors)",
       kind: "run",
     },
     {
       long: "--respond",
       takesValue: true,
+      repeatable: true,
       placeholder: "rule",
       help: 'serve a fixed response for a path ("/health=200:ok", repeatable)',
       kind: "run",
@@ -319,6 +355,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--redirect",
       takesValue: true,
+      repeatable: true,
       placeholder: "rule",
       help: 'redirect a path ("/old=/new" or "/old=301:/new", repeatable)',
       kind: "run",
@@ -326,6 +363,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--route",
       takesValue: true,
+      repeatable: true,
       placeholder: "rule",
       help: 'route a path prefix to another local port ("/api=4000", repeatable)',
       kind: "run",
@@ -346,6 +384,7 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--domain",
       takesValue: true,
+      repeatable: true,
       placeholder: "host",
       help: "route a BYO custom domain to this tunnel (repeatable; CNAME it first)",
       kind: "run",
@@ -354,7 +393,7 @@ export const CLI_SPEC: CliSpec = {
       long: "--set-token",
       takesValue: true,
       placeholder: "token",
-      help: "persist token to the config file and exit",
+      help: 'persist token to the config file and exit ("-" reads it from stdin)',
       kind: "persist",
     },
     {
@@ -406,12 +445,20 @@ export const CLI_SPEC: CliSpec = {
       cmd: "rift --set-server wss://gw.example.com",
       desc: "save a default gateway to the config file",
     },
+    {
+      cmd: "rift --set-token - < token.txt",
+      desc: "save the token from stdin, keeping it out of argv",
+    },
   ],
   env: [
     { name: ENV.TOKEN, help: "gateway auth token (see --token)" },
-    { name: ENV.SERVER, help: "gateway ws/wss URL (see --server)" },
+    { name: ENV.SERVER, help: "gateway wss:// URL (see --server)" },
     { name: ENV.HOST, help: "local host to forward to (see --host)" },
     { name: ENV.LOG_LEVEL, help: "log verbosity (see --log-level)" },
+    {
+      name: ENV.ALLOW_INSECURE_TRANSPORT,
+      help: "set to 1 to allow a non-loopback ws:// gateway (see --allow-insecure-transport)",
+    },
     {
       name: ENV.XDG_CONFIG_HOME,
       help: "base directory for the config file; falls back to $HOME/.config",
@@ -439,6 +486,3 @@ export const CLI_SPEC: CliSpec = {
   seeAlso:
     "Project documentation and the wire-protocol contract ship with the source tree (README.md, docs/PROTOCOL.md).",
 };
-
-/** All log levels, exported for renderers that offer value completion. */
-export const SPEC_LOG_LEVELS: readonly LogLevel[] = LOG_LEVELS;

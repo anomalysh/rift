@@ -11,7 +11,7 @@
 #
 # Kept separate from the tcp overlay on purpose: the two features are enabled
 # independently, so publishing must be independent too. Publishing 8443 while
-# riftd's tls passthrough is off would bind a dead host port that tools/harden.sh
+# riftd's tls passthrough is off would bind a dead host port that `rift-ops host harden`
 # (which gates the firewall per-flag) would not open.
 #
 # Unlike http/ws tunnels, a tls passthrough tunnel cannot be fronted by Caddy: it

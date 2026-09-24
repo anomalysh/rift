@@ -74,10 +74,39 @@ export function createStyle(enabled: boolean): Style {
 // control is emitted by the Dashboard separately and never measured here.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching the ANSI ESC (0x1b) is the whole point of stripping SGR codes.
 const ANSI_SGR = /\x1b\[[0-9;]*m/g;
+// The same pattern anchored at a position (sticky), for scanning in place.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching the ANSI ESC (0x1b) is the whole point of stripping SGR codes.
+const SGR_AT = /\x1b\[[0-9;]*m/y;
 
 /** Strip SGR colour codes, leaving the printable text. */
 export function stripAnsi(s: string): string {
   return s.replace(ANSI_SGR, "");
+}
+
+// Any escape sequence a terminal would act on: CSI (ESC [ ... final), OSC /
+// DCS / SOS / PM / APC strings (ESC ] ... BEL or ST), and two-byte ESC forms.
+// The 8-bit C1 introducers (0x9b CSI, 0x9d OSC, ...) are caught by the
+// control-character pass below, which also removes a dangling ESC.
+const TERMINAL_ESCAPE =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching escape sequences is the whole point.
+  /\x1b(?:\[[0-?]*[ -/]*[@-~]|[\]PX^_][^\x07\x1b]*(?:\x07|\x1b\\)?|[ -~])/g;
+const LINE_BREAKS = /[\t\n\r]/g;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the whole point.
+const CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/g;
+
+/**
+ * Make an untrusted string safe to print. Strings the gateway sends (tunnel URL,
+ * error and shutdown messages, close reasons) reach the terminal, and an
+ * embedded escape sequence could retitle the window, rewrite earlier output,
+ * forge a URL, or on some terminals worse. Escape sequences are removed, line
+ * breaks and tabs become spaces (so one message stays one line), and every
+ * remaining C0, DEL, and C1 control character is dropped.
+ */
+export function sanitizeForTerminal(s: string): string {
+  return s
+    .replace(TERMINAL_ESCAPE, "")
+    .replace(LINE_BREAKS, " ")
+    .replace(CONTROL_CHARS, "");
 }
 
 /**
@@ -108,18 +137,18 @@ export function truncateVisible(s: string, max: number): string {
   let i = 0;
   while (i < s.length) {
     if (s[i] === "\x1b") {
-      const start = i;
-      i++;
-      if (s[i] === "[") {
+      // Only our own SGR colour codes are copied through (zero-width). Any
+      // other escape -- cursor movement, OSC title/hyperlink -- is not
+      // something content may carry, so its ESC is dropped and the rest prints
+      // as inert text.
+      SGR_AT.lastIndex = i;
+      const sgr = SGR_AT.exec(s);
+      if (sgr !== null) {
+        out += sgr[0];
+        i += sgr[0].length;
+      } else {
         i++;
-        while (i < s.length && !/[a-zA-Z]/.test(s[i] ?? "")) {
-          i++;
-        }
-        if (i < s.length) {
-          i++; // include the terminating letter
-        }
       }
-      out += s.slice(start, i);
       continue;
     }
     if (count >= limit) {
@@ -129,8 +158,7 @@ export function truncateVisible(s: string, max: number): string {
     count++;
     i++;
   }
-  const hadColor = ANSI_SGR.test(s);
-  ANSI_SGR.lastIndex = 0; // `test` on a /g regex is stateful; reset it
+  const hadColor = stripAnsi(s) !== s;
   return `${out}…${hadColor ? SGR.reset : ""}`;
 }
 
@@ -473,8 +501,9 @@ const setScrollRegion = (top: number, bottom: number): string =>
 
 /** Spinner cadence; signature-gated header repaints keep idle states near 1 Hz. */
 const TICK_INTERVAL_MS = 120;
-/** Terminal height to assume when stdout does not report one. */
-const FALLBACK_ROWS = 24;
+/** Terminal size to assume when stdout does not report one. */
+export const FALLBACK_COLUMNS = 80;
+export const FALLBACK_ROWS = 24;
 
 /** Injected environment for the Dashboard, so it is TTY- and clock-agnostic. */
 export interface DashboardDeps {
@@ -525,7 +554,7 @@ export class Dashboard {
 
   /** Clear the screen, pin the header, and start scrolling the log below it. */
   start(): void {
-    this.termRows = Math.max(1, this.deps.rows() || FALLBACK_ROWS);
+    this.termRows = this.reportedRows();
     // A terminal too short for the header plus a line of log cannot host the
     // fixed layout; degrade to a one-shot banner and plain logs.
     if (this.termRows <= PANEL_HEIGHT + 1) {
@@ -610,6 +639,11 @@ export class Dashboard {
     this.deps.offExit(this.exitHandler);
   }
 
+  /** The terminal height, falling back when it reports none (0). */
+  private reportedRows(): number {
+    return Math.max(1, this.deps.rows() || FALLBACK_ROWS);
+  }
+
   private headerWidth(): number {
     return clampWidth(this.deps.columns());
   }
@@ -636,7 +670,7 @@ export class Dashboard {
       return;
     }
     const width = this.headerWidth();
-    const rows = Math.max(1, this.deps.rows() || FALLBACK_ROWS);
+    const rows = this.reportedRows();
     const state = this.snapshot();
     const sig = `${signatureOf(state, width)}|${rows}`;
     if (!force && sig === this.lastSignature) {
@@ -663,8 +697,8 @@ export class Dashboard {
 // frame is excluded for steady states (online/offline) so an idle tunnel does
 // not repaint on every 120 ms tick — only when uptime seconds or metrics move.
 function signatureOf(state: PanelState, width: number): string {
-  const animated = state.status === "online" || state.status === "offline";
-  const spin = animated ? "" : state.spinnerFrame;
+  const steady = state.status === "online" || state.status === "offline";
+  const spin = steady ? "" : state.spinnerFrame;
   const metrics =
     state.metrics !== null
       ? `${state.metrics.total}/${state.metrics.open}`

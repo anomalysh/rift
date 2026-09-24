@@ -2,67 +2,36 @@
 // RequestStream issues a streaming fetch to the local service and streams the
 // response back as RES_HEAD / RES_BODY* / RES_END frames, or a RESET on error.
 
+import { formatAuthority } from "./config.ts";
 import {
-  BACKPRESSURE_THRESHOLD_BYTES,
   DRAIN_POLL_INTERVAL_MS,
   FrameType,
   HOP_BY_HOP_HEADERS,
-  MAX_PAYLOAD_BYTES,
+  MAX_STREAM_BUFFER_BYTES,
   ResetCode,
   type ResetCodeValue,
 } from "./constants.ts";
-import type { Logger } from "./logger.ts";
-import type {
-  HeaderMap,
-  RequestHead,
-  ResponseHead,
-  StreamReset,
+import { errorMessage } from "./logger.ts";
+import {
+  appendHeader,
+  type HeaderMap,
+  newHeaderMap,
+  type RequestHead,
+  type ResponseHead,
+  requestTargetProblem,
 } from "./protocol.ts";
+import {
+  EMPTY_BYTES,
+  linkBackedUp,
+  payloadSlices,
+  type Stream,
+  type StreamDeps,
+  sendStreamEnd,
+  sendStreamReset,
+} from "./stream.ts";
 import type { SyntheticResponse, TrafficController } from "./traffic.ts";
 
-const EMPTY = new Uint8Array(0);
-
-/** Sink for outbound frames, implemented by the WebSocket client. */
-export interface FrameSink {
-  send(type: number, streamId: bigint, payload: Uint8Array): void;
-  sendJson(type: number, streamId: bigint, payload: unknown): void;
-  /** Bytes queued in the socket but not yet flushed to the network. */
-  bufferedAmount(): number;
-  isOpen(): boolean;
-}
-
-export interface ForwardTarget {
-  readonly host: string;
-  readonly port: number;
-  /** Dial the local upstream over TLS (an `https` tunnel). */
-  readonly tls?: boolean;
-  /** Skip certificate verification on that TLS dial (self-signed upstream). */
-  readonly insecure?: boolean;
-  /** SNI to present; defaults to the target host. */
-  readonly serverName?: string;
-}
-
-/**
- * The agent-side handler for one gateway stream. Both an ordinary HTTP exchange
- * (RequestStream) and an upgraded connection (UpgradeStream) implement it, so
- * the client demultiplexes REQ_BODY / REQ_END / RESET frames without caring
- * which kind a given stream is.
- */
-export interface Stream {
-  /** REQ_BODY: bytes from the public client. */
-  pushBody(chunk: Uint8Array): void;
-  /** REQ_END: the public client will send no more bytes. */
-  endBody(): void;
-  /** RESET (or local transport loss): abort the exchange with a reason code. */
-  reset(code: string): void;
-}
-
-export interface RequestStreamDeps {
-  readonly target: ForwardTarget;
-  readonly sink: FrameSink;
-  readonly logger: Logger;
-  /** Called exactly once when the stream is fully retired. */
-  readonly onDone: (streamId: bigint) => void;
+export interface RequestStreamDeps extends StreamDeps {
   /** Agent-side traffic policy (headers, CORS, mock, routing, breaker). */
   readonly traffic?: TrafficController;
 }
@@ -75,6 +44,49 @@ interface FetchInit extends RequestInit {
   duplex?: "half";
   decompress?: boolean;
   tls?: BunFetchRequestInitTLS;
+}
+
+/**
+ * Methods whose fetch() may not carry a body. The Fetch standard forbids one on
+ * GET and HEAD and Bun's fetch also throws for OPTIONS, which would turn an
+ * otherwise-valid request into a 502. RFC 9110 gives such a body no defined
+ * semantics, so it is drained and dropped instead.
+ */
+const BODYLESS_METHODS: ReadonlySet<string> = new Set([
+  "GET",
+  "HEAD",
+  "OPTIONS",
+]);
+
+/**
+ * The local URL a request is fetched from. The target is parsed against a base
+ * built only from the configured host and port, then the result's scheme and
+ * authority are asserted unchanged: the path comes from the gateway, and a
+ * target that re-parsed into another host or port (userinfo, "//host",
+ * backslash tricks) must never reach fetch. asRequestHead already rejects such
+ * paths; this is the independent second check at the point of use.
+ */
+export function buildUpstreamUrl(
+  host: string,
+  port: number,
+  tls: boolean,
+  path: string,
+): URL {
+  const scheme = tls ? "https" : "http";
+  const base = new URL(`${scheme}://${formatAuthority(host, port)}/`);
+  const problem = requestTargetProblem("GET", path === "*" ? "/" : path);
+  if (problem !== null) {
+    throw new Error(`refusing request target: ${problem}`);
+  }
+  // fetch cannot express asterisk-form ("OPTIONS *"); "/" is the closest
+  // server-wide target it can send.
+  const url = new URL(path === "*" ? "/" : path, base);
+  if (url.protocol !== base.protocol || url.host !== base.host) {
+    throw new Error(
+      `refusing request target: it resolves outside ${base.host}`,
+    );
+  }
+  return url;
 }
 
 function isHopByHop(name: string): boolean {
@@ -113,18 +125,12 @@ function buildRequestHeaders(source: HeaderMap): Headers {
 
 /** Convert response headers to a HeaderMap, stripping hop-by-hop headers. */
 function responseHeaderMap(headers: Headers): HeaderMap {
-  const out: HeaderMap = {};
+  const out = newHeaderMap();
   headers.forEach((value, name) => {
     const lower = name.toLowerCase();
     // set-cookie must not be comma-joined; collected separately below.
-    if (lower === "set-cookie" || isHopByHop(lower)) {
-      return;
-    }
-    const existing = out[lower];
-    if (existing) {
-      existing.push(value);
-    } else {
-      out[lower] = [value];
+    if (lower !== "set-cookie" && !isHopByHop(lower)) {
+      appendHeader(out, lower, value);
     }
   });
   const cookies = headers.getAll("set-cookie");
@@ -143,6 +149,8 @@ export class RequestStream implements Stream {
   private bodyController: ReadableStreamDefaultController<Uint8Array> | null =
     null;
   private readonly bodyStream: ReadableStream<Uint8Array> | null;
+  /** A body on a method fetch cannot send it with; drained and discarded. */
+  private readonly dropBody: boolean;
   private aborted = false;
   private finished = false;
   private bodyClosed = false;
@@ -153,22 +161,59 @@ export class RequestStream implements Stream {
     private readonly head: RequestHead,
     private readonly deps: RequestStreamDeps,
   ) {
-    if (head.has_body) {
-      this.bodyStream = new ReadableStream<Uint8Array>({
-        start: (controller) => {
-          this.bodyController = controller;
+    this.dropBody =
+      head.has_body && BODYLESS_METHODS.has(head.method.toUpperCase());
+    if (head.has_body && !this.dropBody) {
+      // Queue by byte length so desiredSize tracks how much of the body fetch
+      // has not consumed yet; pushBody resets the stream past the cap.
+      this.bodyStream = new ReadableStream<Uint8Array>(
+        {
+          start: (controller) => {
+            this.bodyController = controller;
+          },
+          // fetch cancels the body it is sending when the exchange fails or is
+          // aborted; enqueue() or close() on a cancelled stream throws, so
+          // stop feeding it rather than let a late REQ_BODY throw.
+          cancel: () => {
+            this.bodyClosed = true;
+          },
         },
-      });
+        {
+          highWaterMark: MAX_STREAM_BUFFER_BYTES,
+          size: (chunk) => chunk?.byteLength ?? 0,
+        },
+      );
     } else {
+      if (this.dropBody) {
+        this.deps.logger.debug(
+          `dropping request body on ${head.method} stream ${streamId}: fetch cannot send one`,
+        );
+      }
       this.bodyStream = null;
     }
-    void this.run();
+    this.run().catch((err: unknown) => {
+      // Last line of defence: an unexpected throw (a traffic hook, the sink)
+      // fails this one stream instead of escaping as an unhandled rejection,
+      // which would take the whole agent down.
+      this.abortLocal(ResetCode.INTERNAL, errorMessage(err));
+      this.finish();
+    });
   }
 
   /** Feed a REQ_BODY chunk into the upstream request body. */
   pushBody(chunk: Uint8Array): void {
-    if (this.bodyController !== null && !this.bodyClosed && !this.aborted) {
-      this.bodyController.enqueue(chunk);
+    if (this.bodyController === null || this.bodyClosed || this.aborted) {
+      // Includes a dropped GET/HEAD/OPTIONS body: the bytes are discarded.
+      return;
+    }
+    this.bodyController.enqueue(chunk);
+    // The gateway cannot be asked to slow down, so a local service reading
+    // slower than the public client uploads backs bytes up here. Bound it.
+    if ((this.bodyController.desiredSize ?? 0) < 0) {
+      this.abortLocal(
+        ResetCode.PAYLOAD_TOO_LARGE,
+        `request body backlog exceeded ${MAX_STREAM_BUFFER_BYTES} bytes`,
+      );
     }
   }
 
@@ -186,8 +231,22 @@ export class RequestStream implements Stream {
       return;
     }
     this.aborted = true;
-    this.failBody(`stream reset: ${code}`);
+    this.deps.logger.debug(`stream ${this.streamId} reset: ${code}`);
     this.controller.abort();
+    this.failBody();
+  }
+
+  /** Abort the exchange from this side, telling the gateway why. */
+  private abortLocal(code: ResetCodeValue, message: string): void {
+    if (this.aborted) {
+      return;
+    }
+    this.deps.logger.warn(`resetting stream ${this.streamId}: ${message}`);
+    this.sendReset(code, message);
+    this.aborted = true;
+    this.controller.abort();
+    this.failBody();
+    this.finish();
   }
 
   private async run(): Promise<void> {
@@ -223,11 +282,24 @@ export class RequestStream implements Stream {
       return;
     }
 
-    const scheme = tls === true ? "https" : "http";
-    const url = `${scheme}://${host}:${port}${this.head.path}`;
-    const headers = buildRequestHeaders(this.head.headers);
-    // T1: rewrite outbound request headers before the fetch.
-    traffic?.decorateRequest(headers);
+    let url: URL;
+    let headers: Headers;
+    try {
+      url = buildUpstreamUrl(host, port, tls === true, this.head.path);
+      headers = buildRequestHeaders(this.head.headers);
+      // T1: rewrite outbound request headers before the fetch.
+      traffic?.decorateRequest(headers);
+    } catch (err) {
+      // An unforwardable head (see buildUpstreamUrl) or a header value the
+      // Headers class rejects: fail this one stream, never the agent.
+      const message = errorMessage(err);
+      this.deps.logger.warn(
+        `cannot forward stream ${this.streamId}: ${message}`,
+      );
+      this.sendReset(ResetCode.INTERNAL, message);
+      this.finish();
+      return;
+    }
     const init: FetchInit = {
       method: this.head.method,
       headers,
@@ -279,14 +351,14 @@ export class RequestStream implements Stream {
       this.headSent = true;
 
       await this.streamResponseBody(response);
-      if (!this.aborted && this.deps.sink.isOpen()) {
-        this.deps.sink.send(FrameType.RES_END, this.streamId, EMPTY);
+      if (!this.aborted) {
+        sendStreamEnd(this.deps.sink, this.streamId);
       }
     } catch (err) {
       if (this.aborted) {
         return;
       }
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       // Before RES_HEAD the local service was unreachable (ECONNREFUSED / DNS);
       // after it, the failure is mid-stream and internal to this exchange.
       if (!this.headSent) {
@@ -320,7 +392,9 @@ export class RequestStream implements Stream {
         if (done) {
           return;
         }
-        if (this.aborted) {
+        if (this.aborted || !this.deps.sink.isOpen()) {
+          // Nobody is left to receive the rest: stop pulling the upstream body
+          // rather than draining it into the void.
           await reader.cancel();
           return;
         }
@@ -335,19 +409,12 @@ export class RequestStream implements Stream {
 
   /** Split a body chunk to MAX_PAYLOAD_BYTES frames, honouring backpressure. */
   private async sendChunked(data: Uint8Array): Promise<void> {
-    let offset = 0;
-    while (offset < data.length) {
+    for (const part of payloadSlices(data)) {
+      await this.waitForDrain();
       if (this.aborted || !this.deps.sink.isOpen()) {
         return;
       }
-      await this.waitForDrain();
-      const end = Math.min(offset + MAX_PAYLOAD_BYTES, data.length);
-      this.deps.sink.send(
-        FrameType.RES_BODY,
-        this.streamId,
-        data.subarray(offset, end),
-      );
-      offset = end;
+      this.deps.sink.send(FrameType.RES_BODY, this.streamId, part);
     }
   }
 
@@ -355,7 +422,7 @@ export class RequestStream implements Stream {
     while (
       !this.aborted &&
       this.deps.sink.isOpen() &&
-      this.deps.sink.bufferedAmount() > BACKPRESSURE_THRESHOLD_BYTES
+      linkBackedUp(this.deps.sink)
     ) {
       await sleep(DRAIN_POLL_INTERVAL_MS);
     }
@@ -373,27 +440,33 @@ export class RequestStream implements Stream {
     const resHead: ResponseHead = { status: res.status, headers: res.headers };
     this.deps.sink.sendJson(FrameType.RES_HEAD, this.streamId, resHead);
     this.headSent = true;
-    if (res.body.length > 0) {
-      this.deps.sink.send(FrameType.RES_BODY, this.streamId, res.body);
+    // A mock body can exceed one frame (a project file is not bound by argv
+    // limits); an oversized frame would throw instead of being sent.
+    for (const part of payloadSlices(res.body)) {
+      this.deps.sink.send(FrameType.RES_BODY, this.streamId, part);
     }
-    this.deps.sink.send(FrameType.RES_END, this.streamId, EMPTY);
+    this.deps.sink.send(FrameType.RES_END, this.streamId, EMPTY_BYTES);
   }
 
   private sendReset(code: ResetCodeValue, message: string): void {
-    if (!this.deps.sink.isOpen()) {
-      return;
-    }
-    const reset: StreamReset = { code };
-    if (message !== "") {
-      reset.message = message;
-    }
-    this.deps.sink.sendJson(FrameType.RESET, this.streamId, reset);
+    sendStreamReset(this.deps.sink, this.streamId, code, message);
   }
 
-  private failBody(reason: string): void {
+  /**
+   * Stop feeding the upstream request body. Call it only AFTER aborting the
+   * fetch: the abort cancels the body stream fetch is reading, which releases
+   * the queued chunks. Erroring that stream instead (controller.error) makes
+   * Bun's fetch body pump reject with nobody awaiting it -- from Bun 1.3.14 an
+   * unhandled rejection, which would take the whole agent down with it.
+   */
+  private failBody(): void {
     if (this.bodyController !== null && !this.bodyClosed) {
       this.bodyClosed = true;
-      this.bodyController.error(new Error(reason));
+      try {
+        this.bodyController.close();
+      } catch {
+        // Already cancelled by the aborted fetch: nothing left to release.
+      }
     }
   }
 

@@ -17,7 +17,7 @@ Authentication:
   - Otherwise it falls back to password auth via sshpass, reading the password
     from RIFT_VPS_PASSWORD.
 
-Environment:
+Environment (each read from the untracked .env when not already set):
   RIFT_VPS_HOST      (required) VPS hostname or IP
   RIFT_VPS_USER      SSH user            (default: root)
   RIFT_VPS_PORT      SSH port            (default: 22)
@@ -33,22 +33,17 @@ case "${1:-}" in
 esac
 
 require_cmd ssh
+load_env
 require_env RIFT_VPS_HOST
 
-host="$RIFT_VPS_HOST"
-user="${RIFT_VPS_USER:-root}"
-port="${RIFT_VPS_PORT:-22}"
-
-ssh_args=("${RIFT_SSH_OPTS[@]}" -p "$port")
+# Key auth if the managed key exists, else `sshpass -e` (never `-p`, which would
+# leak the password into argv); see rift_ssh_cmd in lib/common.sh.
+rift_ssh_cmd ssh
 
 # Allocate a TTY only for an interactive session (no remote command). Forcing a
 # TTY for a piped/remote command would corrupt binary stdin/stdout.
 if [ "$#" -eq 0 ]; then
-	ssh_args+=(-t)
+	RIFT_SSH_CMD+=(-t)
 fi
 
-# Key auth if the managed key exists, else `sshpass -e` (never `-p`, which would
-# leak the password into argv). rift_ssh_auth fills both arrays by nameref.
-auth=() prefix=()
-rift_ssh_auth auth prefix
-exec "${prefix[@]}" ssh "${ssh_args[@]}" "${auth[@]}" "$user@$host" "$@"
+exec "${RIFT_SSH_CMD[@]}" "${RIFT_VPS_USER:-root}@$RIFT_VPS_HOST" "$@"

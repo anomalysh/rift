@@ -10,10 +10,16 @@
 // would loop forever; transport loss is expected to be transient.
 
 import { Backoff } from "./backoff.ts";
-import type { ResolvedConfig } from "./config.ts";
+import {
+  formatAuthority,
+  gatewayTransportProblem,
+  isLoopbackHost,
+  type ResolvedConfig,
+} from "./config.ts";
 import {
   ControlType,
   FrameType,
+  HEARTBEAT,
   HelloErrorCode,
   PROTOCOL_DIALER,
   PROTOCOL_VERSION,
@@ -24,8 +30,8 @@ import {
   type SupportedProtocol,
   VERSION,
 } from "./constants.ts";
-import { type FrameSink, RequestStream, type Stream } from "./forwarder.ts";
-import type { Logger } from "./logger.ts";
+import { RequestStream } from "./forwarder.ts";
+import { errorMessage, type Logger } from "./logger.ts";
 import type { WirePolicy } from "./policy.ts";
 import {
   asHelloError,
@@ -45,9 +51,14 @@ import {
   type Hello,
   isKnownFrameType,
 } from "./protocol.ts";
+import { type FrameSink, type Stream, sendStreamReset } from "./stream.ts";
 import type { TrafficController } from "./traffic.ts";
 import { UdpStream } from "./udp.ts";
-import { formatRetryDelay, type SessionInfo } from "./ui.ts";
+import {
+  formatRetryDelay,
+  type SessionInfo,
+  sanitizeForTerminal,
+} from "./ui.ts";
 import { UpgradeStream } from "./upgrade.ts";
 
 export interface ClientOptions {
@@ -72,15 +83,19 @@ export class ClientError extends Error {
   }
 }
 
-/** Hosts treated as loopback for the upstream-TLS verification default. */
-const LOOPBACK_HOSTS: ReadonlySet<string> = new Set([
-  "127.0.0.1",
-  "::1",
-  "localhost",
-]);
-
-function isLoopbackHost(host: string): boolean {
-  return LOOPBACK_HOSTS.has(host.toLowerCase());
+/**
+ * Clamp the gateway-supplied heartbeat interval into HEARTBEAT bounds. A zero,
+ * negative, or non-numeric value falls back to the default; an absurdly small
+ * one would spin the agent and a huge one would disable dead-link detection.
+ */
+export function clampHeartbeatInterval(ms: number): number {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return HEARTBEAT.DEFAULT_INTERVAL_MS;
+  }
+  return Math.min(
+    HEARTBEAT.MAX_INTERVAL_MS,
+    Math.max(HEARTBEAT.MIN_INTERVAL_MS, ms),
+  );
 }
 
 export class TunnelClient {
@@ -99,6 +114,10 @@ export class TunnelClient {
   private ws: WebSocket | null = null;
   private readonly streams = new Map<bigint, Stream>();
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  /** When the current socket last delivered any frame (liveness tracking). */
+  private lastInboundAt = 0;
+  /** The plaintext-transport warning is printed once, not on every reconnect. */
+  private warnedInsecureTransport = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private readonly backoff = new Backoff({
@@ -177,6 +196,17 @@ export class TunnelClient {
     if (this.stopped || this.fatal !== null) {
       return;
     }
+    // The hello carries the token, so refuse to send it in cleartext to a
+    // remote gateway unless the user explicitly opted in (config.ts).
+    const transportProblem = gatewayTransportProblem(
+      this.config.server,
+      this.config.allowInsecureTransport,
+    );
+    if (transportProblem !== null) {
+      this.fail(new ClientError(transportProblem));
+      return;
+    }
+    this.warnIfCleartext();
     const options: Bun.WebSocketOptions = { protocols: [SUBPROTOCOL] };
     if (this.config.insecure) {
       options.tls = { rejectUnauthorized: false };
@@ -195,23 +225,61 @@ export class TunnelClient {
       // A malformed server URL fails synchronously; treat as fatal.
       this.fail(
         new ClientError(
-          `cannot connect to ${this.config.server}: ${err instanceof Error ? err.message : String(err)}`,
+          `cannot connect to ${this.config.server}: ${errorMessage(err)}`,
         ),
       );
       return;
     }
     ws.binaryType = "arraybuffer";
     this.ws = ws;
+    this.lastInboundAt = Date.now();
 
-    ws.addEventListener("open", () => this.onOpen());
-    ws.addEventListener("message", (event) => this.onMessage(event));
+    // Every handler first checks that `ws` is still the current socket: one
+    // abandoned by the liveness check (see checkLiveness) may still deliver a
+    // late close or message, which must not disturb its replacement.
+    ws.addEventListener("open", () => {
+      if (this.ws === ws) this.onOpen();
+    });
+    ws.addEventListener("message", (event) => {
+      if (this.ws !== ws) return;
+      this.lastInboundAt = Date.now();
+      try {
+        this.onMessage(event);
+      } catch (err) {
+        // Bun exits the process on a throw out of an event listener, so a bug
+        // in handling one frame would drop every stream on every tunnel. Keep
+        // the connection and say so loudly instead.
+        this.logger.error(
+          `internal error handling a gateway frame: ${errorMessage(err)}`,
+        );
+      }
+    });
     ws.addEventListener("error", () => {
       // Detail arrives via the following close event; log for visibility.
       this.logger.debug("websocket error");
     });
-    ws.addEventListener("close", (event) =>
-      this.onClose(event.code, event.reason),
-    );
+    ws.addEventListener("close", (event) => {
+      if (this.ws === ws) this.onClose(event.code, event.reason);
+    });
+  }
+
+  /** Warn loudly (once) when the token is about to cross the wire unencrypted. */
+  private warnIfCleartext(): void {
+    if (this.warnedInsecureTransport) {
+      return;
+    }
+    let url: URL;
+    try {
+      url = new URL(this.config.server);
+    } catch {
+      return; // the WebSocket constructor reports the malformed URL
+    }
+    if (url.protocol === "ws:" && !isLoopbackHost(url.hostname)) {
+      this.warnedInsecureTransport = true;
+      this.logger.warn(
+        `INSECURE: connecting to ${url.host} over unencrypted ws:// -- your token and all tunnel traffic can be read and altered on the network`,
+      );
+    }
   }
 
   private onOpen(): void {
@@ -249,9 +317,7 @@ export class TunnelClient {
     try {
       frame = decodeFrame(new Uint8Array(raw));
     } catch (err) {
-      this.logger.warn(
-        `dropping malformed frame: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      this.logger.warn(`dropping malformed frame: ${errorMessage(err)}`);
       return;
     }
     if (!isKnownFrameType(frame.type)) {
@@ -292,7 +358,7 @@ export class TunnelClient {
       envelope = decodeControl(payload);
     } catch (err) {
       this.logger.warn(
-        `dropping malformed control frame: ${err instanceof Error ? err.message : String(err)}`,
+        `dropping malformed control frame: ${errorMessage(err)}`,
       );
       return;
     }
@@ -314,7 +380,9 @@ export class TunnelClient {
         this.logger.debug("received ping from gateway");
         return;
       default:
-        this.logger.debug(`ignoring control type ${envelope.type}`);
+        this.logger.debug(
+          `ignoring control type ${sanitizeForTerminal(envelope.type)}`,
+        );
         return;
     }
   }
@@ -329,18 +397,22 @@ export class TunnelClient {
     this.backoff.reset();
     // Keep the assigned subdomain so reconnects reclaim the same URL.
     this.subdomain = ok.subdomain;
-    // A raw tunnel (tcp/tls) is reached at a host:port, not the http URL.
-    const publicAddr =
+    // A raw tunnel (tcp/tls) is reached at a host:port, not the http URL. Both
+    // come from the gateway and are printed, so they are sanitized here as
+    // well as at the logger (a custom Logger may not).
+    const publicAddr = sanitizeForTerminal(
       ok.bind_addr !== undefined
         ? `${this.protocol}://${ok.bind_addr}`
-        : ok.url;
+        : ok.url,
+    );
     // http and https both proxy HTTP over the tunnel; the scheme shown reflects
     // the local upstream, so https reads `https://host:port`. A raw tunnel
     // (tcp/tls) has no scheme and is shown as a bare host:port.
+    const authority = formatAuthority(this.config.host, this.port);
     const localAddr =
       this.protocol === "http" || this.protocol === "https"
-        ? `${this.protocol}://${this.config.host}:${this.port}`
-        : `${this.config.host}:${this.port}`;
+        ? `${this.protocol}://${authority}`
+        : authority;
     if (!this.established) {
       this.established = true;
       const session: SessionInfo = {
@@ -348,7 +420,7 @@ export class TunnelClient {
         url: publicAddr,
         forwardTo: localAddr,
         gateway: this.gatewayHost(),
-        tunnelId: ok.tunnel_id,
+        tunnelId: sanitizeForTerminal(ok.tunnel_id),
       };
       this.logger.session?.(session);
       // session() only paints the header panel; emit a scrolling log line too so
@@ -394,7 +466,14 @@ export class TunnelClient {
   }
 
   private handleHelloError(payload: unknown): void {
-    const err = asHelloError(payload);
+    const parsed = asHelloError(payload);
+    const err =
+      parsed === null
+        ? null
+        : {
+            code: sanitizeForTerminal(parsed.code),
+            message: sanitizeForTerminal(parsed.message),
+          };
     // A version gap cannot be retried away and is not the user's config fault;
     // surface the gateway's guidance (which says which side to upgrade) plainly.
     if (err?.code === HelloErrorCode.UNSUPPORTED_VERSION) {
@@ -414,7 +493,7 @@ export class TunnelClient {
         err?.code === HelloErrorCode.SUBDOMAIN_RESERVED)
     ) {
       this.logger.warn(
-        `subdomain ${this.subdomain} is no longer available; requesting a new one`,
+        `subdomain ${sanitizeForTerminal(this.subdomain)} is no longer available; requesting a new one`,
       );
       // Clearing it makes the next hello omit the subdomain, so the gateway
       // generates a fresh one. The socket closes after hello_error, which
@@ -431,7 +510,7 @@ export class TunnelClient {
 
   private handleShutdown(payload: unknown): void {
     const shutdown = asShutdown(payload);
-    const reason = shutdown?.reason ?? "unknown";
+    const reason = sanitizeForTerminal(shutdown?.reason ?? "unknown");
     if (
       reason === ShutdownReason.TOKEN_REVOKED ||
       reason === ShutdownReason.REPLACED
@@ -449,17 +528,19 @@ export class TunnelClient {
       parsed = decodeJson(payload);
     } catch (err) {
       this.logger.warn(
-        `dropping REQ_HEAD with bad JSON on stream ${streamId}: ${err instanceof Error ? err.message : String(err)}`,
+        `dropping REQ_HEAD with bad JSON on stream ${streamId}: ${errorMessage(err)}`,
       );
       return;
     }
     const head = asRequestHead(parsed);
     if (head === null) {
       this.logger.warn(`dropping malformed REQ_HEAD on stream ${streamId}`);
-      this.sink.sendJson(FrameType.RESET, streamId, {
-        code: ResetCode.INTERNAL,
-        message: "malformed request head",
-      });
+      sendStreamReset(
+        this.sink,
+        streamId,
+        ResetCode.INTERNAL,
+        "malformed request head",
+      );
       return;
     }
     // Stream IDs are unique per connection; a collision means a protocol bug.
@@ -469,6 +550,10 @@ export class TunnelClient {
       this.streams.delete(streamId);
     }
     this.totalRequests++;
+    // A stream can retire synchronously inside its constructor (a mock
+    // response, a refused head); it must then not be added to the map, or it
+    // would sit there forever and inflate the open-stream count.
+    let retired = false;
     const deps = {
       target: {
         host: this.config.host,
@@ -481,6 +566,7 @@ export class TunnelClient {
       sink: this.sink,
       logger: this.logger,
       onDone: (id: bigint) => {
+        retired = true;
         this.streams.delete(id);
       },
       ...(this.traffic !== undefined ? { traffic: this.traffic } : {}),
@@ -490,12 +576,7 @@ export class TunnelClient {
       // A udp tunnel carries each client flow as a raw stream of length-
       // delimited datagrams, relayed to a local UDP socket (P4).
       this.logger.debug(`REQ_HEAD udp flow ${streamId}`);
-      stream = new UdpStream(streamId, {
-        target: deps.target,
-        sink: deps.sink,
-        logger: deps.logger,
-        onDone: deps.onDone,
-      });
+      stream = new UdpStream(streamId, deps);
     } else if (head.raw) {
       this.logger.debug(`REQ_HEAD raw stream ${streamId}`);
       stream = new UpgradeStream(streamId, head, deps);
@@ -510,7 +591,9 @@ export class TunnelClient {
       );
       stream = new RequestStream(streamId, head, deps);
     }
-    this.streams.set(streamId, stream);
+    if (!retired) {
+      this.streams.set(streamId, stream);
+    }
   }
 
   private handleReset(streamId: bigint, payload: Uint8Array): void {
@@ -532,11 +615,46 @@ export class TunnelClient {
 
   private startHeartbeat(intervalMs: number): void {
     this.stopHeartbeat();
-    const interval = intervalMs > 0 ? intervalMs : RECONNECT.CAP_MS;
+    const interval = clampHeartbeatInterval(intervalMs);
+    this.lastInboundAt = Date.now();
     this.heartbeatTimer = setInterval(() => {
+      if (!this.checkLiveness(interval)) {
+        return;
+      }
       const beat: Heartbeat = { ts: Date.now() };
       this.sendRaw(encodeControl(ControlType.PING, beat));
     }, interval);
+  }
+
+  /**
+   * Detect a half-open connection. Each ping should draw a pong, so a socket
+   * that has delivered nothing for DEAD_AFTER_INTERVALS intervals is presumed
+   * dead -- typically after laptop sleep or a NAT mapping expiring, where no
+   * FIN or RST ever arrives and the OS would keep the socket "open" for many
+   * minutes while the UI still reads "online". The socket is abandoned (and
+   * terminated) and the ordinary reconnect path takes over. Returns false when
+   * it tore the connection down.
+   */
+  private checkLiveness(interval: number): boolean {
+    const silentFor = Date.now() - this.lastInboundAt;
+    if (silentFor <= interval * HEARTBEAT.DEAD_AFTER_INTERVALS) {
+      return true;
+    }
+    const ws = this.ws;
+    this.logger.warn(
+      `no frames from the gateway for ${Math.round(silentFor / 1000)}s; connection presumed dead`,
+    );
+    // onClose clears this.ws first, so the terminated socket's own late close
+    // event fails the identity check in connect() and is ignored.
+    this.onClose(1006, "heartbeat timeout");
+    if (ws !== null) {
+      try {
+        ws.terminate();
+      } catch {
+        // Already gone.
+      }
+    }
+    return false;
   }
 
   private stopHeartbeat(): void {
@@ -568,7 +686,8 @@ export class TunnelClient {
   private scheduleReconnect(code: number, reason: string): void {
     const delay = this.backoff.next();
     this.reconnectAttempts++;
-    const why = reason !== "" ? ` ${reason}` : "";
+    // The close reason is chosen by the gateway: sanitize before printing.
+    const why = reason !== "" ? ` ${sanitizeForTerminal(reason)}` : "";
     this.logger.status?.("reconnecting", `retry in ${formatRetryDelay(delay)}`);
     this.logger.warn(
       `connection closed (code ${code}${why}); reconnecting in ${delay}ms ` +

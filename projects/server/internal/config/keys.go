@@ -112,7 +112,11 @@ const (
 	KeyRequestTimeout      = EnvPrefix + "REQUEST_TIMEOUT"
 	KeyMaxRequestBodyBytes = EnvPrefix + "MAX_REQUEST_BODY_BYTES"
 	KeyMaxTunnelsPerToken  = EnvPrefix + "MAX_TUNNELS_PER_TOKEN"
-	KeyStreamBufferSize    = EnvPrefix + "STREAM_BUFFER_SIZE"
+	// KeyMaxCustomDomainsPerTunnel caps how many BYO custom domains one agent
+	// handshake may register (E1). Each is a database write and, in on-demand
+	// TLS modes, a certificate the server may be asked to issue.
+	KeyMaxCustomDomainsPerTunnel = EnvPrefix + "MAX_CUSTOM_DOMAINS_PER_TUNNEL"
+	KeyStreamBufferSize          = EnvPrefix + "STREAM_BUFFER_SIZE"
 
 	// Subdomain rules.
 	KeySubdomainMinLength   = EnvPrefix + "SUBDOMAIN_MIN_LENGTH"
@@ -145,6 +149,9 @@ const (
 	RouteAdminTokens       = "/v1/tokens"
 	RouteAdminReservations = "/v1/reservations"
 	RouteAdminTunnels      = "/v1/tunnels"
+	// RouteAdminDomains lists BYO custom-domain mappings (E1); DELETE on
+	// RouteAdminDomains/{domain} removes one, e.g. to evict a squatter.
+	RouteAdminDomains = "/v1/domains"
 )
 
 // HTTP header names used across ingress and peer forwarding.
@@ -167,5 +174,12 @@ const (
 	// it, which the receiver treats as compatible. It lets a future breaking
 	// change gate a mixed-version cluster cleanly.
 	HeaderRiftProtoVersion = "X-Rift-Proto-Version"
-	BearerPrefix           = "Bearer "
+	// HeaderRiftClientIP carries the public client's address, as resolved at
+	// the edge node, across a node-to-node hop. The receiving node sees only
+	// the forwarding node's socket address, so without this its IP policy and
+	// per-IP rate limit would judge the peer instead of the visitor. It is
+	// believed only on a peer-authenticated hop; a copy arriving from the
+	// public internet is stripped at the edge.
+	HeaderRiftClientIP = "X-Rift-Client-Ip"
+	BearerPrefix       = "Bearer "
 )

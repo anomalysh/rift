@@ -8,7 +8,7 @@ you can put an MCP endpoint on a public URL with rift.
 
 ```sh
 bun install
-bun run start        # http://localhost:3939/mcp   (bun run dev to reload)
+bun run start        # http://127.0.0.1:3939/mcp   (bun run dev to reload)
 ```
 
 ## Expose it with rift

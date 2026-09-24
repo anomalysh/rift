@@ -16,10 +16,13 @@ import {
   createStyle,
   Dashboard,
   type DashboardDeps,
+  FALLBACK_COLUMNS,
+  FALLBACK_ROWS,
   formatEvent,
   formatPlainBanner,
   type Metrics,
   type SessionInfo,
+  sanitizeForTerminal,
 } from "./ui.ts";
 
 const LEVEL_RANK: Record<LogLevel, number> = {
@@ -29,10 +32,6 @@ const LEVEL_RANK: Record<LogLevel, number> = {
   error: 40,
   silent: 100,
 };
-
-/** Default terminal size when stdout does not report it. */
-const DEFAULT_COLUMNS = 80;
-const DEFAULT_ROWS = 24;
 
 export interface Logger {
   debug(message: string, ...rest: unknown[]): void;
@@ -57,11 +56,15 @@ export function isLogLevel(v: string): v is LogLevel {
   return LOG_LEVELS.some((level) => level === v);
 }
 
+/** The one-line description of a caught value, for a log line or an error. */
+export function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function format(level: LogLevel, message: string, rest: unknown[]): string {
   const ts = new Date().toISOString();
   const tag = level.toUpperCase().padEnd(5);
-  const extra = rest.length > 0 ? ` ${rest.map(render).join(" ")}` : "";
-  return `${ts} ${tag} ${message}${extra}\n`;
+  return `${ts} ${tag} ${joinMessage(message, rest)}\n`;
 }
 
 function render(value: unknown): string {
@@ -78,9 +81,32 @@ function render(value: unknown): string {
   }
 }
 
-/** Merge a message and its rest args into one line for the TUI scrollback. */
+/**
+ * Merge a message and its rest args into one line. Messages routinely embed
+ * strings from the gateway or the local service (errors, close reasons, the
+ * tunnel URL), so the result is always passed through sanitizeForTerminal:
+ * no log line can carry an escape sequence or break onto a forged second line.
+ */
 function joinMessage(message: string, rest: unknown[]): string {
-  return rest.length > 0 ? `${message} ${rest.map(render).join(" ")}` : message;
+  const line =
+    rest.length > 0 ? `${message} ${rest.map(render).join(" ")}` : message;
+  return sanitizeForTerminal(line);
+}
+
+/** Sanitize every gateway-supplied field of a session before it is printed. */
+function sanitizeSession(info: SessionInfo): SessionInfo {
+  return {
+    version: sanitizeForTerminal(info.version),
+    url: sanitizeForTerminal(info.url),
+    forwardTo: sanitizeForTerminal(info.forwardTo),
+    gateway: sanitizeForTerminal(info.gateway),
+    tunnelId: sanitizeForTerminal(info.tunnelId),
+  };
+}
+
+/** Sanitize a multi-line banner line by line, keeping its line structure. */
+function sanitizeLines(text: string): string {
+  return text.split("\n").map(sanitizeForTerminal).join("\n");
 }
 
 /**
@@ -117,8 +143,8 @@ function createPlainLogger(level: LogLevel): Logger {
     info: (m, ...r) => emit("info", m, r),
     warn: (m, ...r) => emit("warn", m, r),
     error: (m, ...r) => emit("error", m, r),
-    banner: (text) => writeStdout(text),
-    session: (info) => writeStdout(formatPlainBanner(info)),
+    banner: (text) => writeStdout(sanitizeLines(text)),
+    session: (info) => writeStdout(formatPlainBanner(sanitizeSession(info))),
     // Live state, counters, and teardown have no meaning in plain mode.
     status: () => {},
     metrics: () => {},
@@ -130,8 +156,8 @@ function createPlainLogger(level: LogLevel): Logger {
 function dashboardDeps(): DashboardDeps {
   return {
     write: (chunk) => process.stdout.write(chunk),
-    columns: () => process.stdout.columns ?? DEFAULT_COLUMNS,
-    rows: () => process.stdout.rows ?? DEFAULT_ROWS,
+    columns: () => process.stdout.columns ?? FALLBACK_COLUMNS,
+    rows: () => process.stdout.rows ?? FALLBACK_ROWS,
     style: createStyle(true),
     now: () => Date.now(),
     setInterval: (fn, ms) => {
@@ -181,12 +207,12 @@ function createTuiLogger(level: LogLevel): Logger {
     // The banner is superseded by the panel; surface any stray call as an event
     // rather than writing raw text that would desync the sticky redraw.
     banner: (text) => {
-      const trimmed = text.trim();
+      const trimmed = sanitizeForTerminal(text).trim();
       if (trimmed !== "") {
         dashboard.event(trimmed);
       }
     },
-    session: (info) => dashboard.setSession(info),
+    session: (info) => dashboard.setSession(sanitizeSession(info)),
     status: (status, detail) => dashboard.setStatus(status, detail),
     metrics: (source) => dashboard.setMetrics(source),
     close: () => dashboard.close("offline"),
@@ -221,8 +247,10 @@ export function createNamedLogger(name: string, level: LogLevel): Logger {
     banner: (text) => base.banner(prefixLines(text)),
     // A compact one-liner per tunnel instead of the full multi-line banner, so
     // several tunnels coming up do not scroll each other away.
-    session: (info) =>
-      base.banner(`${tag}tunnel up: ${info.url} -> ${info.forwardTo}`),
+    session: (info) => {
+      const safe = sanitizeSession(info);
+      base.banner(`${tag}tunnel up: ${safe.url} -> ${safe.forwardTo}`);
+    },
     status: () => {},
     metrics: () => {},
     close: () => {},

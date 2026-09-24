@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { parseArgs } from "../src/args.ts";
+import { BCRYPT } from "../src/constants.ts";
 import { buildPolicy } from "../src/policy.ts";
 
 describe("policy flag parsing", () => {
@@ -85,5 +86,37 @@ describe("buildPolicy", () => {
     expect(await buildPolicy({ ttl: "later" })).toHaveProperty("error");
     expect(await buildPolicy({ maxRequests: "-1" })).toHaveProperty("error");
     expect(await buildPolicy({ rateLimit: "fast" })).toHaveProperty("error");
+  });
+});
+
+// Regression: Bun pre-hashes a bcrypt password longer than 72 bytes but the
+// gateway's Go bcrypt does not, so such a password hashed "fine" and then could
+// never log in.
+describe("basic-auth bcrypt limits", () => {
+  test("a password over 72 UTF-8 bytes is rejected", async () => {
+    const r = await buildPolicy({ basicAuth: [`u:${"a".repeat(73)}`] });
+    expect(r).toHaveProperty("error");
+    if ("error" in r) expect(r.error).toContain("72");
+    // Multi-byte characters count by byte: 25 x "é" (2 bytes) = 50 is fine,
+    // 37 x "é" = 74 bytes is not.
+    expect(
+      await buildPolicy({ basicAuth: [`u:${"é".repeat(25)}`] }),
+    ).toHaveProperty("policy");
+    expect(
+      await buildPolicy({ basicAuth: [`u:${"é".repeat(37)}`] }),
+    ).toHaveProperty("error");
+  });
+
+  test("exactly 72 bytes is accepted", async () => {
+    expect(
+      await buildPolicy({ basicAuth: [`u:${"a".repeat(72)}`] }),
+    ).toHaveProperty("policy");
+  });
+
+  test("hashes use the pinned cost", async () => {
+    const r = await buildPolicy({ basicAuth: ["alice:s3cret"] });
+    if (!("policy" in r) || !r.policy) throw new Error("no policy");
+    const cost = r.policy.basic_auth?.[0]?.hash.split("$")[2];
+    expect(Number(cost)).toBe(BCRYPT.COST);
   });
 });

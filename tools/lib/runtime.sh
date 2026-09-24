@@ -11,24 +11,68 @@
 # once here so scripts stop each re-deriving `REPO_ROOT` by hand.
 RIFT_REPO_ROOT="$(cd "$RIFT_TOOLS_DIR/.." && pwd)"
 
+# rift_env_keys FILE — the variable names FILE assigns (a leading `export ` is
+# allowed), sorted and unique, one per line. Names only: no value is printed.
+rift_env_keys() {
+	sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)=.*/\2/p' "$1" 2>/dev/null |
+		sort -u
+}
+
 # load_env [FILE] — source the operator's untracked .env into the environment,
 # EXPORTED so child processes (docker compose, ssh, the providers) inherit it.
 #
 # The file to read is FILE, else RIFT_ENV_FILE, else <repo>/.env. A missing file
-# is not an error. This is the single loader: before it, four scripts inlined
-# their own copy that ignored RIFT_ENV_FILE, so `RIFT_ENV_FILE=... make verify`
-# silently read the wrong file. Values in the file overwrite the current
-# environment; a caller that must let an explicit env var win should snapshot it
-# before calling and re-apply after (see provision.sh).
+# is not an error. This is the single loader: before it, scripts inlined their
+# own copy that ignored RIFT_ENV_FILE, and the Makefile pre-sourced ./.env for
+# some targets only, so `rift-ops deploy deploy` never read .env at all.
+#
+# A variable already set to a non-empty value wins over the file, as it does for
+# compose's own interpolation: `RIFT_VPS_HOST=1.2.3.4 rift-ops deploy status`
+# targets that host, and ship.sh/teardown.sh can hand a sub-script the host from
+# the state file without the sub-script's own load_env clobbering it. A file
+# already loaded by a parent script is not re-read, so the many ssh.sh calls of
+# one deploy stay quiet.
 load_env() {
-	local file="${1:-${RIFT_ENV_FILE:-$RIFT_REPO_ROOT/.env}}"
-	[ -f "$file" ] || return 0
-	log_info "reading $file"
+	local _le_file="${1:-${RIFT_ENV_FILE:-$RIFT_REPO_ROOT/.env}}" _le_name _le_i _le_names _le_vals
+	[ -f "$_le_file" ] || return 0
+	[ "${_RIFT_ENV_LOADED:-}" != "$_le_file" ] || return 0
+	log_info "reading $_le_file"
+	_le_names=()
+	_le_vals=()
+	for _le_name in $(rift_env_keys "$_le_file"); do
+		if [ -n "${!_le_name:-}" ]; then
+			_le_names+=("$_le_name")
+			_le_vals+=("${!_le_name}")
+		fi
+	done
 	set -a
 	# operator-supplied, not tracked in the repo
 	# shellcheck disable=SC1090
-	. "$file"
+	. "$_le_file"
 	set +a
+	for ((_le_i = 0; _le_i < ${#_le_names[@]}; _le_i++)); do
+		export "${_le_names[_le_i]}=${_le_vals[_le_i]}"
+	done
+	export _RIFT_ENV_LOADED="$_le_file"
+}
+
+# rift_state_file — the pipeline state file provision.sh writes and ship.sh and
+# teardown.sh read: RIFT_STATE_FILE, else <repo>/.rift/state.json.
+rift_state_file() { printf '%s' "${RIFT_STATE_FILE:-$RIFT_REPO_ROOT/.rift/state.json}"; }
+
+# rift_state_get FILE KEY — one top-level field of the JSON state FILE, or empty
+# if the file, the field or valid JSON is missing. FILE and KEY reach Python as
+# argv, never spliced into its source, so no path can break (or inject into) it.
+rift_state_get() {
+	[ -f "$1" ] || return 0
+	python3 - "$1" "$2" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+print(d.get(sys.argv[2]) or "")
+PY
 }
 
 # --- composable cleanup trap ------------------------------------------------
@@ -56,13 +100,17 @@ register_cleanup() {
 	_RIFT_CLEANUP_CMDS+=("$1")
 }
 
-# rift_mktemp_dir [TEMPLATE] — make a temp directory and register its removal, so
-# a script never leaks one on an early exit or a signal.
+# rift_mktemp_dir VAR [TEMPLATE] — make a temp directory, store its path in the
+# variable named VAR, and register its removal, so a script never leaks one on an
+# early exit or a signal. It assigns by name rather than printing the path
+# because `d="$(rift_mktemp_dir)"` would run register_cleanup inside the command
+# substitution's subshell, whose EXIT trap deletes the directory the moment the
+# substitution returns.
 rift_mktemp_dir() {
-	local d
-	d="$(mktemp -d "${1:-${TMPDIR:-/tmp}/rift.XXXXXX}")"
-	register_cleanup "rm -rf \"$d\""
-	printf '%s' "$d"
+	local _rift_d
+	_rift_d="$(mktemp -d "${2:-${TMPDIR:-/tmp}/rift.XXXXXX}")"
+	register_cleanup "rm -rf \"$_rift_d\""
+	printf -v "$1" '%s' "$_rift_d"
 }
 
 # rift_run CMD... — run a mutating command, unless RIFT_DRY_RUN is truthy, in

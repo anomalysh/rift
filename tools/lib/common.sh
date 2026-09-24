@@ -62,36 +62,6 @@ rift_gen_secret() {
 	printf '%s' "$s"
 }
 
-# rift_ssh_auth AUTH_ARR PREFIX_ARR — resolve VPS auth ONCE for both ssh and scp.
-# Populates AUTH_ARR with the auth-selecting ssh/scp options and PREFIX_ARR with
-# the command prefix (empty for key auth, `sshpass -e` otherwise). The caller
-# keeps the base tool and the port flag (`-p` for ssh, `-P` for scp) explicit, so
-# that footgun stays visible at the call site.
-#
-# `sshpass -e` reads the password from the SSHPASS env var, never argv: `-p pw`
-# would expose it in `ps` to every user on the machine.
-rift_ssh_auth() {
-	local -n __auth="$1" __prefix="$2"
-	local key
-	key="$(rift_ssh_key_path)"
-	if [ -f "$key" ]; then
-		__auth=(-i "$key" -o IdentitiesOnly=yes -o PasswordAuthentication=no)
-		__prefix=()
-	else
-		require_cmd sshpass
-		require_env RIFT_VPS_PASSWORD
-		export SSHPASS="$RIFT_VPS_PASSWORD"
-		__auth=(-o PubkeyAuthentication=no)
-		__prefix=(sshpass -e)
-	fi
-}
-
-# Shared ssh/scp options.
-#   accept-new records an unknown host key on first contact but still refuses a
-#   CHANGED key afterwards (catches a later MITM). ServerAlive* keeps a long
-#   deploy session from being dropped by an idle NAT.
-# Consumed by the scripts that source this file, hence "unused" here.
-# shellcheck disable=SC2034
 # Multiplex over one connection. A deploy makes a dozen ssh calls in a few
 # seconds, and sshd's MaxStartups drops the later ones with
 # "kex_exchange_identification: Connection reset by peer" -- which looks like a
@@ -104,9 +74,10 @@ RIFT_SSH_CONTROL_DIR="${RIFT_SSH_CONTROL_DIR:-$HOME/.ssh/rift-cm}"
 mkdir -p "$RIFT_SSH_CONTROL_DIR" 2>/dev/null || true
 chmod 700 "$RIFT_SSH_CONTROL_DIR" 2>/dev/null || true
 
-# Consumed by scripts that source this lib (ssh.sh, scp.sh, ...); shellcheck
-# cannot see that cross-file use.
-# shellcheck disable=SC2034
+# Shared ssh/scp options.
+#   accept-new records an unknown host key on first contact but still refuses a
+#   CHANGED key afterwards (catches a later MITM). ServerAlive* keeps a long
+#   deploy session from being dropped by an idle NAT.
 RIFT_SSH_OPTS=(
 	-o ConnectTimeout=15
 	-o StrictHostKeyChecking=accept-new
@@ -116,6 +87,117 @@ RIFT_SSH_OPTS=(
 	-o "ControlPath=$RIFT_SSH_CONTROL_DIR/%r@%h:%p"
 	-o ControlPersist=5m
 )
+
+# rift_ssh_cmd ssh|scp — set the RIFT_SSH_CMD array to the full ssh or scp
+# invocation for the VPS, minus the target: the shared options, the port (ssh's
+# `-p`, scp's uppercase `-P`), and the auth resolved ONCE for both tools -- the
+# deploy key when it exists, else password auth through `sshpass -e`.
+#
+# `sshpass -e` reads the password from the SSHPASS env var, never argv: `-p pw`
+# would expose it in `ps` to every user on the machine.
+#
+# It fills a global rather than a caller-named array: namerefs (`local -n`) are
+# bash 4.3+, and the operator workstation may be macOS's bash 3.2.
+rift_ssh_cmd() {
+	local port_flag=-p key
+	[ "$1" = scp ] && port_flag=-P
+	key="$(rift_ssh_key_path)"
+	RIFT_SSH_CMD=()
+	if [ ! -f "$key" ]; then
+		require_cmd sshpass
+		require_env RIFT_VPS_PASSWORD
+		export SSHPASS="$RIFT_VPS_PASSWORD"
+		RIFT_SSH_CMD=(sshpass -e)
+	fi
+	RIFT_SSH_CMD+=("$1" "${RIFT_SSH_OPTS[@]}" "$port_flag" "${RIFT_VPS_PORT:-22}")
+	if [ -f "$key" ]; then
+		RIFT_SSH_CMD+=(-i "$key" -o IdentitiesOnly=yes -o PasswordAuthentication=no)
+	else
+		RIFT_SSH_CMD+=(-o PubkeyAuthentication=no)
+	fi
+}
+
+# rift_timeout SECS CMD... — run CMD, killing it after SECS. timeout(1) is GNU
+# coreutils and absent on stock macOS, so fall back to Homebrew's gtimeout and
+# then to perl's alarm (which survives the exec) rather than run unbounded.
+rift_timeout() {
+	local secs="$1"
+	shift
+	if command -v timeout >/dev/null 2>&1; then
+		timeout "$secs" "$@"
+	elif command -v gtimeout >/dev/null 2>&1; then
+		gtimeout "$secs" "$@"
+	else
+		perl -e 'alarm shift; exec @ARGV or die "exec $ARGV[0]: $!\n"' "$secs" "$@"
+	fi
+}
+
+# rift_env_file_val FILE KEY -- KEY's value in the env FILE, or empty if either
+# is absent. .env is compose's env-file format, not shell -- an unquoted value
+# containing spaces would break `.` -- so the value is read out with sed rather
+# than sourced. It strips an optional leading `export `, surrounding quotes and a
+# trailing ` # comment`, as compose does, so `RIFT_TCP_ENABLED=true  # on` reads
+# as true. Plain POSIX sh: RIFT_REMOTE_COMPOSE_PRELUDE ships it to the VPS.
+rift_env_file_val() {
+	[ -f "$1" ] || return 0
+	sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}$2[[:space:]]*=[[:space:]]*//p" "$1" |
+		tail -n 1 | sed "s/[[:space:]]\{1,\}#.*$//" | tr -d "\"'\r"
+}
+
+# rift_ssh HOST [CMD...] / rift_scp HOST [ARGS...] -- run ssh.sh / scp.sh (their
+# auth, options and connection mux) against HOST, which overrides RIFT_VPS_HOST
+# for that one call. Passing the host explicitly also exports it, which a bare
+# `"$RIFT_TOOLS_DIR/cmd/remote/ssh.sh"` call would silently not do for an
+# unexported shell variable.
+rift_ssh() {
+	local host="$1"
+	shift
+	RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" "$@"
+}
+rift_scp() {
+	local host="$1"
+	shift
+	RIFT_VPS_HOST="$host" "$RIFT_TOOLS_DIR/cmd/remote/scp.sh" "$@"
+}
+
+# RIFT_REMOTE_COMPOSE_PRELUDE -- a POSIX-sh snippet, run ON THE VPS from
+# /opt/rift/deploy, that sets $compose_files to the compose files this host's
+# .env enables. deploy.sh (including --plan), rollback.sh and rotate.sh all
+# splice it in, so a rollback or a secret rotation recreates riftd with exactly
+# the overlays the deploy used (dropping docker-compose.tcp.yml there would
+# silently unpublish every raw-tunnel port). The .env reader and the boolean
+# test are the local functions themselves, serialized with `declare -f`, so the
+# VPS parses .env exactly as harden.sh and the local tools do.
+#
+# Each feature adds ONLY its own ports, gated on its own flag, mirroring how
+# harden.sh opens them. The overlays must come last: docker-compose.prod clears
+# riftd's ports with `ports: !reset []`, and a later !reset would wipe the
+# tunnel ports they add.
+# shellcheck disable=SC2034,SC2016
+RIFT_REMOTE_COMPOSE_PRELUDE="set -e
+$(declare -f rift_env_file_val is_true)
+"'compose_files="-f docker-compose.yml -f docker-compose.prod.yml"
+if is_true "$(rift_env_file_val .env RIFT_TCP_ENABLED)"; then
+	compose_files="$compose_files -f docker-compose.tcp.yml"
+fi
+if is_true "$(rift_env_file_val .env RIFT_TLS_TUNNEL_ENABLED)"; then
+	compose_files="$compose_files -f docker-compose.tls.yml"
+fi'
+
+# rift_push_tools HOST -- replace /opt/rift/tools on HOST with this checkout's
+# tools/, for the scripts that must run ON the box (harden.sh, backup.sh).
+#   * It REPLACES rather than copies into: `scp -r tools /opt/rift/tools` onto an
+#     existing directory nests a stale tools/tools and runs the old scripts.
+#   * It never ships tools/.ssh: that private deploy key is shared by every
+#     provisioned host and must not be left on one of them.
+#   * Files are extracted as root-owned (--no-same-owner) so a VPS account whose
+#     UID happens to match the operator's local UID cannot edit scripts root runs.
+rift_push_tools() {
+	tar -C "$RIFT_REPO_ROOT" --exclude='tools/.ssh' --exclude='__pycache__' -czf - tools |
+		rift_ssh "$1" "set -e; mkdir -p /opt/rift; rm -rf /opt/rift/tools.new; mkdir /opt/rift/tools.new
+tar --no-same-owner -C /opt/rift/tools.new --strip-components=1 -xzf -
+rm -rf /opt/rift/tools; mv /opt/rift/tools.new /opt/rift/tools"
+}
 
 # Runtime primitives (repo root, load_env, register_cleanup, rift_run). Sourced
 # here so every script that sources common.sh gets them without a second source

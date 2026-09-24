@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REMOTE_DIR="/opt/rift"
 
 # rollback.sh -- restore the previous riftd image after a bad deploy. Each
-# remote-deploy tags the running image :rollback before it rebuilds, so this
+# deploy tags the running image :rollback before it rebuilds, so this
 # just re-points riftd at that tag and restarts it WITHOUT a rebuild, then
 # re-runs the verify gate. Turns "verify failed" from a dead-end alarm into a
 # one-command recovery. Single-container, so this is a fast rollback, not a
@@ -19,13 +19,13 @@ usage() {
 Usage: rift-ops deploy rollback [--yes] [--no-verify]
 
 Roll the deployed riftd back to the image saved (:rollback) by the last deploy,
-restart it without rebuilding, and re-run tools/verify-deploy.sh.
+restart it without rebuilding, and re-run rift-ops deploy verify.
 
 Options:
   --yes         Do not prompt for confirmation.
   --no-verify   Skip the post-rollback verify gate.
 
-Environment: RIFT_VPS_HOST (required); see tools/ssh.sh for auth. verify reads
+Environment: RIFT_VPS_HOST (required); see rift-ops ssh ssh --help for auth. verify reads
 RIFT_BASE_DOMAIN / RIFT_GATEWAY_HOSTNAME from .env.
 EOF
 }
@@ -44,11 +44,11 @@ while [ "$#" -gt 0 ]; do
 	shift
 done
 
-require_env RIFT_VPS_HOST
 load_env
+require_env RIFT_VPS_HOST
 
 # Fail early if there is no rollback image to restore.
-if ! env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" \
+if ! rift_ssh "$RIFT_VPS_HOST" \
 	"docker image inspect rift-riftd:rollback >/dev/null 2>&1"; then
 	die "no rollback image on the host (rift-riftd:rollback). A deploy must run first to save one."
 fi
@@ -62,12 +62,16 @@ fi
 
 # Re-point the deploy tag at the saved image and restart riftd without a rebuild,
 # so compose uses the restored image rather than recompiling the current source.
-rollback_cmd="set -e
-cd '$REMOTE_DIR/deploy'
+#
+# The overlays come from the same prelude deploy.sh uses: recreating riftd with
+# only the base and prod files would drop the tcp/tls overlays and unpublish
+# every raw-tunnel port.
+rollback_cmd="cd '$REMOTE_DIR/deploy' || exit 1
+$RIFT_REMOTE_COMPOSE_PRELUDE
 docker tag rift-riftd:rollback rift-riftd
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build --force-recreate riftd"
+docker compose \$compose_files up -d --no-build --force-recreate riftd"
 log_info "restoring rift-riftd:rollback and restarting riftd"
-env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" "$rollback_cmd" ||
+rift_ssh "$RIFT_VPS_HOST" "$rollback_cmd" ||
 	die "rollback failed while restarting riftd"
 
 if [ "$do_verify" = true ] && [ -x "$RIFT_TOOLS_DIR/cmd/deploy/verify.sh" ]; then
@@ -75,7 +79,7 @@ if [ "$do_verify" = true ] && [ -x "$RIFT_TOOLS_DIR/cmd/deploy/verify.sh" ]; the
 	if bash "$RIFT_TOOLS_DIR/cmd/deploy/verify.sh"; then
 		log_info "rollback complete and verified"
 	else
-		log_warn "riftd was rolled back, but verify-deploy reported problems -- investigate"
+		log_warn "riftd was rolled back, but verify reported problems -- investigate"
 		exit 1
 	fi
 else

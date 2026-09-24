@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Shared helpers for the rift backup/restore tooling (tools/backup.sh and
-# tools/restore.sh). SOURCED, not executed; side-effect free at source time.
+# Shared helpers for the rift backup/restore tooling (tools/cmd/backup/backup.sh
+# and restore.sh). SOURCED, not executed; side-effect free at source time.
 # Sourcing scripts run under `set -euo pipefail` and must have already sourced
 # tools/lib/common.sh (for log_info/die/require_cmd).
 #
@@ -16,6 +16,19 @@ RIFT_ALPINE_IMAGE="${RIFT_ALPINE_IMAGE:-alpine:3.20}"
 # rc_compose ARGS... — docker compose against the configured stack.
 rc_compose() {
 	docker compose "${RIFT_COMPOSE_ARGS[@]}" -p "$RIFT_PROJECT" "$@"
+}
+
+# rc_stack_opt FLAG VALUE — apply one of the stack-selection options backup.sh
+# and restore.sh share: --project, --compose-file (repeatable),
+# --postgres-service, --caddy-volume. The caller checks VALUE is present.
+rc_stack_opt() {
+	case "$1" in
+	--project) RIFT_PROJECT="$2" ;;
+	--compose-file) COMPOSE_FILES+=("$2") ;;
+	--postgres-service) RIFT_PG_SERVICE="$2" ;;
+	--caddy-volume) CADDY_VOLUME="$2" ;;
+	*) die "rc_stack_opt: unknown option $1" ;;
+	esac
 }
 
 # rc_resolve_stack DEFAULT_COMPOSE_FILE — turn the caller's COMPOSE_FILES array

@@ -9,9 +9,10 @@ import (
 )
 
 // tuneTCPConn applies the P1 socket options to an accepted public connection:
-// TCP_NODELAY (Nagle off) and a keep-alive period. Both raw tcp and SNI-routed
-// tls tunnels carry latency-sensitive byte streams, so both accept paths call
-// this. A conn that is not a *net.TCPConn (only in tests) is left untouched.
+// TCP_NODELAY (Nagle off) and a keep-alive period. Raw tcp tunnels and the
+// tls and grpc passthroughs all carry latency-sensitive byte streams, so every
+// accept path calls this. A conn that is not a *net.TCPConn (only in tests) is
+// left untouched.
 func tuneTCPConn(conn net.Conn, cfg config.TCP, logger *slog.Logger) {
 	tc, ok := conn.(*net.TCPConn)
 	if !ok {

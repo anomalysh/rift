@@ -156,12 +156,11 @@ fi
 
 if [ "$push" = true ]; then
 	require_env RIFT_VPS_HOST
-	ssh_wrapper="$RIFT_TOOLS_DIR/cmd/remote/ssh.sh"
 	if [ "$dry_run" = true ]; then
-		log_info "[dry-run] docker save $image | $ssh_wrapper 'docker load'"
+		log_info "[dry-run] docker save $image | rift-ops ssh ssh 'docker load'"
 	else
 		log_info "shipping $image to $RIFT_VPS_HOST (this transfers the whole image)"
-		docker save "$image" | "$ssh_wrapper" "docker load"
+		docker save "$image" | rift_ssh "$RIFT_VPS_HOST" "docker load"
 		log_info "loaded $image on $RIFT_VPS_HOST"
 		log_warn "set RIFT_CADDY_IMAGE=$image in the remote .env, then redeploy"
 	fi

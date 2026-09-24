@@ -2,7 +2,7 @@
 #
 # The provider solver is compiled into the Caddy image; if this import fails
 # with "module not registered: dns.providers.<name>", rebuild with
-# tools/build-caddy.sh.
+# tools/rift-ops release caddy.
 #
 # resolvers is the split-horizon lever. Caddy checks that the challenge record
 # has propagated before asking the CA to validate, and by default it uses the

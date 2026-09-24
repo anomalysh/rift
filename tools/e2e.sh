@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/preflight.sh"
 # shellcheck source=tools/lib/e2e-harness.sh
 . "$SCRIPT_DIR/lib/e2e-harness.sh"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$RIFT_REPO_ROOT"
 
 COMPOSE_FILE="$REPO_ROOT/deploy/docker-compose.e2e.yml"
 PROJECT="rift-e2e"
@@ -150,21 +150,7 @@ trap cleanup EXIT INT TERM
 
 compose() { docker compose -f "$COMPOSE_FILE" ${COMPOSE_EXTRA+"${COMPOSE_EXTRA[@]}"} -p "$PROJECT" "$@"; }
 
-# BuildKit runs the build inside its own container, which fails on hosts whose
-# container runtime is misconfigured (a stale nvidia hook, for instance). The
-# legacy builder does not, and produces the same image, so fall back to it
-# rather than making the whole harness unusable on such a machine.
-build_images() {
-	if compose build >"$TMPDIR_E2E/build.log" 2>&1; then
-		return 0
-	fi
-	log_warn "buildkit build failed; retrying with the legacy builder"
-	if DOCKER_BUILDKIT=0 compose build >>"$TMPDIR_E2E/build.log" 2>&1; then
-		return 0
-	fi
-	tail -20 "$TMPDIR_E2E/build.log" >&2
-	die "could not build the e2e images"
-}
+build_images() { e2e_build "$TMPDIR_E2E/build.log" "the e2e images"; }
 
 # rcurl issues a request to a rift hostname through Caddy, validating the chain
 # against the CA for the mode under test. No -k anywhere: an e2e that skips
@@ -218,19 +204,30 @@ prepare_pebble() {
 
 # Pebble mints a fresh issuing root on every start, so the trust anchor has to
 # be fetched at run time. Pinning one would silently test nothing.
-fetch_pebble_root() {
-	local net="${PROJECT}_default"
-	for _ in $(seq 1 30); do
-		if docker run --rm --network "$net" \
-			-v "$TMPDIR_E2E/pebble:/p:ro" curlimages/curl:latest \
-			-s --max-time 5 --cacert /p/minica.pem https://pebble:15000/roots/0 \
-			>"$TMPDIR_E2E/ca.pem" 2>/dev/null && [ -s "$TMPDIR_E2E/ca.pem" ]; then
-			return 0
-		fi
-		sleep 1
-	done
-	die "pebble never served its issuing root"
+pebble_root_ready() {
+	docker run --rm --network "${PROJECT}_default" \
+		-v "$TMPDIR_E2E/pebble:/p:ro" curlimages/curl:latest \
+		-s --max-time 5 --cacert /p/minica.pem https://pebble:15000/roots/0 \
+		>"$TMPDIR_E2E/ca.pem" 2>/dev/null && [ -s "$TMPDIR_E2E/ca.pem" ]
 }
+fetch_pebble_root() {
+	wait_until 30 pebble_root_ready || die "pebble never served its issuing root"
+}
+
+# fetch_internal_root — copy Caddy's internal root CA to ca.pem once Caddy has
+# started and written it.
+internal_root_ready() {
+	compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt \
+		>"$TMPDIR_E2E/ca.pem" 2>/dev/null && [ -s "$TMPDIR_E2E/ca.pem" ]
+}
+fetch_internal_root() {
+	wait_until 30 internal_root_ready || die "caddy never wrote its internal root CA"
+}
+
+# wait_for_hello — give the agent up to ~30s to register hello.$BASE_DOMAIN.
+# Not fatal: the assertions that follow report a tunnel that never came up.
+hello_is_up() { [ "$(status_of "hello.$BASE_DOMAIN")" = "200" ]; }
+wait_for_hello() { wait_until 30 hello_is_up || true; }
 
 # dns01 needs a Caddy with the rfc2136 solver compiled in. Stock Caddy has none.
 ensure_caddy_dns_image() {
@@ -240,8 +237,7 @@ ensure_caddy_dns_image() {
 	fi
 	log_info "building $CADDY_DNS_IMAGE with the rfc2136 solver (this compiles Caddy)"
 	RIFT_CADDY_DNS_PLUGINS="github.com/caddy-dns/rfc2136" \
-		RIFT_CADDY_IMAGE="$CADDY_DNS_IMAGE" \
-		"$SCRIPT_DIR/build-caddy.sh" >/dev/null 2>&1 ||
+		bash "$SCRIPT_DIR/cmd/release/caddy.sh" --image "$CADDY_DNS_IMAGE" >/dev/null 2>&1 ||
 		die "could not build $CADDY_DNS_IMAGE"
 }
 
@@ -338,16 +334,7 @@ run_mode() {
 	# root, which only exists once Caddy has started.
 	case "$mode" in
 	self) cp "$TMPDIR_E2E/certs/fullchain.pem" "$TMPDIR_E2E/ca.pem" ;;
-	internal)
-		for _ in $(seq 1 30); do
-			if compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt \
-				>"$TMPDIR_E2E/ca.pem" 2>/dev/null && [ -s "$TMPDIR_E2E/ca.pem" ]; then
-				break
-			fi
-			sleep 1
-		done
-		[ -s "$TMPDIR_E2E/ca.pem" ] || die "caddy never wrote its internal root CA"
-		;;
+	internal) fetch_internal_root ;;
 	http01 | dns01)
 		fetch_pebble_root
 		log_info "trusting pebble's issuing root for this run"
@@ -388,10 +375,7 @@ run_mode() {
 		>"$TMPDIR_E2E/cli.log" 2>&1 &
 	CLI_PID=$!
 
-	for _ in $(seq 1 30); do
-		[ "$(status_of "hello.$BASE_DOMAIN")" = "200" ] && break
-		sleep 1
-	done
+	wait_for_hello
 
 	assert_routing
 	assert_tls "$mode"
@@ -453,15 +437,7 @@ run_cluster() {
 	wait_for_tcp "$ADMIN_PORT" "riftd admin"
 	wait_for_tcp "$GATEWAY2_PORT" "riftd2 gateway"
 	wait_for_tcp "$HTTPS_PORT" "caddy"
-
-	for _ in $(seq 1 30); do
-		if compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt \
-			>"$TMPDIR_E2E/ca.pem" 2>/dev/null && [ -s "$TMPDIR_E2E/ca.pem" ]; then
-			break
-		fi
-		sleep 1
-	done
-	[ -s "$TMPDIR_E2E/ca.pem" ] || die "caddy never wrote its internal root CA"
+	fetch_internal_root
 
 	python3 "$SCRIPT_DIR/e2e/upstream.py" "$UPSTREAM_PORT" >"$TMPDIR_E2E/upstream.log" 2>&1 &
 	UPSTREAM_PID=$!
@@ -479,10 +455,7 @@ run_cluster() {
 		>"$TMPDIR_E2E/cli.log" 2>&1 &
 	CLI_PID=$!
 
-	for _ in $(seq 1 30); do
-		[ "$(status_of "hello.$BASE_DOMAIN")" = "200" ] && break
-		sleep 1
-	done
+	wait_for_hello
 
 	printf '  peer forwarding\n'
 	check "a request to node 1 is served by the agent on node 2" \
@@ -603,15 +576,7 @@ run_security() {
 	wait_for_tcp "$ADMIN_PORT" "riftd admin"
 	wait_for_tcp "$INGRESS_PORT" "riftd ingress"
 	wait_for_tcp "$HTTPS_PORT" "caddy"
-
-	for _ in $(seq 1 30); do
-		if compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt \
-			>"$TMPDIR_E2E/ca.pem" 2>/dev/null && [ -s "$TMPDIR_E2E/ca.pem" ]; then
-			break
-		fi
-		sleep 1
-	done
-	[ -s "$TMPDIR_E2E/ca.pem" ] || die "caddy never wrote its internal root CA"
+	fetch_internal_root
 
 	log_info "starting upstream on 127.0.0.1:$UPSTREAM_PORT"
 	python3 "$SCRIPT_DIR/e2e/upstream.py" "$UPSTREAM_PORT" >"$TMPDIR_E2E/upstream.log" 2>&1 &
@@ -631,10 +596,7 @@ run_security() {
 		>"$TMPDIR_E2E/cli.log" 2>&1 &
 	CLI_PID=$!
 
-	for _ in $(seq 1 30); do
-		[ "$(status_of "hello.$BASE_DOMAIN")" = "200" ] && break
-		sleep 1
-	done
+	wait_for_hello
 
 	assert_security
 

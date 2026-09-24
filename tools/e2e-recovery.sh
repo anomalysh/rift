@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/e2e-recovery.sh — prove tools/backup.sh and tools/restore.sh actually
+# tools/e2e-recovery.sh — prove the backup and restore commands actually
 # work, in a throwaway Docker stack, never against a real deployment.
 #
 # It does not merely check that files appeared: it seeds known database rows and
@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/common.sh"
 # shellcheck source=tools/lib/e2e-harness.sh
 . "$SCRIPT_DIR/lib/e2e-harness.sh"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$RIFT_REPO_ROOT"
 
 COMPOSE_FILE="$REPO_ROOT/deploy/docker-compose.recovery.yml"
 PROJECT="rift-recovery"
@@ -31,7 +31,7 @@ usage() {
 	cat >&2 <<EOF
 Usage: tools/e2e-recovery.sh [--keep]
 
-Exercise tools/backup.sh and tools/restore.sh end to end in a hermetic Docker
+Exercise rift-ops backup backup/restore end to end in a hermetic Docker
 stack (deploy/docker-compose.recovery.yml). Seeds known state, backs it up,
 destroys it, restores it, and asserts it all came back -- plus tamper detection,
 retention, and the --yes gate.
@@ -102,13 +102,8 @@ check_fail() {
 
 # --- postgres helpers: password stays inside the container, never on an argv ---
 wait_pg() {
-	for _ in $(seq 1 60); do
-		if compose exec -T postgres pg_isready -U rift -d rift >/dev/null 2>&1; then
-			return 0
-		fi
-		sleep 1
-	done
-	die "postgres did not become ready"
+	wait_until 60 compose exec -T postgres pg_isready -U rift -d rift >/dev/null 2>&1 ||
+		die "postgres did not become ready"
 }
 
 rsql() {

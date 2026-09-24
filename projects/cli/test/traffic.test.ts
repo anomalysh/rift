@@ -61,6 +61,29 @@ describe("buildTrafficPolicy", () => {
     );
   });
 
+  // Regression: an invalid header name was accepted here and then made
+  // Headers.set throw on every forwarded request (each one reset), and a CR/LF
+  // in a response-header value was relayed to the gateway verbatim.
+  test("header rules must name a valid field with a safe value", () => {
+    for (const flags of [
+      { setRequestHeader: ["X Bad: 1"] },
+      { setResponseHeader: ["X-Ok: a\r\nSet-Cookie: pwned=1"] },
+      { setResponseHeader: ["X-Ok: a\u0000b"] },
+      { delRequestHeader: ["bad header"] },
+      { delResponseHeader: [""] },
+    ]) {
+      const r = buildTrafficPolicy(flags);
+      expect(r).toHaveProperty("error");
+      if ("error" in r) expect(r.error).toStartWith("invalid --");
+    }
+    const ok = policyOrThrow({
+      setRequestHeader: ["X-A: 1"],
+      delResponseHeader: [" server "],
+    });
+    expect(ok.setRequestHeaders).toEqual([{ name: "X-A", value: "1" }]);
+    expect(ok.delResponseHeaders).toEqual(["server"]);
+  });
+
   test("routes are ordered longest-prefix first", () => {
     const p = policyOrThrow({ route: ["/=3000", "/api/v2=5000", "/api=4000"] });
     expect(p.routes.map((r) => r.prefix)).toEqual(["/api/v2", "/api", "/"]);
@@ -107,8 +130,22 @@ describe("TrafficController synthesize (T2/T3)", () => {
     expect(res?.headers.location?.[0]).toBe("/new");
   });
 
-  test("CORS preflight is answered with 204 and echoes the origin", () => {
+  test("CORS preflight is answered with 204 and a credential-free wildcard", () => {
     const c = new TrafficController(policyOrThrow({ cors: true }));
+    const res = c.synthesize("OPTIONS", "/api", {
+      origin: ["https://app.example"],
+      "access-control-request-method": ["POST"],
+    });
+    expect(res?.status).toBe(204);
+    expect(res?.headers["access-control-allow-origin"]?.[0]).toBe("*");
+    expect(res?.headers["access-control-allow-methods"]?.[0]).toBe("POST");
+    expect(res?.headers["access-control-allow-credentials"]).toBeUndefined();
+  });
+
+  test("an allowlisted --cors-origin preflight gets its origin and credentials", () => {
+    const c = new TrafficController(
+      policyOrThrow({ corsOrigin: ["https://app.example"] }),
+    );
     const res = c.synthesize("OPTIONS", "/api", {
       origin: ["https://app.example"],
       "access-control-request-method": ["POST"],
@@ -117,8 +154,8 @@ describe("TrafficController synthesize (T2/T3)", () => {
     expect(res?.headers["access-control-allow-origin"]?.[0]).toBe(
       "https://app.example",
     );
-    expect(res?.headers["access-control-allow-methods"]?.[0]).toBe("POST");
     expect(res?.headers["access-control-allow-credentials"]?.[0]).toBe("true");
+    expect(res?.headers.vary?.[0]).toContain("Origin");
   });
 
   test("a plain OPTIONS without a preflight header is not synthesized", () => {
@@ -156,8 +193,88 @@ describe("TrafficController header rewrite (T1)", () => {
     );
     expect(out.server).toBeUndefined();
     expect(out["x-frame-options"]?.[0]).toBe("DENY");
-    expect(out["access-control-allow-origin"]?.[0]).toBe("https://app.example");
-    expect(out.vary?.[0]).toContain("Origin");
+    expect(out["access-control-allow-origin"]?.[0]).toBe("*");
+    expect(out["access-control-allow-credentials"]).toBeUndefined();
+  });
+});
+
+// Regression: --cors used to echo ANY Origin together with
+// Access-Control-Allow-Credentials: true, so every website a visitor opened
+// could read the tunnel with their cookies / cached Basic auth.
+describe("CORS credentials are only granted to allowlisted origins", () => {
+  const c = new TrafficController(
+    policyOrThrow({
+      corsOrigin: ["https://app.example", "http://localhost:5173"],
+    }),
+  );
+
+  test("an unlisted origin gets a wildcard and never credentials", () => {
+    const out = c.decorateResponse(
+      {},
+      { origin: ["https://evil.example"], cookie: ["session=1"] },
+    );
+    expect(out["access-control-allow-origin"]?.[0]).toBe("*");
+    expect(out["access-control-allow-credentials"]).toBeUndefined();
+    // The answer varies by Origin, so caches must key on it.
+    expect(out.vary?.[0]).toBe("Origin");
+  });
+
+  test("a listed origin is echoed with credentials", () => {
+    const out = c.decorateResponse(
+      { vary: ["Accept-Encoding"] },
+      { origin: ["http://localhost:5173"] },
+    );
+    expect(out["access-control-allow-origin"]?.[0]).toBe(
+      "http://localhost:5173",
+    );
+    expect(out["access-control-allow-credentials"]?.[0]).toBe("true");
+    expect(out.vary?.[0]).toBe("Accept-Encoding, Origin");
+  });
+
+  test("an upstream Allow-Credentials is stripped for an unlisted origin", () => {
+    const out = new TrafficController(
+      policyOrThrow({ cors: true }),
+    ).decorateResponse(
+      { "access-control-allow-credentials": ["true"] },
+      { origin: ["https://evil.example"] },
+    );
+    expect(out["access-control-allow-credentials"]).toBeUndefined();
+  });
+
+  test("--cors-origin implies --cors and normalizes the origin", () => {
+    const p = policyOrThrow({ corsOrigin: ["https://App.Example/"] });
+    expect(p.cors).toBe(true);
+    expect(p.corsOrigins).toEqual(["https://app.example"]);
+  });
+
+  test("--cors-origin rejects anything but a bare origin", () => {
+    for (const bad of [
+      "*",
+      "null",
+      "app.example",
+      "https://app.example/path",
+      "https://app.example?x=1",
+      "https://user@app.example",
+      "ftp://app.example",
+    ]) {
+      expect(buildTrafficPolicy({ corsOrigin: [bad] })).toHaveProperty("error");
+    }
+  });
+
+  test("--cors-origin parses as a repeatable flag", () => {
+    const p = parseArgs([
+      "http",
+      "3000",
+      "--cors-origin",
+      "https://a.example",
+      "--cors-origin=https://b.example",
+    ]);
+    expect(p.kind).toBe("run");
+    if (p.kind !== "run") return;
+    expect(p.flags.corsOrigin).toEqual([
+      "https://a.example",
+      "https://b.example",
+    ]);
   });
 });
 

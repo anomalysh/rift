@@ -132,21 +132,30 @@ rift start           # open every declared tunnel
 rift start web api    # open just these
 ```
 
-Each entry takes the same fields as the command line: `proto` (default `http`),
-`port`, `subdomain`, and any flag below by its long name (a boolean flag like
-`cors: true`, a repeatable one as a list). Every tunnel runs concurrently with
-its output tagged by name.
+Each entry takes `proto` (default `http`), `port`, `subdomain`, and the
+tunnel-shape flags below by their long name (a boolean flag like `cors: true`,
+a repeatable one as a list): the visitor-access and traffic-shaping flags,
+`--domain`, `--log-level`, and `--host` when it is a loopback address. Every
+tunnel runs concurrently with its output tagged by name.
+
+A project file usually arrives with a cloned repository, so it cannot decide
+where your token goes: `token`, `token-file`, `server`, `insecure`,
+`upstream-insecure`, and `allow-insecure-transport` are refused, as is a
+non-loopback `host` (which would publish another machine on your network).
+Those come only from your own config file, environment, or command line.
 
 ### Flags
 
 | Flag              | Meaning                                             |
 | ----------------- | --------------------------------------------------- |
-| `--token <t>`     | gateway auth token                                  |
-| `--server <url>`  | gateway `ws://` / `wss://` URL                      |
+| `--token <t>`     | gateway auth token (visible in `ps`; prefer the next two) |
+| `--token-file <path>` | read the token from a file (whitespace trimmed)  |
+| `--server <url>`  | gateway `wss://` URL (`ws://` only to a loopback gateway) |
 | `--host <host>`   | local host to forward to (default `127.0.0.1`)      |
 | `--log-level <l>` | `debug` \| `info` \| `warn` \| `error` \| `silent`  |
 | `--insecure`      | skip TLS certificate verification (`wss` only)      |
 | `--upstream-insecure` | skip verification of the local HTTPS upstream's certificate |
+| `--allow-insecure-transport` | allow a non-loopback `ws://` gateway (the token crosses the network unencrypted) |
 | `--version`, `-v` | print version and exit                              |
 | `--help`, `-h`    | print help and exit                                 |
 
@@ -156,7 +165,8 @@ Flags accept both `--flag value` and `--flag=value` forms.
 
 These attach a policy to the tunnel that the server enforces before a request
 ever reaches your machine. Passwords are bcrypt-hashed by the agent, so the
-plaintext never leaves your host.
+plaintext never leaves your host; bcrypt caps a password at 72 bytes (UTF-8),
+and a longer one is rejected.
 
 | Flag                     | Meaning                                                      |
 | ------------------------ | ------------------------------------------------------------ |
@@ -179,7 +189,8 @@ service needing to change.
 | `--del-request-header <name>`   | drop a request header before the upstream (repeatable)    |
 | `--set-response-header "K: v"`  | add/replace a header on the response (repeatable)         |
 | `--del-response-header <name>`  | drop a header from the response (repeatable)              |
-| `--cors`                        | answer CORS preflights and add CORS headers               |
+| `--cors`                        | answer CORS preflights and add CORS headers (`Allow-Origin: *`, no credentials) |
+| `--cors-origin <origin>`        | also allow credentialed CORS from this exact origin (repeatable; implies `--cors`) |
 | `--respond "/health=200:ok"`    | serve a fixed response for a path (repeatable)            |
 | `--redirect "/old=/new"`        | redirect a path (`/old=301:/new` to set the code)         |
 | `--route "/api=4000"`           | route a path prefix to another local port (repeatable)    |
@@ -196,6 +207,12 @@ Point your domain at the tunnel with a DNS `CNAME` (e.g. `app.acme.com` →
 your base domain), then `rift http 3000 --domain app.acme.com`. The server
 obtains a certificate on demand for the domain and routes it to your tunnel.
 A domain is owned by the first token that claims it; another token is refused.
+
+`--cors` alone lets any website read responses, but never with the visitor's
+cookies or HTTP auth: echoing an arbitrary `Origin` with
+`Access-Control-Allow-Credentials: true` would let every page a visitor opens
+read your app as them. Name the front-ends you trust with `--cors-origin
+https://app.example.com`; only those get their origin echoed with credentials.
 
 ## Configuration
 
@@ -220,6 +237,7 @@ naming exactly where to set it.
 | `RIFT_SERVER`     | `--server`   |
 | `RIFT_HOST`       | `--host`     |
 | `RIFT_LOG_LEVEL`  | `--log-level`|
+| `RIFT_ALLOW_INSECURE_TRANSPORT` | `--allow-insecure-transport` (`1`/`true`/`yes`) |
 
 `XDG_CONFIG_HOME` is honoured when locating the config file; it falls back to
 `$HOME/.config`.
@@ -238,6 +256,22 @@ naming exactly where to set it.
 ```
 
 Unknown keys are ignored; invalid types or an unknown `logLevel` are a hard error.
+
+The file holds your token. `--set-*` keeps the `rift` directory `0700` and
+replaces the file atomically with a `0600` copy; rift warns on start if the file
+(or a `--token-file`) is readable by other users. To keep the token out of
+`ps` and shell history, save it from stdin with `rift --set-token - < token.txt`
+or pass `--token-file <path>`.
+
+### Gateway transport
+
+The token travels in the first WebSocket frame, so rift refuses a cleartext
+`ws://` gateway unless it is on loopback (a local dev stack or an SSH
+port-forward). For a trusted network path, opt in explicitly with
+`--allow-insecure-transport` or `RIFT_ALLOW_INSECURE_TRANSPORT=1`; rift prints
+a warning whenever it is used. If the gateway goes silent for three heartbeat
+intervals (after sleep or a NAT timeout), rift drops the connection and
+reconnects instead of reporting a dead tunnel as online.
 
 ## Exit codes
 

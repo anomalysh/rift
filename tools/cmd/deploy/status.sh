@@ -23,7 +23,7 @@ state and health, plus host disk and memory headroom. Read-only.
 Options:
   --strict   Exit non-zero if any container is not running/healthy.
 
-Environment: RIFT_VPS_HOST (required); see tools/ssh.sh for auth.
+Environment: RIFT_VPS_HOST (required); see rift-ops ssh ssh --help for auth.
 EOF
 }
 
@@ -41,6 +41,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 require_cmd awk
+load_env
 require_env RIFT_VPS_HOST
 
 # One round trip: run a small script on the VPS that prints container state (one
@@ -59,7 +60,7 @@ if command -v free >/dev/null 2>&1; then
 fi
 '
 
-out="$(env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" "$remote_script")" ||
+out="$(rift_ssh "$RIFT_VPS_HOST" "$remote_script")" ||
 	die "could not reach the VPS (check RIFT_VPS_HOST and your key)"
 
 section="" down=0 seen=0

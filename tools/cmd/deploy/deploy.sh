@@ -4,7 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/../../lib/common.sh"
-SSH="$RIFT_TOOLS_DIR/cmd/remote/ssh.sh"
 
 REMOTE_DIR="/opt/rift"
 
@@ -20,10 +19,10 @@ Deploy the rift stack to the VPS. Idempotent.
      docker-compose.tcp.yml is appended when RIFT_TCP_ENABLED is true in the
      VPS's deploy/.env, and docker-compose.tls.yml when RIFT_TLS_TUNNEL_ENABLED
      is -- publishing exactly the raw-tunnel ports whose feature is on. Open the
-     same ports on the firewall too (tools/harden.sh).
+     same ports on the firewall too (rift-ops host harden).
 
 Your untracked secrets file must already exist on the VPS at
-$REMOTE_DIR/deploy/.env (e.g. tools/scp.sh .env $REMOTE_DIR/deploy/.env). It is
+$REMOTE_DIR/deploy/.env (e.g. rift-ops ssh scp .env $REMOTE_DIR/deploy/.env). It is
 never part of the tarball, so it is preserved across deploys.
 
 Options:
@@ -50,6 +49,7 @@ case "${1:-}" in
 esac
 
 require_cmd ssh tar
+load_env
 require_env RIFT_VPS_HOST
 
 # --plan: a read-only preview (terraform-plan style) -- what a deploy WOULD do,
@@ -59,27 +59,22 @@ require_env RIFT_VPS_HOST
 if [ "$plan" = true ]; then
 	log_info "=== deploy plan for ${RIFT_VPS_USER:-root}@$RIFT_VPS_HOST:$REMOTE_DIR ==="
 
-	"$SSH" 'docker image inspect rift-riftd:rollback >/dev/null 2>&1 &&
+	rift_ssh "$RIFT_VPS_HOST" 'docker image inspect rift-riftd:rollback >/dev/null 2>&1 &&
 		echo "  rollback: rift-riftd:rollback is present (rollback.sh can restore it)" ||
 		echo "  rollback: no saved image yet (first deploy, or none since this feature landed)"' || true
 
-	# Which overlays the remote .env would add, using the same flag logic as the
-	# real deploy below.
-	"$SSH" "
-		cd '$REMOTE_DIR/deploy' 2>/dev/null || { echo '  compose: no $REMOTE_DIR/deploy yet'; exit 0; }
-		files='-f docker-compose.yml -f docker-compose.prod.yml'
-		val() { [ -f .env ] && sed -n \"s/^[[:space:]]*\$1[[:space:]]*=[[:space:]]*//p\" .env | tail -n1 | tr -d \"\\\"'\\r\"; }
-		istrue() { case \"\$(printf %s \"\${1:-}\" | tr A-Z a-z)\" in 1|true|yes|on) return 0;; *) return 1;; esac; }
-		istrue \"\$(val RIFT_TCP_ENABLED)\" && files=\"\$files -f docker-compose.tcp.yml\"
-		istrue \"\$(val RIFT_TLS_TUNNEL_ENABLED)\" && files=\"\$files -f docker-compose.tls.yml\"
-		echo \"  compose: docker compose \$files up -d --build\"
-	" || true
+	# Which overlays the remote .env would add: the real deploy's own prelude.
+	rift_ssh "$RIFT_VPS_HOST" "cd '$REMOTE_DIR/deploy' 2>/dev/null || { echo '  compose: no $REMOTE_DIR/deploy yet'; exit 0; }
+$RIFT_REMOTE_COMPOSE_PRELUDE
+echo \"  compose: docker compose \$compose_files up -d --build\"" || true
 
-	# .env key-set diff, names only (values never leave the boxes).
-	remote_keys="$("$SSH" "grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' '$REMOTE_DIR/deploy/.env' 2>/dev/null | sed 's/=\$//' | sort -u" || true)"
+	# .env key-set diff, names only (values never leave the boxes). Both sides
+	# list the names with the same function.
+	remote_keys="$(rift_ssh "$RIFT_VPS_HOST" "$(declare -f rift_env_keys)
+rift_env_keys '$REMOTE_DIR/deploy/.env'" || true)"
 	local_env="${RIFT_ENV_FILE:-$RIFT_REPO_ROOT/.env}"
 	if [ -f "$local_env" ]; then
-		local_keys="$(grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "$local_env" | sed 's/=$//' | sort -u)"
+		local_keys="$(rift_env_keys "$local_env")"
 		only_local="$(comm -23 <(printf '%s\n' "$local_keys") <(printf '%s\n' "$remote_keys"))"
 		only_remote="$(comm -13 <(printf '%s\n' "$local_keys") <(printf '%s\n' "$remote_keys"))"
 		[ -n "$only_local" ] && log_warn "  .env keys set locally but NOT on the VPS:$(printf ' %s' $only_local)"
@@ -98,21 +93,24 @@ log_info "target: ${RIFT_VPS_USER:-root}@$RIFT_VPS_HOST:$REMOTE_DIR (dry-run=$dr
 if [ "$dry_run" = true ]; then
 	log_info "[dry-run] would ensure $REMOTE_DIR/deploy exists"
 else
-	"$SSH" "mkdir -p '$REMOTE_DIR/deploy'"
+	rift_ssh "$RIFT_VPS_HOST" "mkdir -p '$REMOTE_DIR/deploy'"
 fi
 
 # 2. Best-effort check that the operator's secrets file is present.
 if [ "$dry_run" != true ]; then
-	if "$SSH" "test -f '$REMOTE_DIR/deploy/.env'"; then
+	if rift_ssh "$RIFT_VPS_HOST" "test -f '$REMOTE_DIR/deploy/.env'"; then
 		log_info "found $REMOTE_DIR/deploy/.env"
 	else
 		log_warn "no $REMOTE_DIR/deploy/.env on the VPS; compose will fail on required vars."
-		log_warn "Create it first, e.g.: tools/scp.sh .env $REMOTE_DIR/deploy/.env"
+		log_warn "Create it first, e.g.: rift-ops ssh scp .env $REMOTE_DIR/deploy/.env"
 	fi
 fi
 
 # 3. Ship projects/server/ and deploy/ (excluding local-only artifacts). The remote .env
 #    is not in our tree, so extraction overlays files without clobbering it.
+#    Root extracts with --no-same-owner: tar would otherwise keep the operator's
+#    local UIDs, letting a VPS account with a matching UID edit the compose files
+#    and server source that the next root-run `docker compose up --build` executes.
 tar_cmd=(tar -C "$RIFT_REPO_ROOT"
 	--exclude='deploy/caddy/data'
 	--exclude='deploy/caddy/config'
@@ -122,58 +120,31 @@ tar_cmd=(tar -C "$RIFT_REPO_ROOT"
 	-czf - projects/server deploy)
 
 if [ "$dry_run" = true ]; then
-	log_info "[dry-run] would run: ${tar_cmd[*]} | ssh 'tar -C $REMOTE_DIR -xzf -'"
+	log_info "[dry-run] would run: ${tar_cmd[*]} | ssh 'tar --no-same-owner -C $REMOTE_DIR -xzf -'"
 else
 	log_info "syncing projects/server/ and deploy/ to $REMOTE_DIR"
-	"${tar_cmd[@]}" | "$SSH" "tar -C '$REMOTE_DIR' -xzf -"
+	"${tar_cmd[@]}" | rift_ssh "$RIFT_VPS_HOST" "tar --no-same-owner -C '$REMOTE_DIR' -xzf -"
 fi
 
 # 4. Build and (re)start the stack.
 #
 # Which compose files to stack is decided ON THE VPS: the flags that select the
 # raw-tunnel overlays live in the untracked $REMOTE_DIR/deploy/.env, which never
-# leaves the box. .env is compose's env-file format, not shell — an unquoted
-# value containing spaces would break `.` — so the booleans are read out with
-# sed rather than sourced. Each feature adds ONLY its own ports, gated on its own
-# flag, mirroring how tools/harden.sh opens them; publishing the other feature's
-# ports would bind dead host ports the firewall never opens. The overlays must
-# come last: docker-compose.prod clears riftd's ports with `ports: !reset []`,
-# and a later !reset would wipe the tunnel ports they add.
-remote_prelude=$(
-	cat <<'SNIPPET'
-set -e
-rift_env_val() {
-	[ -f .env ] || return 0
-	sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" .env | tail -n 1 | tr -d "\"'\r"
-}
-rift_is_true() {
-	case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
-	1 | true | yes | on) return 0 ;;
-	*) return 1 ;;
-	esac
-}
-compose_files="-f docker-compose.yml -f docker-compose.prod.yml"
-if rift_is_true "$(rift_env_val RIFT_TCP_ENABLED)"; then
-	compose_files="$compose_files -f docker-compose.tcp.yml"
-fi
-if rift_is_true "$(rift_env_val RIFT_TLS_TUNNEL_ENABLED)"; then
-	compose_files="$compose_files -f docker-compose.tls.yml"
-fi
-SNIPPET
-)
+# leaves the box. See RIFT_REMOTE_COMPOSE_PRELUDE in tools/lib/common.sh, shared
+# with rollback.sh and rotate.sh so every recreate uses the same overlays.
 
 # Before rebuilding, tag the currently-running riftd image as :rollback so
-# tools/rollback.sh can restore it if this deploy turns out bad. Best-effort: a
+# rollback.sh can restore it if this deploy turns out bad. Best-effort: a
 # first-ever deploy has no image yet, which is fine.
 compose_up="cd '$REMOTE_DIR/deploy' || exit 1
-$remote_prelude
+$RIFT_REMOTE_COMPOSE_PRELUDE
 docker image inspect rift-riftd >/dev/null 2>&1 && docker tag rift-riftd rift-riftd:rollback || true
 docker compose \$compose_files up -d --build"
 if [ "$dry_run" = true ]; then
 	log_info "[dry-run] would run on VPS: tag rift-riftd:rollback, then docker compose -f docker-compose.yml -f docker-compose.prod.yml [-f docker-compose.tcp.yml] [-f docker-compose.tls.yml] up -d --build"
 else
 	log_info "building and starting the stack on the VPS"
-	"$SSH" "$compose_up"
+	rift_ssh "$RIFT_VPS_HOST" "$compose_up"
 fi
 
 # 5. Reload Caddy.
@@ -185,15 +156,15 @@ fi
 # fallback when the admin API is unreachable.
 caddy_reload="docker exec rift-caddy-1 caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile"
 caddy_restart="cd '$REMOTE_DIR/deploy' || exit 1
-$remote_prelude
+$RIFT_REMOTE_COMPOSE_PRELUDE
 docker compose \$compose_files restart caddy"
 if [ "$dry_run" = true ]; then
 	log_info "[dry-run] would reload Caddy: $caddy_reload"
 else
 	log_info "reloading Caddy configuration"
-	if ! "$SSH" "$caddy_reload"; then
+	if ! rift_ssh "$RIFT_VPS_HOST" "$caddy_reload"; then
 		log_warn "caddy reload failed; restarting the container instead"
-		"$SSH" "$caddy_restart"
+		rift_ssh "$RIFT_VPS_HOST" "$caddy_restart"
 	fi
 fi
 

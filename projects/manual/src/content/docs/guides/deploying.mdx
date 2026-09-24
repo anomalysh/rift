@@ -68,7 +68,10 @@ scripts, VPS access) are read by Caddy and the scripts, not by riftd.
 ## Deploy
 
 The `tools/` scripts drive an idempotent deploy over SSH. They read your VPS
-coordinates (`RIFT_VPS_HOST`, `RIFT_VPS_USER`, `RIFT_VPS_PORT`) from `.env`.
+coordinates (`RIFT_VPS_HOST`, `RIFT_VPS_USER`, `RIFT_VPS_PORT`) from `.env`
+(or the file `RIFT_ENV_FILE` names); a variable already set in your shell wins
+over the file, so `RIFT_VPS_HOST=203.0.113.7 rift-ops deploy status` targets
+that host for one run.
 
 <Steps>
 
@@ -110,7 +113,7 @@ coordinates (`RIFT_VPS_HOST`, `RIFT_VPS_USER`, `RIFT_VPS_PORT`) from `.env`.
 <Aside type="caution" title="A bind-mounted Caddyfile is not reloaded by compose up">
 	Caddy's config is a bind mount, so `compose up` sees an unchanged service
 	spec and leaves Caddy running with its old configuration — a Caddyfile edit
-	would deploy silently and never take effect. `remote-deploy.sh` handles this
+	would deploy silently and never take effect. `rift-ops deploy deploy` handles this
 	by running `caddy reload` after `compose up` (falling back to a container
 	restart if the admin API is unreachable). If you edit Caddy config by hand,
 	reload it yourself; see

@@ -4,6 +4,9 @@
 // here so the plaintext never leaves this process.
 
 import type { FlagConfig } from "./args.ts";
+import { BCRYPT } from "./constants.ts";
+
+const utf8 = new TextEncoder();
 
 /** The policy as it travels in the Hello (matches server core.Policy). */
 export interface WirePolicy {
@@ -66,8 +69,19 @@ export async function buildPolicy(flags: FlagConfig): Promise<PolicyResult> {
       }
       const user = entry.slice(0, idx);
       const password = entry.slice(idx + 1);
+      // bcrypt only defines the first 72 bytes; see BCRYPT for why a longer
+      // password would silently never verify at the gateway.
+      const bytes = utf8.encode(password).length;
+      if (bytes > BCRYPT.MAX_PASSWORD_BYTES) {
+        return {
+          error: `--basic-auth password for ${JSON.stringify(user)} is ${bytes} bytes; bcrypt allows at most ${BCRYPT.MAX_PASSWORD_BYTES} (UTF-8)`,
+        };
+      }
       // Bun ships a native bcrypt; the server verifies with golang.org/x/crypto.
-      const hash = await Bun.password.hash(password, "bcrypt");
+      const hash = await Bun.password.hash(password, {
+        algorithm: "bcrypt",
+        cost: BCRYPT.COST,
+      });
       creds.push({ user, hash });
     }
     p.basic_auth = creds;

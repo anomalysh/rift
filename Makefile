@@ -14,10 +14,10 @@ SHELL := bash
 COMPOSE      := docker compose -f deploy/docker-compose.yml
 COMPOSE_PROD := docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.prod.yml
 
-# Load an untracked .env into the environment for the tooling targets (deploy,
-# provision-key, mint-token). The compose targets read .env on their own. This
-# is a single line so it can prefix a recipe command; a missing .env is fine.
-LOAD_ENV := set -a; [ -f .env ] && . ./.env; set +a;
+# The tooling targets need no .env plumbing here: every script that needs the
+# untracked .env loads it itself (tools/lib/runtime.sh load_env, which honors
+# RIFT_ENV_FILE), so `make X` and `rift-ops ...` behave identically.
+SH_SCRIPTS = $(filter-out tools/install.sh,$(wildcard tools/*.sh tools/lib/*.sh tools/cmd/*/*.sh tools/recovery/*.sh tools/providers/*.sh))
 
 .PHONY: help build-cli build-caddy release release-docker lint up down logs migrate \
 	deploy rollback rotate-secret teardown provision-key mint-token setup ship verify check-dns \
@@ -41,8 +41,11 @@ release-docker: ## Reproducible release build in a pinned Bun container -> dist/
 
 lint: ## Vet Go, syntax-check shell scripts, validate compose, check version pins
 	cd projects/server && go vet ./...
-	bash -n tools/*.sh tools/lib/*.sh tools/cmd/*/*.sh tools/recovery/*.sh
-	@command -v shellcheck >/dev/null 2>&1 && shellcheck -x tools/*.sh tools/lib/*.sh tools/cmd/*/*.sh tools/recovery/*.sh || echo "shellcheck not installed; skipped"
+	bash -n $(SH_SCRIPTS) tools/rift-ops && sh -n tools/install.sh
+	@if command -v shellcheck >/dev/null 2>&1; then \
+		shellcheck -x --severity=warning $(SH_SCRIPTS) tools/rift-ops && \
+		shellcheck -x -s sh --severity=warning tools/install.sh; \
+	else echo "shellcheck not installed; skipped"; fi
 	bash tools/check-versions.sh
 	bash tools/smoke.sh
 	$(COMPOSE) config -q
@@ -65,22 +68,22 @@ migrate: ## Apply DB migrations (riftd runs them on start; ensures pg is up, rec
 
 # --- deploy ------------------------------------------------------------------
 deploy: ## Build & deploy the stack to the VPS (ARGS=--dry-run or --plan to preview)
-	@$(LOAD_ENV) bash tools/rift-ops deploy deploy $(ARGS)
+	bash tools/rift-ops deploy deploy $(ARGS)
 
 rollback: ## Roll riftd back to the previous image saved by the last deploy (ARGS=--yes)
-	@$(LOAD_ENV) bash tools/rift-ops deploy rollback $(ARGS)
+	bash tools/rift-ops deploy rollback $(ARGS)
 
 rotate-secret: ## Rotate a secret on the VPS: make rotate-secret WHICH=admin (or peer)
-	@$(LOAD_ENV) bash tools/rift-ops secret rotate $(WHICH) $(ARGS)
+	bash tools/rift-ops secret rotate "$(WHICH)" $(ARGS)
 
 teardown: ## Destroy the provisioned instance + local state (ARGS=--backup --yes)
-	@$(LOAD_ENV) bash tools/rift-ops backup teardown $(ARGS)
+	bash tools/rift-ops backup teardown $(ARGS)
 
 provision-key: ## Generate a deploy key and install it on the VPS
-	@$(LOAD_ENV) bash tools/rift-ops provision key
+	bash tools/rift-ops provision key
 
 mint-token: ## Mint an admin token: make mint-token NAME=alice
-	@$(LOAD_ENV) bash tools/rift-ops secret mint-token $(NAME)
+	bash tools/rift-ops secret mint-token "$(NAME)"
 
 # --- guided setup & pipeline -------------------------------------------------
 setup: ## Interactive wizard: generate an untracked .env (ARGS=--force)
@@ -120,7 +123,7 @@ backup: ## Back up Postgres + caddy_data (ARGS=--retain 14)
 	bash tools/rift-ops backup backup $(ARGS)
 
 restore: ## Restore a backup: make restore FROM=/opt/rift/backups/rift-<ts> (ARGS=--yes)
-	bash tools/rift-ops backup restore --from $(FROM) $(ARGS)
+	bash tools/rift-ops backup restore --from "$(FROM)" $(ARGS)
 
 # --- container images --------------------------------------------------------
 publish-images: ## Build (ARGS=--push to publish) the ghcr container images

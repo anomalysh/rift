@@ -64,60 +64,55 @@ func (l *loader) requiredStr(key string) string {
 	return v
 }
 
-func (l *loader) boolean(key string, def bool) bool {
+// parse is the one path every typed setting takes: unset yields def, and a
+// value conv rejects is recorded as "expected <want>" and also yields def, so
+// Load keeps going and reports every bad key in one pass.
+func parse[T any](l *loader, key string, def T, want string, conv func(string) (T, error)) T {
 	v, ok := lookup(key)
 	if !ok {
 		return def
 	}
-	b, err := strconv.ParseBool(v)
+	out, err := conv(v)
 	if err != nil {
-		l.fail(key, fmt.Errorf("expected a boolean, got %q", v))
+		l.fail(key, fmt.Errorf("expected %s, got %q", want, v))
 		return def
 	}
-	return b
+	return out
+}
+
+func (l *loader) boolean(key string, def bool) bool {
+	return parse(l, key, def, "a boolean", strconv.ParseBool)
 }
 
 func (l *loader) integer(key string, def int) int {
-	v, ok := lookup(key)
-	if !ok {
-		return def
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		l.fail(key, fmt.Errorf("expected an integer, got %q", v))
-		return def
-	}
-	return n
+	return parse(l, key, def, "an integer", strconv.Atoi)
 }
 
 func (l *loader) integer64(key string, def int64) int64 {
-	v, ok := lookup(key)
-	if !ok {
-		return def
-	}
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil {
-		l.fail(key, fmt.Errorf("expected an integer, got %q", v))
-		return def
-	}
-	return n
+	return parse(l, key, def, "an integer", func(v string) (int64, error) { return strconv.ParseInt(v, 10, 64) })
 }
 
+// duration reads a strictly positive duration: a zero timeout or interval
+// would disable what it bounds, or spin a ticker.
 func (l *loader) duration(key string, def time.Duration) time.Duration {
-	v, ok := lookup(key)
-	if !ok {
-		return def
+	return parse(l, key, def, "a positive duration such as 15s or 2m", durationFrom(1))
+}
+
+// optionalDuration reads a duration for which zero legitimately means "no
+// deadline" (the ingress write timeout), so only a negative one is refused.
+func (l *loader) optionalDuration(key string, def time.Duration) time.Duration {
+	return parse(l, key, def, "a duration such as 30s, or 0 for none", durationFrom(0))
+}
+
+// durationFrom parses a duration and rejects one below floor.
+func durationFrom(floor time.Duration) func(string) (time.Duration, error) {
+	return func(v string) (time.Duration, error) {
+		d, err := time.ParseDuration(v)
+		if err == nil && d < floor {
+			err = fmt.Errorf("below %s", floor)
+		}
+		return d, err
 	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		l.fail(key, fmt.Errorf("expected a duration such as 15s or 2m, got %q", v))
-		return def
-	}
-	if d <= 0 {
-		l.fail(key, fmt.Errorf("expected a positive duration, got %q", v))
-		return def
-	}
-	return d
 }
 
 // csv splits a comma-separated list, trimming and dropping empties. An unset

@@ -80,7 +80,10 @@ const (
 	DefaultRequestTimeout      = 60 * time.Second
 	DefaultMaxRequestBodyBytes = int64(32 << 20) // 32 MiB
 	DefaultMaxTunnelsPerToken  = 5
-	DefaultStreamBufferSize    = 32
+	// Ten custom domains covers apex + www for a handful of sites; a hello
+	// asking for more is a mistake or an attempt to mint certificates in bulk.
+	DefaultMaxCustomDomainsPerTunnel = 10
+	DefaultStreamBufferSize          = 32
 
 	DefaultSubdomainMinLength = 3
 	DefaultSubdomainMaxLength = 63
@@ -112,6 +115,21 @@ var DefaultSubdomainBlocklist = []string{
 	"root", "system", "security", "abuse", "postmaster", "webmaster",
 	"rift", "tunnel", "localhost",
 }
+
+// PublishedAdminTokens and PublishedPeerSecrets are credentials written in
+// plain text in this repository's own tooling: the docker-compose development
+// fallback and the e2e harness. Anyone can read them, so production refuses to
+// boot with one even though each passes the length check. They are not
+// defaults -- nothing falls back to them -- only a denylist.
+var (
+	PublishedAdminTokens = []string{
+		"dev-admin-token-change-me-please",           // deploy/docker-compose.yml fallback
+		"e2e-admin-token-not-a-secret-0000000000000", // tools/e2e.sh
+	}
+	PublishedPeerSecrets = []string{
+		"e2e-peer-secret-not-a-secret-000000000000", // tools/e2e.sh
+	}
+)
 
 // Environment names.
 const (

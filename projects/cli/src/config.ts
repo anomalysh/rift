@@ -9,14 +9,21 @@
 // `token` and `server` have no default: a missing one is a clear, actionable
 // error rather than a crash.
 
+import { randomBytes } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
-  writeFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { FlagConfig } from "./args.ts";
 import {
   CONFIG_DIR_NAME,
@@ -27,7 +34,7 @@ import {
   type LogLevel,
   XDG_CONFIG_FALLBACK,
 } from "./constants.ts";
-import { isLogLevel } from "./logger.ts";
+import { errorMessage, isLogLevel } from "./logger.ts";
 import { isRecord } from "./protocol.ts";
 
 /** Fully resolved, immutable runtime configuration. */
@@ -38,6 +45,8 @@ export interface ResolvedConfig {
   readonly logLevel: LogLevel;
   readonly insecure: boolean;
   readonly upstreamInsecure: boolean;
+  /** Dial a non-loopback gateway over cleartext ws:// (explicit opt-in). */
+  readonly allowInsecureTransport: boolean;
 }
 
 /** A subset of settings, as loaded from a config file. */
@@ -65,6 +74,72 @@ export interface ResolveInput {
 
 function nonEmpty(value: string | undefined): string | undefined {
   return value !== undefined && value !== "" ? value : undefined;
+}
+
+/** Truthy spellings accepted for boolean environment variables. */
+function envFlag(value: string | undefined): boolean {
+  return (
+    value !== undefined && ["1", "true", "yes"].includes(value.toLowerCase())
+  );
+}
+
+/**
+ * Whether a host name or address refers to this machine: `localhost` (and its
+ * `*.localhost` subdomains, RFC 6761), 127.0.0.0/8, or ::1. Accepts IPv6 with
+ * or without the URL brackets.
+ */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[(.*)\]$/, "$1");
+  if (h === "localhost" || h.endsWith(".localhost")) {
+    return true;
+  }
+  if (h === "::1" || h === "0:0:0:0:0:0:0:1") {
+    return true;
+  }
+  return /^127(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(h);
+}
+
+/**
+ * `host:port` as it appears in a URL authority or a Host header. An IPv6
+ * literal must be bracketed there ("[::1]:3000"), or its own colons swallow the
+ * port; a host already given in brackets is left as is.
+ */
+export function formatAuthority(host: string, port: number): string {
+  const bracketed =
+    host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `${bracketed}:${port}`;
+}
+
+/**
+ * Why the gateway URL must not be dialed, or null if it may. The token travels
+ * in the first frame, so a cleartext `ws://` connection hands it to anyone on
+ * the path. Plain ws:// is therefore only accepted for a loopback gateway (a
+ * local dev stack, an SSH port-forward) or with the explicit opt-in.
+ */
+export function gatewayTransportProblem(
+  server: string,
+  allowInsecureTransport: boolean,
+): string | null {
+  let url: URL;
+  try {
+    url = new URL(server);
+  } catch {
+    return `invalid server URL ${JSON.stringify(server)}: expected wss://host/path`;
+  }
+  if (url.protocol === "wss:") {
+    return null;
+  }
+  if (url.protocol !== "ws:") {
+    return `invalid server URL ${JSON.stringify(server)}: the scheme must be wss:// (or ws:// for a loopback gateway)`;
+  }
+  if (isLoopbackHost(url.hostname) || allowInsecureTransport) {
+    return null;
+  }
+  return (
+    `refusing to send the token in cleartext to ${url.host}: ${JSON.stringify(server)} is ws://, not wss://. ` +
+    `Use a wss:// URL, or pass --allow-insecure-transport (or set ${ENV.ALLOW_INSECURE_TRANSPORT}=1) ` +
+    "if this network path is trusted"
+  );
 }
 
 /** Extract and validate the env-var layer. Throws on an invalid log level. */
@@ -119,6 +194,9 @@ export function resolveConfig(input: ResolveInput): ResolvedConfig {
     logLevel,
     insecure: flags.insecure ?? false,
     upstreamInsecure: flags.upstreamInsecure ?? false,
+    allowInsecureTransport:
+      flags.allowInsecureTransport === true ||
+      envFlag(input.env[ENV.ALLOW_INSECURE_TRANSPORT]),
   };
 }
 
@@ -147,19 +225,26 @@ export function configFilePath(
   return join(base, CONFIG_DIR_NAME, CONFIG_FILE_NAME);
 }
 
-/** Validate parsed config-file JSON into a PartialConfig. Throws on bad shape. */
-export function parseConfigFile(text: string, path: string): PartialConfig {
+/** Parse config-file text as a JSON object. Throws ConfigError otherwise. */
+function parseConfigObject(
+  text: string,
+  path: string,
+): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch (err) {
-    throw new ConfigError(
-      `invalid JSON in ${path}: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    throw new ConfigError(`invalid JSON in ${path}: ${errorMessage(err)}`);
   }
   if (!isRecord(parsed)) {
     throw new ConfigError(`invalid config in ${path}: expected a JSON object`);
   }
+  return parsed;
+}
+
+/** Validate parsed config-file JSON into a PartialConfig. Throws on bad shape. */
+export function parseConfigFile(text: string, path: string): PartialConfig {
+  const parsed = parseConfigObject(text, path);
   const out: PartialConfig = {};
   const strField = (key: "token" | "server" | "host"): void => {
     const value = parsed[key];
@@ -189,22 +274,80 @@ export function parseConfigFile(text: string, path: string): PartialConfig {
   return out;
 }
 
+/** Where non-fatal configuration warnings go; stderr unless a test injects. */
+export type WarnFn = (message: string) => void;
+
+const stderrWarn: WarnFn = (message) => {
+  process.stderr.write(`rift: warning: ${message}\n`);
+};
+
+/**
+ * Warn if a file holding the token is readable or writable by anyone but its
+ * owner. Only meaningful where POSIX permission bits are (not on Windows).
+ */
+export function warnIfExposed(path: string, warn: WarnFn = stderrWarn): void {
+  if (process.platform === "win32") {
+    return;
+  }
+  let mode: number;
+  try {
+    mode = statSync(path).mode;
+  } catch {
+    return;
+  }
+  if ((mode & 0o077) !== 0) {
+    const perms = (mode & 0o777).toString(8).padStart(3, "0");
+    warn(
+      `${path} holds your token but is accessible to other users (mode ${perms}); run: chmod 600 ${path}`,
+    );
+  }
+}
+
 /** Load and parse the config file, or return null if it does not exist. */
 export function loadConfigFile(
   env: Record<string, string | undefined>,
+  warn: WarnFn = stderrWarn,
 ): PartialConfig | null {
   const path = configFilePath(env);
   if (!existsSync(path)) {
     return null;
   }
-  return parseConfigFile(readFileSync(path, "utf8"), path);
+  const parsed = parseConfigFile(readFileSync(path, "utf8"), path);
+  if (parsed.token !== undefined) {
+    warnIfExposed(path, warn);
+  }
+  return parsed;
+}
+
+/**
+ * Read a token from a file (`--token-file`), trimming surrounding whitespace so
+ * a trailing newline from `echo` or an editor is not part of the secret.
+ */
+export function readTokenFile(path: string, warn: WarnFn = stderrWarn): string {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (err) {
+    throw new ConfigError(
+      `cannot read --token-file ${path}: ${errorMessage(err)}`,
+    );
+  }
+  const token = text.trim();
+  if (token === "") {
+    throw new ConfigError(`--token-file ${path} is empty`);
+  }
+  warnIfExposed(path, warn);
+  return token;
 }
 
 /**
  * Merge `updates` into the config file, preserving any keys already present
  * (including ones this version does not know about), and return the path plus
- * the keys written. The file holds a secret token, so the directory is created
- * 0700 and the file forced to 0600 even if it already existed.
+ * the keys written. The file holds a secret token, so the rift directory is
+ * kept 0700 and the new contents are written to a 0600 temporary file in the
+ * same directory and renamed over the old one: the token is never briefly
+ * readable under looser permissions, and a crash mid-write cannot leave a
+ * truncated config behind.
  */
 export function writeConfigValues(
   env: Record<string, string | undefined>,
@@ -212,31 +355,42 @@ export function writeConfigValues(
 ): { path: string; keys: string[] } {
   const path = configFilePath(env);
 
-  let current: Record<string, unknown> = {};
-  if (existsSync(path)) {
-    const text = readFileSync(path, "utf8");
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch (err) {
-      throw new ConfigError(
-        `invalid JSON in ${path}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-    if (!isRecord(parsed)) {
-      throw new ConfigError(
-        `invalid config in ${path}: expected a JSON object`,
-      );
-    }
-    current = parsed;
-  }
+  const current = existsSync(path)
+    ? parseConfigObject(readFileSync(path, "utf8"), path)
+    : {};
 
   const merged = { ...current, ...updates };
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });
-  // writeFileSync only applies mode on creation; enforce it for an existing
-  // file that may have been created with looser permissions.
-  chmodSync(path, 0o600);
+  const dir = dirname(path);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // mkdir's mode is masked by the umask and ignored for an existing directory;
+  // enforce it on the rift directory itself (never on its parents).
+  if (process.platform !== "win32") {
+    chmodSync(dir, 0o700);
+  }
+  const tmp = join(
+    dir,
+    `.${basename(path)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`,
+  );
+  // "wx": fail rather than follow a pre-planted file or symlink at that name.
+  const fd = openSync(tmp, "wx", 0o600);
+  try {
+    writeSync(fd, `${JSON.stringify(merged, null, 2)}\n`);
+    fsyncSync(fd);
+    closeSync(fd);
+    renameSync(tmp, path);
+  } catch (err) {
+    try {
+      closeSync(fd);
+    } catch {
+      // Already closed.
+    }
+    try {
+      unlinkSync(tmp);
+    } catch {
+      // Never created or already renamed.
+    }
+    throw err;
+  }
 
   return { path, keys: Object.keys(updates) };
 }

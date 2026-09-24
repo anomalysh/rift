@@ -3,8 +3,12 @@
 // point any MCP client (Claude, the MCP Inspector, ...) at the public /mcp URL.
 //
 //   bun install
-//   bun run src/index.ts          # http://localhost:3939/mcp
+//   bun run src/index.ts          # http://127.0.0.1:3939/mcp
 //   rift http 3939 mcp            # -> https://mcp.<your-rift-domain>/mcp
+//
+// It listens on loopback only, so it is reachable through the tunnel (and any
+// --basic-auth / --allow-ip policy on it) but not directly from the LAN. Set
+// HOST=0.0.0.0 to listen on every interface.
 //
 // One MCP session is kept per `mcp-session-id` (returned on initialize), so it
 // works with real clients that do initialize -> tools/list -> tools/call.
@@ -21,6 +25,11 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
 const PORT = Number(process.env.PORT ?? 3939);
+const HOST = process.env.HOST ?? "127.0.0.1";
+/** Largest JSON-RPC request body accepted; larger ones get 413, not buffered. */
+const MAX_BODY_BYTES = 1024 * 1024;
+
+class BodyTooLarge extends Error {}
 
 /** Build a fresh MCP server with the demo tools. One per session. */
 function buildServer(): McpServer {
@@ -75,8 +84,18 @@ function buildServer(): McpServer {
 const transports = new Map<string, StreamableHTTPServerTransport>();
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
+  if (Number(req.headers["content-length"] ?? 0) > MAX_BODY_BYTES) {
+    throw new BodyTooLarge();
+  }
   const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
+  let total = 0;
+  for await (const chunk of req) {
+    total += (chunk as Buffer).length;
+    // Past the cap, keep draining (so the 413 can be written on this
+    // connection) but stop retaining bytes.
+    if (total <= MAX_BODY_BYTES) chunks.push(chunk as Buffer);
+  }
+  if (total > MAX_BODY_BYTES) throw new BodyTooLarge();
   if (chunks.length === 0) return undefined;
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
@@ -141,12 +160,17 @@ const http = createServer(async (req, res) => {
 
     res.writeHead(405).end();
   } catch (err) {
+    if (err instanceof BodyTooLarge) {
+      if (!res.headersSent) fail(res, 413, "request body too large");
+      return;
+    }
     console.error("mcp request failed:", err);
     if (!res.headersSent) fail(res, 500, "internal error");
   }
 });
 
-http.listen(PORT, () => {
-  console.log(`rift MCP demo  ->  http://localhost:${PORT}/mcp`);
+http.listen(PORT, HOST, () => {
+  const shownHost = HOST.includes(":") ? `[${HOST}]` : HOST;
+  console.log(`rift MCP demo  ->  http://${shownHost}:${PORT}/mcp`);
   console.log(`expose it:       rift http ${PORT} mcp`);
 });

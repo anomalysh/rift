@@ -9,7 +9,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 )
 
 // Version is the current protocol version this build speaks and advertises in
@@ -163,29 +162,6 @@ func Decode(buf []byte) (Frame, error) {
 	}
 	f.Payload = body
 	return f, nil
-}
-
-// WriteTo serialises the frame directly into w, avoiding a second copy for
-// large body chunks.
-func WriteTo(w io.Writer, t FrameType, streamID uint64, payload []byte) error {
-	if len(payload) > MaxPayloadBytes {
-		return fmt.Errorf("%w: %d > %d", ErrPayloadTooLarge, len(payload), MaxPayloadBytes)
-	}
-	if err := checkStreamID(t, streamID); err != nil {
-		return err
-	}
-	var hdr [HeaderSize]byte
-	hdr[0] = byte(t)
-	binary.BigEndian.PutUint64(hdr[1:9], streamID)
-	binary.BigEndian.PutUint32(hdr[9:13], uint32(len(payload)))
-	if _, err := w.Write(hdr[:]); err != nil {
-		return err
-	}
-	if len(payload) == 0 {
-		return nil
-	}
-	_, err := w.Write(payload)
-	return err
 }
 
 func checkStreamID(t FrameType, streamID uint64) error {

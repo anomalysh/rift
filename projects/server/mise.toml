@@ -45,4 +45,7 @@ depends = ["deps"]
 
 [tasks.vuln]
 description = "Scan the server for known CVEs (govulncheck)"
-run = "go run golang.org/x/vuln/cmd/govulncheck@latest ./..."
+# -show verbose names every finding, including vulnerabilities in required
+# modules the code does not call. The default summary only counts those, yet
+# they are exactly what Dependabot alerts on, so they must be visible to fix.
+run = "go run golang.org/x/vuln/cmd/govulncheck@latest -show verbose ./..."

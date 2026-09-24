@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 REMOTE_DIR="/opt/rift"
 
-# rotate-secret.sh -- rotate a rift secret on the live VPS: mint a fresh value,
+# rotate.sh -- rotate a rift secret on the live VPS: mint a fresh value,
 # rewrite exactly one key in the remote .env atomically, and restart the service
 # that reads it. Closes a real incident-response gap (a leaked admin token today
 # means editing .env by hand and hoping). The new secret travels to the box over
@@ -32,7 +32,7 @@ Postgres password rotation is NOT automated: it must ALTER the database role and
 the DSN in lockstep, and a mistake locks riftd out of its own database. Run that
 by hand (ALTER USER ... PASSWORD, then update RIFT_POSTGRES_DSN + POSTGRES_PASSWORD).
 
-Environment: RIFT_VPS_HOST (required); see tools/ssh.sh for auth.
+Environment: RIFT_VPS_HOST (required); see rift-ops ssh ssh --help for auth.
 EOF
 }
 
@@ -61,6 +61,7 @@ done
 	usage
 	die "name a secret to rotate: admin or peer"
 }
+load_env
 require_env RIFT_VPS_HOST
 
 case "$which" in
@@ -101,13 +102,19 @@ echo "rewrote $key" >&2
 '
 
 printf '%s\n%s\n' "$key" "$new_secret" |
-	env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" "$remote_rewrite" ||
+	rift_ssh "$RIFT_VPS_HOST" "$remote_rewrite" ||
 	die "failed to rewrite $key on the host"
 
-log_info "restarting riftd to pick up the new $key"
-env RIFT_VPS_HOST="$RIFT_VPS_HOST" "$RIFT_TOOLS_DIR/cmd/remote/ssh.sh" \
-	"cd '$REMOTE_DIR/deploy' && docker compose -f docker-compose.yml -f docker-compose.prod.yml restart riftd" ||
-	die "riftd restart failed; the new $key is written but not yet active"
+# `docker compose restart` keeps the existing container and so the environment
+# it was CREATED with: the old secret would stay live. Only recreating the
+# container re-reads .env. Use the deploy's overlay set so the recreate does not
+# drop the raw-tunnel ports.
+log_info "recreating riftd to pick up the new $key"
+recreate_cmd="cd '$REMOTE_DIR/deploy' || exit 1
+$RIFT_REMOTE_COMPOSE_PRELUDE
+docker compose \$compose_files up -d --no-build --force-recreate riftd"
+rift_ssh "$RIFT_VPS_HOST" "$recreate_cmd" ||
+	die "riftd recreate failed; the new $key is written but not yet active"
 
 printf '%s\n' "$new_secret" >&2
 log_info "$key rotated. The value above is the ONLY copy shown; it is now in $REMOTE_DIR/deploy/.env."

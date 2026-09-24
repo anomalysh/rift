@@ -23,6 +23,23 @@ networks:
       config:
         - subnet: ${RIFT_E2E_SUBNET:-10.77.53.0/24}
 
+# What riftd and the cluster profile's riftd2 share, merged into both.
+x-riftd-env: &riftd-env
+  RIFT_ENV: development
+  RIFT_LOG_LEVEL: ${RIFT_E2E_LOG_LEVEL:-info}
+  RIFT_LOG_FORMAT: json
+  RIFT_POSTGRES_DSN: postgres://rift:rift@postgres:5432/rift?sslmode=disable
+  RIFT_BASE_DOMAIN: ${RIFT_E2E_BASE_DOMAIN:-rift.localtest}
+  RIFT_GATEWAY_HOSTNAME: gateway.${RIFT_E2E_BASE_DOMAIN:-rift.localtest}
+  RIFT_PUBLIC_SCHEME: https
+  RIFT_TLS_MODE: ${RIFT_TLS_MODE:-internal}
+  RIFT_ADMIN_TOKEN: ${RIFT_E2E_ADMIN_TOKEN:?e2e admin token must be set by tools/e2e.sh}
+  # Fast enough that a test can observe a reap or a revocation without
+  # sleeping for half a minute.
+  RIFT_HEARTBEAT_INTERVAL: 1s
+  RIFT_HEARTBEAT_TIMEOUT: 4s
+  RIFT_REAPER_INTERVAL: 2s
+  RIFT_TOKEN_REVALIDATE_INTERVAL: 1s
 
 services:
   postgres:
@@ -46,15 +63,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
     environment:
-      RIFT_ENV: development
-      RIFT_LOG_LEVEL: ${RIFT_E2E_LOG_LEVEL:-info}
-      RIFT_LOG_FORMAT: json
-
-      RIFT_POSTGRES_DSN: postgres://rift:rift@postgres:5432/rift?sslmode=disable
-      RIFT_BASE_DOMAIN: ${RIFT_E2E_BASE_DOMAIN:-rift.localtest}
-      RIFT_GATEWAY_HOSTNAME: gateway.${RIFT_E2E_BASE_DOMAIN:-rift.localtest}
-      RIFT_PUBLIC_SCHEME: https
-      RIFT_TLS_MODE: ${RIFT_TLS_MODE:-internal}
+      <<: *riftd-env
       RIFT_TLS_CERT_FILE: ${RIFT_TLS_CERT_FILE:-}
       RIFT_TLS_KEY_FILE: ${RIFT_TLS_KEY_FILE:-}
       # riftd validates the TLS mode as strictly as Caddy consumes it, so the
@@ -62,7 +71,6 @@ services:
       RIFT_ACME_DNS_PROVIDER: ${RIFT_ACME_DNS_PROVIDER:-}
 
       RIFT_ADMIN_ENABLED: "true"
-      RIFT_ADMIN_TOKEN: ${RIFT_E2E_ADMIN_TOKEN:?e2e admin token must be set by tools/e2e.sh}
 
       # Multi-node routing. Off unless the cluster profile is active.
       RIFT_REDIS_ENABLED: ${RIFT_E2E_REDIS_ENABLED:-false}
@@ -73,12 +81,6 @@ services:
       # Caddy is the only client of the ingress.
       RIFT_INGRESS_TRUSTED_PROXY_IPS: 172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
 
-      # Fast enough that a test can observe a reap or a revocation without
-      # sleeping for half a minute.
-      RIFT_HEARTBEAT_INTERVAL: 1s
-      RIFT_HEARTBEAT_TIMEOUT: 4s
-      RIFT_REAPER_INTERVAL: 2s
-      RIFT_TOKEN_REVALIDATE_INTERVAL: 1s
       RIFT_REQUEST_TIMEOUT: 15s
 
       # Ingress read/header/body bounds. Default to the production values so the
@@ -221,24 +223,12 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
     environment:
-      RIFT_ENV: development
-      RIFT_LOG_LEVEL: ${RIFT_E2E_LOG_LEVEL:-info}
-      RIFT_LOG_FORMAT: json
-      RIFT_POSTGRES_DSN: postgres://rift:rift@postgres:5432/rift?sslmode=disable
-      RIFT_BASE_DOMAIN: ${RIFT_E2E_BASE_DOMAIN:-rift.localtest}
-      RIFT_GATEWAY_HOSTNAME: gateway.${RIFT_E2E_BASE_DOMAIN:-rift.localtest}
-      RIFT_PUBLIC_SCHEME: https
-      RIFT_TLS_MODE: ${RIFT_TLS_MODE:-internal}
+      <<: *riftd-env
       RIFT_ADMIN_ENABLED: "false"
-      RIFT_ADMIN_TOKEN: ${RIFT_E2E_ADMIN_TOKEN:?}
       RIFT_REDIS_ENABLED: "true"
       RIFT_REDIS_ADDR: redis:6379
       RIFT_NODE_ADVERTISE_URL: http://riftd2:8080
       RIFT_PEER_SECRET: ${RIFT_E2E_PEER_SECRET:?peer secret must be set by tools/e2e.sh}
-      RIFT_HEARTBEAT_INTERVAL: 1s
-      RIFT_HEARTBEAT_TIMEOUT: 4s
-      RIFT_REAPER_INTERVAL: 2s
-      RIFT_TOKEN_REVALIDATE_INTERVAL: 1s
     ports:
       - "127.0.0.1:${RIFT_E2E_GATEWAY2_PORT:-18091}:8081"
     depends_on:

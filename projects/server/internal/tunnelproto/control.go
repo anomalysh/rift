@@ -92,8 +92,8 @@ type HelloOK struct {
 	Hostname            string `json:"hostname"`
 	URL                 string `json:"url"`
 	HeartbeatIntervalMS int64  `json:"heartbeat_interval_ms"`
-	// BindAddr is the public host:port a raw tunnel (tcp/tls) is reached on.
-	// Empty for http tunnels, which are reached by URL.
+	// BindAddr is the public host:port a raw tunnel (tcp/udp/tls/grpc) is
+	// reached on. Empty for http tunnels, which are reached by URL.
 	BindAddr string `json:"bind_addr,omitempty"`
 	// ProtocolVersion is the current protocol version the gateway speaks (its
 	// maximum). An agent behind this can warn that a newer rift is available
@@ -127,8 +127,9 @@ type RequestHead struct {
 	RemoteAddr string              `json:"remote_addr"`
 	HasBody    bool                `json:"has_body"`
 	// Raw marks the stream as a raw byte pipe with no HTTP semantics, used by
-	// tcp/tls tunnels: the agent dials its local port and pipes bytes both ways
-	// (REQ_BODY in, RES_BODY out) without a RequestHead/ResponseHead exchange.
+	// tcp/tls/grpc tunnels and udp flows: the agent dials its local port and
+	// pipes bytes both ways (REQ_BODY in, RES_BODY out) without a
+	// RequestHead/ResponseHead exchange.
 	Raw bool `json:"raw,omitempty"`
 	// Upgrade marks a connection-upgrade request (WebSocket and other
 	// Upgrade-based protocols). The agent then dials the local service over a

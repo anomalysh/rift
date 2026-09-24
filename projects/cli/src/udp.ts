@@ -5,15 +5,23 @@
 // service->client datagrams back onto the stream. The gateway does the mirror.
 
 import type { udp } from "bun";
-import { FrameType, ResetCode, type ResetCodeValue } from "./constants.ts";
-import type { ForwardTarget, FrameSink, Stream } from "./forwarder.ts";
-import type { Logger } from "./logger.ts";
-import type { StreamReset } from "./protocol.ts";
-
-const EMPTY = new Uint8Array(0);
-
-/** Largest UDP payload carried over the tunnel (matches the gateway's cap). */
-export const MAX_DATAGRAM = 65507;
+import {
+  FrameType,
+  MAX_DATAGRAM,
+  MAX_STREAM_BUFFER_BYTES,
+  ResetCode,
+  type ResetCodeValue,
+} from "./constants.ts";
+import { errorMessage } from "./logger.ts";
+import {
+  concatBytes,
+  EMPTY_BYTES,
+  linkBackedUp,
+  type Stream,
+  type StreamDeps,
+  sendStreamEnd,
+  sendStreamReset,
+} from "./stream.ts";
 
 /** Frame one datagram as a 2-byte big-endian length prefix plus the payload. */
 export function frameDatagram(payload: Uint8Array): Uint8Array {
@@ -31,10 +39,10 @@ export function frameDatagram(payload: Uint8Array): Uint8Array {
  * length prefix over MAX_DATAGRAM so a corrupt stream cannot force a huge read.
  */
 export class Deframer {
-  private buf: Uint8Array = new Uint8Array(0);
+  private buf: Uint8Array = EMPTY_BYTES;
 
   push(chunk: Uint8Array): Uint8Array[] {
-    this.buf = concat(this.buf, chunk);
+    this.buf = concatBytes(this.buf, chunk);
     const out: Uint8Array[] = [];
     for (;;) {
       if (this.buf.length < 2) {
@@ -55,13 +63,6 @@ export class Deframer {
   }
 }
 
-export interface UdpStreamDeps {
-  readonly target: ForwardTarget;
-  readonly sink: FrameSink;
-  readonly logger: Logger;
-  readonly onDone: (streamId: bigint) => void;
-}
-
 /**
  * One UDP client flow on a stream_id. Construction opens a connected Bun UDP
  * socket to the local service; length-delimited datagrams are fed in via
@@ -69,39 +70,55 @@ export interface UdpStreamDeps {
  */
 export class UdpStream implements Stream {
   private socket: udp.ConnectedSocket<"buffer"> | null = null;
+  // Set once the flow is torn down for any reason (REQ_END, RESET, error); no
+  // datagram is relayed in either direction after it.
   private aborted = false;
   private finished = false;
   private readonly deframer = new Deframer();
   // Datagrams that arrived before the socket finished connecting.
   private pending: Uint8Array[] = [];
+  private pendingBytes = 0;
+  // REQ_END arrived before the socket connected: end once pending is flushed.
+  private endPending = false;
+  // Replies dropped because the gateway link was backed up (logged once).
+  private droppedReplies = 0;
 
   constructor(
     private readonly streamId: bigint,
-    private readonly deps: UdpStreamDeps,
+    private readonly deps: StreamDeps,
   ) {
     void this.connect();
   }
 
   private async connect(): Promise<void> {
     const { host, port } = this.deps.target;
+    let socket: udp.ConnectedSocket<"buffer">;
     try {
-      this.socket = await Bun.udpSocket({
+      socket = await Bun.udpSocket({
         connect: { hostname: host, port },
         socket: {
           data: (_sock, data) => this.onServiceDatagram(data),
           error: (_sock, err) => this.onError(err),
         },
       });
-      if (this.aborted) {
-        this.terminateSocket();
-        return;
-      }
-      for (const dgram of this.pending) {
-        this.socket.send(dgram);
-      }
-      this.pending = [];
     } catch (err) {
       this.onError(err);
+      return;
+    }
+    this.socket = socket;
+    if (this.aborted) {
+      // Torn down while connecting: the socket must not outlive the flow.
+      this.closeSocket();
+      return;
+    }
+    const pending = this.pending;
+    this.pending = [];
+    this.pendingBytes = 0;
+    for (const dgram of pending) {
+      this.sendToService(dgram);
+    }
+    if (this.endPending) {
+      this.end();
     }
   }
 
@@ -114,10 +131,14 @@ export class UdpStream implements Stream {
     try {
       datagrams = this.deframer.push(chunk);
     } catch (err) {
-      this.deps.logger.warn(
-        `udp framing error on stream ${this.streamId}: ${err instanceof Error ? err.message : String(err)}`,
+      const message = errorMessage(err);
+      // The gateway still considers the flow open; tell it why it is gone
+      // before tearing down locally, or its side lingers until a timeout.
+      this.fail(
+        ResetCode.INTERNAL,
+        message,
+        `udp framing error on stream ${this.streamId}: ${message}`,
       );
-      this.reset(ResetCode.INTERNAL);
       return;
     }
     for (const dgram of datagrams) {
@@ -125,28 +146,49 @@ export class UdpStream implements Stream {
     }
   }
 
-  /** REQ_END: the client flow ended. UDP has no FIN, so just tear down. */
+  /**
+   * REQ_END: the client flow ended. UDP has no FIN, so the flow is torn down --
+   * after the datagrams that preceded it, if the socket is still connecting.
+   */
   endBody(): void {
-    this.finishAndClose();
-  }
-
-  /** RESET (or local transport loss): abort the flow. */
-  reset(code: string): void {
     if (this.aborted) {
       return;
     }
-    this.aborted = true;
-    void code;
-    this.terminateSocket();
-    this.finish();
+    if (this.socket === null) {
+      this.endPending = true;
+      return;
+    }
+    this.end();
+  }
+
+  /** RESET (or local transport loss): abort the flow. */
+  reset(_code: string): void {
+    if (!this.aborted) {
+      this.teardown();
+    }
   }
 
   private sendToService(dgram: Uint8Array): void {
     if (this.socket === null) {
       this.pending.push(dgram);
+      this.pendingBytes += dgram.length;
+      if (this.pendingBytes > MAX_STREAM_BUFFER_BYTES) {
+        this.fail(
+          ResetCode.PAYLOAD_TOO_LARGE,
+          "pre-connect backlog full",
+          `udp flow ${this.streamId}: pre-connect backlog exceeded ${MAX_STREAM_BUFFER_BYTES} bytes`,
+        );
+      }
       return;
     }
-    this.socket.send(dgram);
+    // A UDP send is all-or-nothing per datagram: false means the kernel had no
+    // room and dropped it, which is ordinary UDP loss rather than a truncated
+    // stream, so it is not retried.
+    if (!this.socket.send(dgram)) {
+      this.deps.logger.debug(
+        `udp flow ${this.streamId}: local send buffer full, datagram dropped`,
+      );
+    }
   }
 
   /** A datagram came back from the local service: frame it onto the stream. */
@@ -158,64 +200,65 @@ export class UdpStream implements Stream {
       this.deps.logger.warn(`dropping oversized udp reply (${data.length} B)`);
       return;
     }
+    // A UDP socket cannot be paused, so while the gateway link is backed up the
+    // reply is dropped -- the loss UDP applications already tolerate -- rather
+    // than piling every datagram into the WebSocket send buffer.
+    if (linkBackedUp(this.deps.sink)) {
+      if (this.droppedReplies === 0) {
+        this.deps.logger.warn(
+          `udp flow ${this.streamId}: gateway link backed up, dropping replies`,
+        );
+      }
+      this.droppedReplies++;
+      return;
+    }
     this.deps.sink.send(FrameType.RES_BODY, this.streamId, frameDatagram(data));
   }
 
   private onError(err: unknown): void {
-    if (this.aborted || this.finished) {
+    const message = errorMessage(err);
+    this.fail(
+      ResetCode.UPSTREAM_ERROR,
+      message,
+      `udp flow ${this.streamId} error: ${message}`,
+    );
+  }
+
+  /** End the flow cleanly: RES_END, then tear down. */
+  private end(): void {
+    sendStreamEnd(this.deps.sink, this.streamId);
+    this.teardown();
+  }
+
+  /** Abort from this side: log why, tell the gateway, and tear down. */
+  private fail(code: ResetCodeValue, message: string, log: string): void {
+    if (this.aborted) {
       return;
     }
-    const message = err instanceof Error ? err.message : String(err);
-    this.deps.logger.warn(`udp flow ${this.streamId} error: ${message}`);
-    this.sendReset(ResetCode.UPSTREAM_ERROR, message);
-    this.terminateSocket();
-    this.finish();
+    this.deps.logger.warn(log);
+    sendStreamReset(this.deps.sink, this.streamId, code, message);
+    this.teardown();
   }
 
-  private finishAndClose(): void {
-    if (this.finished) {
-      return;
-    }
-    if (this.deps.sink.isOpen()) {
-      this.deps.sink.send(FrameType.RES_END, this.streamId, EMPTY);
-    }
-    this.terminateSocket();
-    this.finish();
-  }
-
-  private sendReset(code: ResetCodeValue, message: string): void {
-    if (!this.deps.sink.isOpen()) {
-      return;
-    }
-    const reset: StreamReset = { code };
-    if (message !== "") {
-      reset.message = message;
-    }
-    this.deps.sink.sendJson(FrameType.RESET, this.streamId, reset);
-  }
-
-  private terminateSocket(): void {
-    if (this.socket !== null) {
-      this.socket.close();
-      this.socket = null;
+  /** Stop relaying, close the socket, and retire the stream (idempotent). */
+  private teardown(): void {
+    this.aborted = true;
+    this.pending = [];
+    this.pendingBytes = 0;
+    this.closeSocket();
+    if (!this.finished) {
+      this.finished = true;
+      this.deps.onDone(this.streamId);
     }
   }
 
-  private finish(): void {
-    if (this.finished) {
-      return;
+  private closeSocket(): void {
+    const socket = this.socket;
+    this.socket = null;
+    try {
+      socket?.close();
+    } catch {
+      // Already closed.
     }
-    this.finished = true;
-    this.deps.onDone(this.streamId);
   }
-}
-
-function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
-  if (a.length === 0) {
-    return b;
-  }
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a, 0);
-  out.set(b, a.length);
-  return out;
 }

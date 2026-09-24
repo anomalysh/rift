@@ -71,7 +71,7 @@ bun_lines="$(
 assert_single Bun "$bun_lines"
 
 # --- Go --------------------------------------------------------------------
-# mise pins the minor (1.25); the Dockerfile tags the same minor. Compare on the
+# mise pins the minor (1.26); the Dockerfile tags the same minor. Compare on the
 # major.minor so a patch-tagged base image does not read as drift.
 go_lines="$(
 	extract 'go = "([0-9]+\.[0-9]+)' mise.toml

@@ -52,10 +52,8 @@ func NewSubdomainRules(minLen, maxLen int, pattern string, blocked []string, gen
 	if maxLen < minLen {
 		return nil, fmt.Errorf("core: subdomain max length %d < min length %d", maxLen, minLen)
 	}
-	// A DNS label cannot exceed 63 octets (RFC 1035 §2.3.4).
-	const maxDNSLabel = 63
-	if maxLen > maxDNSLabel {
-		return nil, fmt.Errorf("core: subdomain max length %d exceeds DNS label limit %d", maxLen, maxDNSLabel)
+	if maxLen > maxDomainLabelLength {
+		return nil, fmt.Errorf("core: subdomain max length %d exceeds DNS label limit %d", maxLen, maxDomainLabelLength)
 	}
 	re, err := regexp.Compile(pattern)
 	if err != nil {
@@ -87,14 +85,11 @@ func NewSubdomainRules(minLen, maxLen int, pattern string, blocked []string, gen
 	}
 
 	// A generated subdomain must itself be claimable, otherwise the server
-	// would hand out labels it then rejects. Probe whichever strategy is in
-	// use against the real validator.
-	probe, err := rules.GenerateSubdomain()
-	if err != nil {
+	// would hand out labels it then rejects. GenerateSubdomain only returns
+	// labels that pass Validate, so a strategy that cannot produce one fails
+	// here, at boot.
+	if _, err := rules.GenerateSubdomain(); err != nil {
 		return nil, fmt.Errorf("core: generator produced no valid subdomain: %w", err)
-	}
-	if err := rules.Validate(probe); err != nil {
-		return nil, fmt.Errorf("core: generated subdomain %q does not satisfy the rules: %w", probe, err)
 	}
 	return rules, nil
 }
@@ -104,7 +99,7 @@ func NormalizeSubdomain(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
-// Blocked reports whether the (already normalized) label is on the blocklist.
+// IsBlocked reports whether the (already normalized) label is on the blocklist.
 func (r *SubdomainRules) IsBlocked(s string) bool {
 	_, ok := r.Blocked[s]
 	return ok
@@ -146,7 +141,7 @@ func (r *SubdomainRules) GenerateSubdomain() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if len(s) >= r.MinLength && len(s) <= r.MaxLength && r.Pattern.MatchString(s) && !r.IsBlocked(s) {
+		if r.Validate(s) == nil {
 			return s, nil
 		}
 	}
@@ -196,17 +191,30 @@ func Hostname(subdomain, baseDomain string) string {
 	return subdomain + "." + baseDomain
 }
 
+// DNS name limits from RFC 1035 §2.3.4. Subdomain rules may not allow a
+// longer label, and custom domains are held to both, so a name the resolver
+// could never serve is refused at registration rather than stored, and an
+// oversized Host cannot reach a store lookup.
+const (
+	maxDomainLabelLength = 63
+	maxDomainLength      = 253
+)
+
 // NormalizeDomain lower-cases a custom domain, strips surrounding whitespace,
 // any port, and a trailing dot, returning "" if the result is not a plausible
 // multi-label hostname. It is the canonical form stored and looked up for the
 // BYO-domain feature (E1).
+//
+// Beyond the character set it enforces the RFC 1035 shape: at least two
+// labels, each 1-63 characters with no leading or trailing hyphen, and at most
+// 253 characters overall. The final label must not be all digits: no TLD is
+// numeric, and refusing one keeps an IPv4 literal such as 10.0.0.1 from ever
+// being registered as a "domain" (the ingress treats IP-literal Hosts as its
+// own internal names).
 func NormalizeDomain(domain string) string {
-	d := strings.ToLower(strings.TrimSpace(domain))
-	if i := strings.LastIndexByte(d, ':'); i != -1 && !strings.Contains(d[i:], "]") {
-		d = d[:i]
-	}
-	d = strings.TrimSuffix(d, ".")
-	if d == "" || !strings.Contains(d, ".") {
+	d := strings.TrimSuffix(stripPort(strings.ToLower(strings.TrimSpace(domain))), ".")
+	// Containing a dot means at least two labels.
+	if d == "" || len(d) > maxDomainLength || !strings.Contains(d, ".") {
 		return ""
 	}
 	// Reject anything that is not a bare hostname (no scheme, path, or spaces).
@@ -216,29 +224,42 @@ func NormalizeDomain(domain string) string {
 		}
 		return ""
 	}
-	// A leading/trailing dot or an empty label ("a..b") is not a valid host.
-	for _, label := range strings.Split(d, ".") {
-		if label == "" {
+	labels := strings.Split(d, ".")
+	for _, label := range labels {
+		// A leading/trailing dot or an empty label ("a..b") is not a valid host.
+		if label == "" || len(label) > maxDomainLabelLength {
+			return ""
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
 			return ""
 		}
 	}
+	if strings.Trim(labels[len(labels)-1], "0123456789") == "" {
+		return ""
+	}
 	return d
+}
+
+// IsServerHostname reports whether host (already normalized: lower-case, no
+// port, no trailing dot) is a name this deployment serves in its own right --
+// the base domain, any name under it, or the agent gateway hostname. Such a
+// name is never a BYO custom domain: letting a token register one would let it
+// capture the apex, shadow a subdomain other tokens use, or hijack the gateway.
+func IsServerHostname(host, baseDomain, gatewayHostname string) bool {
+	base := canonicalHost(baseDomain)
+	if base != "" && (host == base || strings.HasSuffix(host, "."+base)) {
+		return true
+	}
+	gw := canonicalHost(gatewayHostname)
+	return gw != "" && host == gw
 }
 
 // SubdomainFromHost extracts the tunnel label from a request Host header.
 // It strips any port, matches the base domain suffix case-insensitively, and
 // rejects multi-label prefixes such as "a.b.base.tld".
 func SubdomainFromHost(host, baseDomain string) (string, bool) {
-	if i := strings.LastIndexByte(host, ':'); i != -1 {
-		// Guard against IPv6 literals like "[::1]:8080" having no label.
-		if !strings.Contains(host[i:], "]") {
-			host = host[:i]
-		}
-	}
-	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
-	base := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(baseDomain), "."))
-
-	suffix := "." + base
+	host = canonicalHost(stripPort(host))
+	suffix := "." + canonicalHost(baseDomain)
 	if !strings.HasSuffix(host, suffix) {
 		return "", false
 	}
@@ -247,4 +268,19 @@ func SubdomainFromHost(host, baseDomain string) (string, bool) {
 		return "", false
 	}
 	return label, true
+}
+
+// canonicalHost lower-cases a host name and strips surrounding whitespace and
+// a trailing root dot.
+func canonicalHost(name string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
+}
+
+// stripPort drops a trailing ":port". The colons inside a bracketed IPv6
+// literal such as "[::1]" are left alone.
+func stripPort(host string) string {
+	if i := strings.LastIndexByte(host, ':'); i != -1 && !strings.Contains(host[i:], "]") {
+		return host[:i]
+	}
+	return host
 }

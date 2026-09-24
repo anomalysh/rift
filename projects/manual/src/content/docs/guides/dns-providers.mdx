@@ -40,7 +40,7 @@ is absent, Caddy refuses to start with:
 module not registered: dns.providers.<name>
 ```
 
-`build-caddy.sh` accepts `--validate`, `--push` (ship the image to
+`make build-caddy` (`rift-ops release caddy`) accepts `--validate`, `--push` (ship the image to
 `RIFT_VPS_HOST` over SSH, since compiling Caddy wants more memory than a small
 VPS has), `--image NAME`, and `--dry-run`. After building, point
 `RIFT_CADDY_IMAGE` at the tag it prints and redeploy.

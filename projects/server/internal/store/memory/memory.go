@@ -2,6 +2,15 @@
 //
 // It exists so the gateway and ingress can be exercised end to end without a
 // database. It is not intended for production: nothing survives a restart.
+//
+// It must answer exactly as the postgres adapter does -- same sentinel errors,
+// same ordering, same edge cases -- or a test passing here proves nothing about
+// production. internal/store/storetest is the conformance suite both run.
+//
+// The one deliberate gap: a tunnel or custom domain is accepted for a token ID
+// that does not exist, where Postgres's foreign key answers ErrNotFound. The
+// gateway only ever writes these for a token it has just authenticated, and
+// tests rely on attaching tunnels without minting tokens first.
 package memory
 
 import (
@@ -73,6 +82,11 @@ func (s *tokenStore) FindByID(_ context.Context, id string) (*core.Token, error)
 func (s *tokenStore) Create(_ context.Context, t *core.Token) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// A duplicate ID once silently overwrote the existing token, where
+	// Postgres's primary key refuses it.
+	if _, exists := s.tokens[t.ID]; exists {
+		return fmt.Errorf("memory: token %q: %w", t.ID, core.ErrConflict)
+	}
 	for _, existing := range s.tokens {
 		if existing.TokenHash == t.TokenHash {
 			return fmt.Errorf("memory: duplicate token hash: %w", core.ErrConflict)
@@ -89,7 +103,9 @@ func (s *tokenStore) List(context.Context) ([]core.Token, error) {
 	for _, t := range s.tokens {
 		out = append(out, t)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
+	// Oldest first, as Postgres's ORDER BY id. This once sorted newest first,
+	// so the admin API listed tokens in opposite orders per backend.
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
 }
 
@@ -168,9 +184,14 @@ type tunnelStore Store
 func (s *tunnelStore) Claim(_ context.Context, t *core.Tunnel) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, existing := range s.tunnels {
+	for id, existing := range s.tunnels {
 		if existing.Subdomain == t.Subdomain {
 			return fmt.Errorf("memory: subdomain %q: %w", t.Subdomain, core.ErrSubdomainTaken)
+		}
+		if id == t.ID {
+			// Overwriting would silently move the tunnel to another
+			// subdomain, where Postgres's primary key refuses the insert.
+			return fmt.Errorf("memory: tunnel %q: %w", t.ID, core.ErrConflict)
 		}
 	}
 	s.tunnels[t.ID] = *t
@@ -234,7 +255,7 @@ func (s *tunnelStore) ListActive(context.Context) ([]core.Tunnel, error) {
 func (s *tunnelStore) DeleteStale(_ context.Context, cutoff time.Time) ([]core.Tunnel, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	var reaped []core.Tunnel
+	reaped := []core.Tunnel{}
 	for id, t := range s.tunnels {
 		if t.LastSeenAt.Before(cutoff) {
 			reaped = append(reaped, t)
@@ -269,14 +290,24 @@ func (s *domainStore) Upsert(_ context.Context, d core.CustomDomain) error {
 	return nil
 }
 
-func (s *domainStore) SubdomainFor(_ context.Context, domain string) (string, error) {
+func (s *domainStore) Transfer(_ context.Context, d core.CustomDomain, fromTokenID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.domains[d.Domain]; ok && existing.TokenID != fromTokenID && existing.TokenID != d.TokenID {
+		return fmt.Errorf("memory: domain %q: %w", d.Domain, core.ErrDomainOwned)
+	}
+	s.domains[d.Domain] = d
+	return nil
+}
+
+func (s *domainStore) Lookup(_ context.Context, domain string) (*core.CustomDomain, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	d, ok := s.domains[domain]
 	if !ok {
-		return "", fmt.Errorf("memory: domain %q: %w", domain, core.ErrNotFound)
+		return nil, fmt.Errorf("memory: domain %q: %w", domain, core.ErrNotFound)
 	}
-	return d.Subdomain, nil
+	return &d, nil
 }
 
 func (s *domainStore) List(context.Context) ([]core.CustomDomain, error) {

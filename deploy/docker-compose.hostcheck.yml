@@ -1,7 +1,7 @@
 # rift host-hardening test stack.
 #
 # A single throwaway Debian container that mirrors the production VPS, used to
-# prove tools/harden.sh actually hardens a host. Every run of harden.sh happens
+# prove tools/cmd/host/harden.sh actually hardens a host. Every run of harden.sh happens
 # INSIDE this container -- never on the developer machine or the real VPS, both
 # of which the script would irreversibly alter.
 #

@@ -11,6 +11,16 @@ projects/cli/node_modules
 projects/manual/node_modules
 .env
 **/.env
+.env.*
+**/.env.*
+!.env.example
+**/*.pem
+**/*.key
+backups
+rift-*-db.dump
+rift-*-caddy.tar.gz
+.rift
+**/__pycache__
 *.log
 tools/.ssh
 projects/server/riftd

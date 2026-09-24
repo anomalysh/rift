@@ -1,4 +1,5 @@
-// Package adminapi serves the token, reservation and tunnel management API.
+// Package adminapi serves the token, reservation, tunnel and custom-domain
+// management API.
 // It is authenticated by a single shared admin bearer token (auth.AdminGuard)
 // and speaks only to the core store ports; it never imports a store adapter.
 package adminapi
@@ -28,6 +29,7 @@ const (
 	codeNotFound         = "not_found"
 	codeConflict         = "conflict"
 	codeInvalidSubdomain = "invalid_subdomain"
+	codeInvalidDomain    = "invalid_domain"
 	codeMethodNotAllowed = "method_not_allowed"
 	codePayloadTooLarge  = "payload_too_large"
 	codeInternal         = "internal_error"
@@ -38,12 +40,23 @@ type server struct {
 	tokens       core.TokenStore
 	reservations core.ReservationStore
 	tunnels      core.TunnelStore
+	domains      core.DomainStore
 	logger       *slog.Logger
 }
 
 // New returns the admin API handler. Every route except RouteHealth sits behind
 // auth.AdminGuard, so the liveness probe stays reachable without credentials.
-func New(cfg *config.Config, tokens core.TokenStore, reservations core.ReservationStore, tunnels core.TunnelStore, logger *slog.Logger) http.Handler {
+//
+// domains may be nil for a build without custom-domain support; its routes
+// then answer 404.
+func New(
+	cfg *config.Config,
+	tokens core.TokenStore,
+	reservations core.ReservationStore,
+	tunnels core.TunnelStore,
+	domains core.DomainStore,
+	logger *slog.Logger,
+) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -52,6 +65,7 @@ func New(cfg *config.Config, tokens core.TokenStore, reservations core.Reservati
 		tokens:       tokens,
 		reservations: reservations,
 		tunnels:      tunnels,
+		domains:      domains,
 		logger:       logger,
 	}
 
@@ -64,6 +78,10 @@ func New(cfg *config.Config, tokens core.TokenStore, reservations core.Reservati
 	admin.HandleFunc(config.RouteAdminReservations, s.handleReservations)
 	admin.HandleFunc(config.RouteAdminReservations+"/", s.handleReservationBySubdomain)
 	admin.HandleFunc(config.RouteAdminTunnels, s.handleTunnels)
+	if domains != nil {
+		admin.HandleFunc(config.RouteAdminDomains, s.handleDomains)
+		admin.HandleFunc(config.RouteAdminDomains+"/", s.handleDomainByName)
+	}
 
 	root := http.NewServeMux()
 	root.HandleFunc(config.RouteHealth, s.handleHealth)
@@ -353,6 +371,72 @@ func (s *server) handleTunnels(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tunnels": views})
+}
+
+// --- custom domains -----------------------------------------------------
+
+// domainView is one BYO custom-domain mapping (E1). The subdomain is the label
+// the domain routes to; it is served only while token_id holds that label.
+type domainView struct {
+	Domain    string    `json:"domain"`
+	Subdomain string    `json:"subdomain"`
+	TokenID   string    `json:"token_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (s *server) handleDomains(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	list, err := s.domains.List(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	views := make([]domainView, 0, len(list))
+	for i := range list {
+		d := list[i]
+		views = append(views, domainView{
+			Domain:    d.Domain,
+			Subdomain: d.Subdomain,
+			TokenID:   d.TokenID,
+			CreatedAt: d.CreatedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"domains": views})
+}
+
+// handleDomainByName deletes one mapping. This is the operator's remedy for a
+// squatted domain: an agent registers a domain for as long as its token stays
+// active, so a mapping held by a live token otherwise never goes away.
+func (s *server) handleDomainByName(w http.ResponseWriter, r *http.Request) {
+	raw, ok := subPath(r.URL.Path, config.RouteAdminDomains)
+	if !ok {
+		writeError(w, http.StatusNotFound, codeNotFound, "resource not found")
+		return
+	}
+	if r.Method != http.MethodDelete {
+		methodNotAllowed(w, http.MethodDelete)
+		return
+	}
+	domain := core.NormalizeDomain(raw)
+	if domain == "" {
+		writeError(w, http.StatusBadRequest, codeInvalidDomain, "domain is invalid")
+		return
+	}
+	// The store's Delete is idempotent; look first so a typo answers 404
+	// instead of a reassuring 204 for a mapping that never existed.
+	if _, err := s.domains.Lookup(r.Context(), domain); err != nil {
+		s.fail(w, r, err) // ErrNotFound -> 404
+		return
+	}
+	if err := s.domains.Delete(r.Context(), domain); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.logger.InfoContext(r.Context(), "admin deleted custom domain", "domain", domain)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- health -------------------------------------------------------------

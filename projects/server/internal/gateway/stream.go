@@ -23,16 +23,22 @@ type stream struct {
 
 	// body carries response chunks. Bounded: see session.deliverBody for the
 	// head-of-line tradeoff this bound implies.
+	//
+	// The read loop is both the only sender on body and the only goroutine
+	// that closes it (endBody). ended records that close so deliverBody never
+	// sends on a closed channel: an agent that keeps sending RES_BODY after
+	// RES_END (or after a RESET it raced) would otherwise panic the read loop,
+	// and with it the whole process.
 	body chan []byte
 
 	// done is closed exactly once, when the stream is finished or aborted.
 	done chan struct{}
 
 	closeOnce sync.Once
-	endOnce   sync.Once
 
-	mu  sync.Mutex
-	err error // set before done is closed; nil means a clean end
+	mu    sync.Mutex
+	err   error // set before done is closed; nil means a clean end
+	ended bool  // body has been closed; guarded by mu
 }
 
 func newStream(id uint64, bufferSize int) *stream {
@@ -55,9 +61,26 @@ func (s *stream) abort(err error) {
 	})
 }
 
-// endBody signals a clean end of the response body.
+// endBody signals a clean end of the response body. Idempotent: a duplicate
+// RES_END from the agent is ignored rather than closing body twice.
 func (s *stream) endBody() {
-	s.endOnce.Do(func() { close(s.body) })
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ended {
+		return
+	}
+	s.ended = true
+	close(s.body)
+}
+
+// bodyEnded reports whether endBody has closed the body channel. Because only
+// the read loop closes body, a false answer stays valid for the rest of that
+// loop iteration, so the caller may then send on body without holding mu
+// (holding it across a blocking send would stall abort).
+func (s *stream) bodyEnded() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ended
 }
 
 func (s *stream) reason() error {
@@ -121,25 +144,36 @@ func (r *bodyReader) Read(p []byte) (int, error) {
 // Close releases the stream. If the body was not fully read, the agent is told
 // to cancel the local request rather than keep streaming into a dead socket.
 func (r *bodyReader) Close() error {
+	r.release()
+	return nil
+}
+
+// release is Close, reporting whether the agent's side of the stream had
+// ended cleanly: its RES_END was read, and nothing aborted the stream first.
+// Only then is the agent still waiting on the gateway's half, which a
+// tunnelConn must end itself. The first call does the work; later calls
+// report false.
+func (r *bodyReader) release() (endedCleanly bool) {
 	if !r.closed.CompareAndSwap(false, true) {
-		return nil
+		return false
 	}
 
-	incomplete := !r.drained.Load()
+	aborted := false
 	select {
 	case <-r.st.done:
-		incomplete = false // already aborted or ended; nothing to cancel
+		aborted = true // already aborted; nothing to cancel
 	default:
 	}
+	drained := r.drained.Load()
 
 	r.st.abort(nil)
 	r.sess.forgetStream(r.st.id)
 
-	if incomplete {
+	if !drained && !aborted {
 		r.sess.sendReset(r.st.id, tunnelproto.StreamReset{
 			Code:    tunnelproto.ResetClientDisconnected,
 			Message: "public client closed the connection",
 		})
 	}
-	return nil
+	return drained && !aborted
 }

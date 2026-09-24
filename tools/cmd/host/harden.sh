@@ -19,16 +19,15 @@ SSH_KEY_USER="${RIFT_HARDEN_SSH_USER:-root}"
 
 # env_file_val KEY -- KEY's value from the operator's .env, empty if unset.
 #
-# Reads rather than sources: .env is compose's env-file format, not shell, so an
-# unquoted value containing spaces would break `.`, and sourcing it would leak
-# every secret into the apt/sshd/nft children this script execs. The VPS layout
-# (ship.sh puts tools at /opt/rift/tools) is checked first, then a repo checkout.
+# Reads (with rift_env_file_val, the parser the deploy's compose prelude also
+# uses, so the firewall and the published ports agree on every flag) rather than
+# sources: sourcing would leak every secret into the apt/sshd/nft children this
+# script execs. The VPS layout (ship.sh puts tools at /opt/rift/tools) is
+# checked first, then a repo checkout.
 env_file_val() {
-	local key="$1" file val
+	local file val
 	for file in "$RIFT_REPO_ROOT/deploy/.env" "$RIFT_REPO_ROOT/.env"; do
-		[ -f "$file" ] || continue
-		val="$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$file" |
-			tail -n 1 | tr -d "\"'\r")"
+		val="$(rift_env_file_val "$file" "$1")"
 		if [ -n "$val" ]; then
 			printf '%s' "$val"
 			return 0
@@ -83,7 +82,12 @@ if is_true "$RIFT_TLS_TUNNEL_ENABLED"; then
 	validate_port RIFT_TLS_TUNNEL_PORT "$RIFT_TLS_TUNNEL_PORT"
 fi
 
-SSH_DROPIN="/etc/ssh/sshd_config.d/99-rift.conf"
+# sshd keeps the FIRST value it reads for each keyword, and Debian's sshd_config
+# includes sshd_config.d/*.conf at the top, in lexical order. A 99- prefix would
+# lose to e.g. cloud-init's 50-cloud-init.conf (PasswordAuthentication yes), so
+# the rift drop-in sorts first. LEGACY_SSH_DROPIN is removed on apply.
+SSH_DROPIN="/etc/ssh/sshd_config.d/00-rift.conf"
+LEGACY_SSH_DROPIN="/etc/ssh/sshd_config.d/99-rift.conf"
 F2B_JAIL="/etc/fail2ban/jail.d/rift.conf"
 NFT_CONF="/etc/nftables.conf"
 DOCKER_DAEMON_JSON="/etc/docker/daemon.json"
@@ -369,6 +373,7 @@ area_ssh() {
 		die "refusing to disable password auth: no key in ${SSH_KEY_USER}'s ~/.ssh/authorized_keys -- this would lock you out permanently"
 
 	printf '%s\n' "$desired" | write_file "$SSH_DROPIN" 644
+	rm -f "$LEGACY_SSH_DROPIN"
 
 	# Validate the whole effective config; on any rejection, revert and abort
 	# rather than leave sshd unable to start.
@@ -377,6 +382,15 @@ area_ssh() {
 		die "sshd -t rejected the new config; reverted $SSH_DROPIN and changed nothing"
 	fi
 	reload_sshd
+
+	# Prove the drop-in actually won. An earlier include that sets the same
+	# keyword silently overrides it, and "hardened" while password login is
+	# still on is worse than an honest failure.
+	local eff_pw
+	eff_pw="$(sshd -T 2>/dev/null | awk '/^passwordauthentication /{print $2}')"
+	if [ -n "$eff_pw" ] && [ "$eff_pw" != no ]; then
+		die "wrote $SSH_DROPIN but sshd's effective PasswordAuthentication is still '$eff_pw' -- another sshd config file overrides it; fix that file and re-run"
+	fi
 	note_ok "sshd reloaded with hardened config"
 	return 0
 }
@@ -424,7 +438,13 @@ area_fail2ban() {
 # scalars in an anonymous set, and prints them back verbatim, which is what lets
 # --check and e2e-hostcheck compare the rendered rule as a string.
 nft_input_ports() {
-	local ports="22, 80, 443"
+	local ports="22, 80, 443" p
+	# Keep every port sshd actually listens on open, not just 22: a host that
+	# moved sshd (RIFT_VPS_PORT) would otherwise be locked out of new logins the
+	# moment this ruleset loads.
+	for p in $(sshd -T 2>/dev/null | awk '/^port /{print $2}'); do
+		case "$p" in '' | *[!0-9]* | 22) ;; *) ports="$ports, $p" ;; esac
+	done
 	if is_true "$RIFT_TLS_TUNNEL_ENABLED"; then
 		ports="$ports, $RIFT_TLS_TUNNEL_PORT"
 	fi

@@ -14,7 +14,7 @@
 # Kept separate from the tls overlay on purpose: the two features are enabled
 # independently, so publishing must be independent too. Publishing this range
 # while riftd's tcp allocator is off would bind ~101 dead host ports (one
-# docker-proxy process each) for nothing -- and tools/harden.sh, which gates the
+# docker-proxy process each) for nothing -- and `rift-ops host harden`, which gates the
 # firewall per-flag, would not open them, leaving them published-but-unfirewalled.
 #
 # COST: Docker spawns one docker-proxy process per published port, so the
@@ -23,7 +23,7 @@
 # actually need; the same vars feed riftd's allocator in the base file, so the
 # two stay in lockstep.
 #
-# Opening the ports here is not sufficient: run tools/harden.sh with the same
+# Opening the ports here is not sufficient: run `rift-ops host harden` with the same
 # RIFT_* vars set so the host firewall allows them too.
 
 services:

@@ -7,14 +7,22 @@ import { TunnelClient } from "./client.ts";
 import {
   ConfigError,
   configFilePath,
+  gatewayTransportProblem,
   loadConfigFile,
+  type PartialConfig,
   type ResolvedConfig,
+  readTokenFile,
   resolveConfig,
   writeConfigValues,
 } from "./config.ts";
 import { EXIT, type SupportedProtocol, VERSION } from "./constants.ts";
 import { renderCompletion, renderManPage } from "./docgen.ts";
-import { createLogger, createNamedLogger, type Logger } from "./logger.ts";
+import {
+  createLogger,
+  createNamedLogger,
+  errorMessage,
+  type Logger,
+} from "./logger.ts";
 import { buildPolicy } from "./policy.ts";
 import { loadProjectConfig, selectTunnels, tunnelToArgv } from "./project.ts";
 import { buildTrafficPolicy, TrafficController } from "./traffic.ts";
@@ -63,19 +71,55 @@ async function clientOptionsFor(
   };
 }
 
+/**
+ * `--set-token -` reads the token from stdin, so it never appears in argv (and
+ * so in `ps` output or shell history). Surrounding whitespace is trimmed.
+ */
+async function resolveStdinToken(
+  updates: PartialConfig,
+): Promise<PartialConfig> {
+  if (updates.token !== "-") {
+    return updates;
+  }
+  const token = (await Bun.stdin.text()).trim();
+  if (token === "") {
+    throw new ConfigError("--set-token -: no token on standard input");
+  }
+  return { ...updates, token };
+}
+
 function fail(message: string, code: number): never {
   process.stderr.write(message.endsWith("\n") ? message : `${message}\n`);
   process.exit(code);
 }
 
-function loadConfig(
-  flags: Parameters<typeof resolveConfig>[0]["flags"],
-): ResolvedConfig {
+function loadConfig(flags: FlagConfig): ResolvedConfig {
   const env = process.env;
   const configPath = configFilePath(env);
   try {
+    // --token-file is read here, not in the pure resolveConfig: it is a flag
+    // layer value that merely lives outside argv.
+    const resolvedFlags: FlagConfig =
+      flags.tokenFile !== undefined
+        ? { ...flags, token: readTokenFile(flags.tokenFile) }
+        : flags;
     const file = loadConfigFile(env);
-    return resolveConfig({ flags, env, file, configPath });
+    const config = resolveConfig({
+      flags: resolvedFlags,
+      env,
+      file,
+      configPath,
+    });
+    // Refuse a cleartext gateway before anything is dialed (the hello carries
+    // the token); the client re-checks for embedders that skip this path.
+    const transport = gatewayTransportProblem(
+      config.server,
+      config.allowInsecureTransport,
+    );
+    if (transport !== null) {
+      throw new ConfigError(transport);
+    }
+    return config;
   } catch (err) {
     if (err instanceof ConfigError) {
       fail(err.message, EXIT.ERROR);
@@ -109,7 +153,8 @@ async function main(): Promise<void> {
       break;
     case "set-config": {
       try {
-        const { path, keys } = writeConfigValues(process.env, parsed.updates);
+        const updates = await resolveStdinToken(parsed.updates);
+        const { path, keys } = writeConfigValues(process.env, updates);
         // Never echo the values themselves; the token is a secret.
         process.stdout.write(`rift: saved ${keys.join(", ")} to ${path}\n`);
         process.exit(EXIT.OK);
@@ -154,7 +199,7 @@ async function main(): Promise<void> {
     logger.close?.();
     process.exit(signalExit ?? EXIT.OK);
   } catch (err) {
-    logger.error(err instanceof Error ? err.message : String(err));
+    logger.error(errorMessage(err));
     logger.close?.();
     process.exit(EXIT.ERROR);
   }
@@ -166,7 +211,13 @@ async function main(): Promise<void> {
  * since the interactive dashboard cannot multiplex several tunnels.
  */
 async function runStart(names: string[]): Promise<void> {
-  const project = loadProjectConfig(process.cwd());
+  let project: ReturnType<typeof loadProjectConfig>;
+  try {
+    project = loadProjectConfig(process.cwd());
+  } catch (err) {
+    // Unreadable or malformed: a usage error to fix, not a crash to report.
+    fail(`rift: ${errorMessage(err)}`, EXIT.USAGE);
+  }
   if (project === null) {
     fail(
       "rift: no rift.yml (or .yaml/.toml/.json) found in this directory.",
@@ -215,7 +266,7 @@ async function runStart(names: string[]): Promise<void> {
   const results = await Promise.allSettled(
     clients.map((c) =>
       c.client.run().catch((err: unknown) => {
-        c.logger.error(err instanceof Error ? err.message : String(err));
+        c.logger.error(errorMessage(err));
         throw err;
       }),
     ),

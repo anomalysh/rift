@@ -22,6 +22,19 @@ const routeKeyNamespace = "route:"
 // tunnel would be declared unroutable by its peers.
 const leaseRefreshDivisor = 3
 
+// leaseStore is the shared key-value store holding route leases. Redis in
+// production; the interface exists so the lease logic can be tested without
+// one.
+type leaseStore interface {
+	// set writes key=value with a TTL.
+	set(ctx context.Context, key, value string, ttl time.Duration) error
+	// get returns the value at key; ok is false when there is none.
+	get(ctx context.Context, key string) (value string, ok bool, err error)
+	// compareAndDelete deletes key only while it still holds value.
+	compareAndDelete(ctx context.Context, key, value string) error
+	close() error
+}
+
 // distributed shadows the local map with a per-subdomain Redis lease naming
 // the node that holds the agent connection.
 //
@@ -31,7 +44,7 @@ const leaseRefreshDivisor = 3
 type distributed struct {
 	*Local
 
-	rdb          *redis.Client
+	leases       leaseStore
 	prefix       string
 	advertiseURL string
 	leaseTTL     time.Duration
@@ -52,25 +65,40 @@ func newDistributed(ctx context.Context, cfg *config.Config, local *Local, logge
 		return nil, fmt.Errorf("registry: ping redis at %s: %w", cfg.Redis.Addr, err)
 	}
 
+	// A lease must outlive the heartbeat timeout, or a healthy tunnel would
+	// stop being routable from peers between renewals.
+	d := newDistributedWith(local, redisLeases{rdb}, cfg.Redis.Prefix+routeKeyNamespace,
+		cfg.Tunnel.AdvertiseURL, cfg.Tunnel.HeartbeatTimeout, logger)
 	refreshCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	d := &distributed{
-		Local:        local,
-		rdb:          rdb,
-		prefix:       cfg.Redis.Prefix + routeKeyNamespace,
-		advertiseURL: cfg.Tunnel.AdvertiseURL,
-		// A lease must outlive the heartbeat timeout, or a healthy tunnel
-		// would stop being routable from peers between renewals.
-		leaseTTL: cfg.Tunnel.HeartbeatTimeout,
-		logger:   logger.With(slog.String("component", "registry")),
-		cancel:   cancel,
-		done:     make(chan struct{}),
-	}
-
+	d.cancel = cancel
+	d.done = make(chan struct{})
 	go d.refreshLeases(refreshCtx)
 	return d, nil
 }
 
+// newDistributedWith builds the registry over any lease store. It starts no
+// refresher; newDistributed does.
+func newDistributedWith(local *Local, leases leaseStore, prefix, advertiseURL string, ttl time.Duration, logger *slog.Logger) *distributed {
+	done := make(chan struct{})
+	close(done) // until a refresher runs, Close has nothing to wait for
+	return &distributed{
+		Local:        local,
+		leases:       leases,
+		prefix:       prefix,
+		advertiseURL: advertiseURL,
+		leaseTTL:     ttl,
+		logger:       logger.With(slog.String("component", "registry")),
+		cancel:       func() {},
+		done:         done,
+	}
+}
+
 func (d *distributed) key(subdomain string) string { return d.prefix + subdomain }
+
+// publish (re)writes subdomain's lease naming this node.
+func (d *distributed) publish(ctx context.Context, subdomain string) error {
+	return d.leases.set(ctx, d.key(subdomain), d.advertiseURL, d.leaseTTL)
+}
 
 // Register claims the subdomain locally, then publishes the lease.
 func (d *distributed) Register(ctx context.Context, s core.Session) (core.Session, error) {
@@ -79,7 +107,7 @@ func (d *distributed) Register(ctx context.Context, s core.Session) (core.Sessio
 		return nil, err
 	}
 	sub := s.Tunnel().Subdomain
-	if err := d.rdb.Set(ctx, d.key(sub), d.advertiseURL, d.leaseTTL).Err(); err != nil {
+	if err := d.publish(ctx, sub); err != nil {
 		// The tunnel still works through this node's own ingress; only
 		// peer-forwarding is degraded until the next refresh tick.
 		d.logger.WarnContext(ctx, "could not publish route lease; peers cannot forward to this node until the next refresh",
@@ -88,46 +116,41 @@ func (d *distributed) Register(ctx context.Context, s core.Session) (core.Sessio
 	return displaced, nil
 }
 
-// Unregister drops the local entry and, only if this node still owns the
-// lease, deletes it. A compare-and-delete avoids erasing the lease a peer
-// published for a reconnected agent.
+// Unregister drops the local entry and, only if s still held the subdomain,
+// retracts the lease with a compare-and-delete, so a lease a peer published
+// for a reconnected agent survives.
+//
+// A reconnect to this node is the subtle case: its lease names this node too,
+// so the compare cannot tell the two sessions apart. The local removal is
+// therefore check-and-delete in one step, and if the subdomain is registered
+// here again by the time the lease is gone, the lease is put back.
 func (d *distributed) Unregister(ctx context.Context, s core.Session) error {
+	if !d.Local.unregister(s) {
+		// A displaced session must not retract its replacement's lease.
+		return nil
+	}
 	sub := s.Tunnel().Subdomain
-
-	// Only the session that still holds the subdomain locally may retract the
-	// lease; a displaced session must not.
-	if cur, ok := d.Local.Lookup(ctx, sub); !ok || cur != s {
-		return d.Local.Unregister(ctx, s)
-	}
-	if err := d.Local.Unregister(ctx, s); err != nil {
-		return err
-	}
-	if err := compareAndDelete.Run(ctx, d.rdb, []string{d.key(sub)}, d.advertiseURL).Err(); err != nil && !errors.Is(err, redis.Nil) {
+	if err := d.leases.compareAndDelete(ctx, d.key(sub), d.advertiseURL); err != nil {
 		d.logger.WarnContext(ctx, "could not retract route lease; it will expire on its own",
 			slog.String("subdomain", sub), slog.Any("error", err))
+		return nil
+	}
+	if _, again := d.Local.Lookup(ctx, sub); again {
+		if err := d.publish(ctx, sub); err != nil {
+			d.logger.WarnContext(ctx, "could not restore route lease after a reconnect; the next refresh will",
+				slog.String("subdomain", sub), slog.Any("error", err))
+		}
 	}
 	return nil
 }
 
-// compareAndDelete removes the key only when it still holds our value, so a
-// slow retraction cannot delete the lease of a newer owner.
-var compareAndDelete = redis.NewScript(`
-if redis.call("get", KEYS[1]) == ARGV[1] then
-	return redis.call("del", KEYS[1])
-end
-return 0
-`)
-
 // LocatePeer reports the node currently holding subdomain, when it is not us.
 func (d *distributed) LocatePeer(ctx context.Context, subdomain string) (string, bool, error) {
-	nodeURL, err := d.rdb.Get(ctx, d.key(subdomain)).Result()
-	if errors.Is(err, redis.Nil) {
-		return "", false, nil
-	}
+	nodeURL, ok, err := d.leases.get(ctx, d.key(subdomain))
 	if err != nil {
 		return "", false, fmt.Errorf("registry: locate %q: %w", subdomain, err)
 	}
-	if nodeURL == "" || nodeURL == d.advertiseURL {
+	if !ok || nodeURL == "" || nodeURL == d.advertiseURL {
 		return "", false, nil
 	}
 	return nodeURL, true, nil
@@ -142,13 +165,14 @@ func (d *distributed) InvalidatePeer(ctx context.Context, subdomain, nodeURL str
 	if _, ok := d.Local.Lookup(ctx, subdomain); ok {
 		return nil
 	}
-	if err := compareAndDelete.Run(ctx, d.rdb, []string{d.key(subdomain)}, nodeURL).Err(); err != nil && !errors.Is(err, redis.Nil) {
+	if err := d.leases.compareAndDelete(ctx, d.key(subdomain), nodeURL); err != nil {
 		return fmt.Errorf("registry: invalidate %q: %w", subdomain, err)
 	}
 	return nil
 }
 
-// refreshLeases renews every locally held lease before it expires.
+// refreshLeases renews every locally held lease before it expires. It closes
+// d.done when it stops.
 func (d *distributed) refreshLeases(ctx context.Context) {
 	defer close(d.done)
 
@@ -165,7 +189,7 @@ func (d *distributed) refreshLeases(ctx context.Context) {
 			return
 		case <-ticker.C:
 			for _, sub := range d.Local.Subdomains() {
-				if err := d.rdb.Set(ctx, d.key(sub), d.advertiseURL, d.leaseTTL).Err(); err != nil {
+				if err := d.publish(ctx, sub); err != nil {
 					d.logger.WarnContext(ctx, "could not refresh route lease",
 						slog.String("subdomain", sub), slog.Any("error", err))
 				}
@@ -178,5 +202,42 @@ func (d *distributed) refreshLeases(ctx context.Context) {
 func (d *distributed) Close() error {
 	d.cancel()
 	<-d.done
-	return d.rdb.Close()
+	return d.leases.close()
 }
+
+// redisLeases is the production leaseStore.
+type redisLeases struct{ rdb *redis.Client }
+
+func (r redisLeases) set(ctx context.Context, key, value string, ttl time.Duration) error {
+	return r.rdb.Set(ctx, key, value, ttl).Err()
+}
+
+func (r redisLeases) get(ctx context.Context, key string) (string, bool, error) {
+	v, err := r.rdb.Get(ctx, key).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return v, true, nil
+}
+
+// compareAndDeleteScript removes the key only when it still holds our value,
+// so a slow retraction cannot delete the lease of a newer owner.
+var compareAndDeleteScript = redis.NewScript(`
+if redis.call("get", KEYS[1]) == ARGV[1] then
+	return redis.call("del", KEYS[1])
+end
+return 0
+`)
+
+func (r redisLeases) compareAndDelete(ctx context.Context, key, value string) error {
+	err := compareAndDeleteScript.Run(ctx, r.rdb, []string{key}, value).Err()
+	if errors.Is(err, redis.Nil) {
+		return nil
+	}
+	return err
+}
+
+func (r redisLeases) close() error { return r.rdb.Close() }

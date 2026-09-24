@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/../../lib/common.sh"
 
-# verify-deploy.sh -- assert a live rift deployment actually works.
+# verify.sh -- assert a live rift deployment actually works.
 #
 # This is the gate the two TLS incidents needed: a deploy that "succeeded" but
 # left the gateway or the apex without a certificate still handed visitors a
@@ -84,12 +84,12 @@ kflag=()
 
 # code_for HOST PATH -- HTTP status for a hostname pinned to $host, or a marker.
 code_for() {
-	curl -s -o /dev/null -w '%{http_code}' --max-time 25 "${kflag[@]}" \
+	curl -s -o /dev/null -w '%{http_code}' --max-time 25 ${kflag[@]+"${kflag[@]}"} \
 		--resolve "${1}:443:${host}" "https://${1}${2}" 2>/dev/null || echo "TLS-FAIL"
 }
 
 cert_ok() {
-	echo | timeout 25 openssl s_client -connect "${host}:443" -servername "$1" 2>/dev/null |
+	echo | rift_timeout 25 openssl s_client -connect "${host}:443" -servername "$1" 2>/dev/null |
 		openssl x509 -noout -subject >/dev/null 2>&1
 }
 
@@ -97,7 +97,7 @@ log_info "verifying $base on $host (insecure=$insecure)"
 
 # 1. Ports are open.
 for p in 80 443; do
-	if timeout 6 bash -c "</dev/tcp/${host}/${p}" 2>/dev/null; then
+	if rift_timeout 6 bash -c "</dev/tcp/${host}/${p}" 2>/dev/null; then
 		ok "port $p is open"
 	else
 		bad "port $p is closed"

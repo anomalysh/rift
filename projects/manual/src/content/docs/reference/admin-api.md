@@ -159,18 +159,68 @@ Response `200 OK`:
 }
 ```
 
+## Custom domains
+
+An agent registers BYO custom domains (`rift http 3000 --domain app.acme.com`)
+at connect time. Each mapping points a domain at a subdomain **and** records the
+token that registered it. The domain is served only while a tunnel of that same
+token holds the subdomain, so a different token that later claims the same
+subdomain never receives the domain's traffic or a certificate for it.
+
+A mapping stays with its token while the token is active. Another token can take
+it over only once the owning token is revoked, expired, or deleted. To evict a
+mapping held by a still-active token (a squatted domain, say), delete it here.
+
+The base domain, any name under it, and the gateway hostname can never be
+registered as custom domains.
+
+### `GET /v1/domains` — list custom-domain mappings
+
+Response `200 OK`, sorted by domain:
+
+```json
+{
+  "domains": [
+    { "domain": "app.acme.com", "subdomain": "myapp", "token_id": "01J...", "created_at": "2026-07-09T12:00:00Z" }
+  ]
+}
+```
+
+### `DELETE /v1/domains/{domain}` — remove a mapping
+
+Response `204 No Content`. The domain in the path is normalized first (lower-cased,
+trailing dot stripped). `400` (`invalid_domain`) when it is not a valid domain
+name, `404` when no mapping exists. A live tunnel keeps running; its agent
+re-registers the domain the next time it connects.
+
 ## Health
 
 ### `GET /healthz`
 
 Unauthenticated liveness probe. Returns `200 OK` with `{"status":"ok"}`. It is
-served on all three listeners (ingress, gateway, admin).
+served on all three listeners (ingress, gateway, admin). On the ingress listener
+it answers only on internal host names (see below); on a tunnel host `/healthz`
+belongs to the tunnelled app.
 
 ## Internal ingress endpoints
 
 These live on the **ingress** listener (`RIFT_INGRESS_ADDR`, default `:8080`),
 not the admin listener. They are called by Caddy and by peer nodes, never by an
 operator directly, but understanding them helps when debugging.
+
+They answer only when the request's `Host` is an **internal name**: an IP
+literal (`127.0.0.1:8080`), a single-label name (`riftd:8080`, `localhost`), or
+a domain that is not a registered custom domain. That is what Caddy's `ask` URL,
+the container health check, and peer nodes use. A `Host` that is a tunnel name —
+the base domain, anything under it, the gateway hostname, or a registered custom
+domain — always reaches the tunnel instead, so a tunnelled app can serve its own
+`/healthz` or `/readyz`, and nobody can probe `/internal/tls-ask` through Caddy to
+enumerate live subdomains. The one exception is the peer proxy, which keeps the
+visitor's `Host`: `/internal/proxy` carrying `X-Rift-Peer-Token` (with Redis
+enabled) is dispatched to the peer handler on any `Host` and authenticated there.
+
+The readiness probe is `GET /readyz` (`200` when Postgres is reachable, `503`
+otherwise), under the same internal-name rule.
 
 ### TLS-ask authorization
 
@@ -183,10 +233,10 @@ certificate for an SNI. riftd replies:
 
 | Status | Meaning                                                                 |
 | ------ | ----------------------------------------------------------------------- |
-| `200`  | Authorized — the name is the gateway hostname, the base domain, a subdomain with a live tunnel or existing tunnel row, or a reserved subdomain. |
+| `200`  | Authorized — the name is the gateway hostname, the base domain, a subdomain with a live tunnel or existing tunnel row, a reserved subdomain, or a registered custom domain whose owning token currently holds (or has reserved) the mapped subdomain. |
 | `400`  | No `domain` query parameter.                                            |
-| `403`  | The name is not served by this host (not under the base domain).        |
-| `404`  | A subdomain under the base domain with no live tunnel, tunnel row, or reservation. |
+| `403`  | The name is not served by this host: neither a single label under the base domain nor a registered custom domain. A multi-label name under the base domain (`a.b.<base>`) is always refused. |
+| `404`  | A subdomain with no live tunnel, tunnel row, or reservation; or a custom domain whose owning token does not hold the mapped subdomain. |
 | `500`  | A store lookup failed.                                                  |
 
 Approving broadly would turn the server into an open certificate-issuance relay,
@@ -202,5 +252,11 @@ POST /internal/proxy    (header X-Rift-Subdomain, authenticated by the peer secr
 Serves a request another node forwarded when Redis routing is enabled. It is
 `404` when Redis is disabled, `403` without a valid peer token, and `503` when
 the lease was stale and no local session holds the subdomain. It never forwards
-onward, so a stale lease cannot create a routing loop. See
+onward, so a stale lease cannot create a routing loop.
+
+The forwarding node resolves the visitor's address at its edge and sends it in
+`X-Rift-Client-Ip`; the receiving node applies the tunnel's IP rules and per-IP
+rate limit to that address, not to the forwarding node's. The header is believed
+only on a peer-authenticated hop: a copy sent by a visitor is stripped at the
+edge, and it is removed before the request reaches the agent. See
 [Multi-node with Redis](/guides/multi-node/).

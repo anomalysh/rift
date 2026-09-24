@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Linode (API v4) provider for tools/provision.sh. SOURCED, not executed: this
+# Linode (API v4) provider for tools/cmd/provision/provision.sh. SOURCED, not executed: this
 # file only defines functions. See tools/providers/README.md for the contract.
 #
 # Endpoints used:

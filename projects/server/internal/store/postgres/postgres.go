@@ -1,5 +1,8 @@
 // Package postgres is the PostgreSQL adapter implementing the core storage
-// ports (TokenStore, ReservationStore, TunnelStore) on top of pgxpool.
+// ports (TokenStore, ReservationStore, TunnelStore, DomainStore) on top of
+// pgxpool. translate (sqlerr.go) maps driver errors onto core sentinels, and
+// the shared suite in internal/store/storetest holds the adapter to the memory
+// adapter's behaviour.
 package postgres
 
 import (

@@ -41,7 +41,7 @@ API is enabled). `RIFT_TLS_MODE` additionally has no default in production.
 | `RIFT_INGRESS_WRITE_TIMEOUT`    | `0`                | no       | Write deadline. `0` disables it, so long streamed responses are not cut off. |
 | `RIFT_INGRESS_IDLE_TIMEOUT`     | `120s`             | no       | Idle-connection timeout.                                                 |
 | `RIFT_INGRESS_MAX_HEADER_BYTES` | `1048576` (1 MiB)  | no       | Maximum request header size.                                            |
-| `RIFT_INGRESS_TRUSTED_PROXY_IPS`| (empty)            | no       | Comma-separated peers whose `X-Forwarded-For` is trusted. Empty trusts nobody and uses the socket peer. In production this is Caddy. |
+| `RIFT_INGRESS_TRUSTED_PROXY_IPS`| (empty)            | no       | Comma-separated IPs/CIDRs of proxies whose `X-Forwarded-For` is trusted (any other entry fails the boot). Empty trusts nobody and uses the socket peer. In production this is Caddy: behind Caddy with this empty, every visitor appears as Caddy's address, so tunnel IP allow/deny rules and per-IP rate limits cannot tell visitors apart (riftd warns at boot in production). The client is the right-most `X-Forwarded-For` entry that is not itself a trusted proxy. The tunnelled service receives `X-Real-IP` set to that client, and `X-Forwarded-For` with the sending proxy appended (or, from an untrusted sender, replaced by the sender's address). |
 
 ## Gateway (agent WebSocket listener)
 
@@ -60,7 +60,7 @@ API is enabled). `RIFT_TLS_MODE` additionally has no default in production.
 | ------------------- | ------- | ------------------------- | ----------------------------------------------------------------------- |
 | `RIFT_ADMIN_ENABLED`| `true`  | no                        | Whether the admin listener runs.                                        |
 | `RIFT_ADMIN_ADDR`   | `:8082` | no                        | Admin listener address. Never published publicly.                       |
-| `RIFT_ADMIN_TOKEN`  | (none)  | **when admin enabled**    | Bearer token for the admin API. Must be **≥32 characters in production**. |
+| `RIFT_ADMIN_TOKEN`  | (none)  | **when admin enabled**    | Bearer token for the admin API. Must be **≥32 characters in production**, and production refuses the development fallback from `deploy/docker-compose.yml` (`dev-admin-token-change-me-please`) and the e2e harness tokens. |
 
 ## Postgres
 
@@ -86,7 +86,7 @@ API is enabled). `RIFT_TLS_MODE` additionally has no default in production.
 
 | Variable           | Default | Required                              | Description                                                            |
 | ------------------ | ------- | ------------------------------------- | --------------------------------------------------------------------- |
-| `RIFT_PEER_SECRET` | (empty) | **when Redis enabled (≥32 chars)**    | Authenticates node-to-node request forwarding on the internal proxy route. |
+| `RIFT_PEER_SECRET` | (empty) | **when Redis enabled (≥32 chars)**    | Authenticates node-to-node request forwarding on the internal proxy route. Production refuses the e2e harness secret. |
 
 ## TLS
 
@@ -116,6 +116,7 @@ configuration fails at boot rather than as a later handshake error. See
 | `RIFT_REQUEST_TIMEOUT`          | `60s`                | no                | Per-request timeout through the tunnel.                                     |
 | `RIFT_MAX_REQUEST_BODY_BYTES`   | `33554432` (32 MiB)  | no                | Max request body. `0` means unlimited.                                      |
 | `RIFT_MAX_TUNNELS_PER_TOKEN`    | `5`                  | no                | Default concurrent-tunnel cap per token (must be ≥1). Overridable per token. |
+| `RIFT_MAX_CUSTOM_DOMAINS_PER_TUNNEL` | `10`            | no                | Max BYO custom domains (`--domain`) one agent connection may register (must be ≥1). A handshake asking for more is rejected with `invalid_domain`. |
 | `RIFT_STREAM_BUFFER_SIZE`       | `32`                 | no                | Per-stream buffer depth (must be ≥1).                                       |
 
 ## Subdomain rules
@@ -143,8 +144,8 @@ place. The TLS provider credentials (`RIFT_DNS_*`, `RIFT_ACMEDNS_*`,
 | `RIFT_ACME_CA_URL`        | Caddy              | ACME directory URL when `internal-ca`.                            |
 | `RIFT_ACME_CA_ROOT`       | Caddy              | PEM signing the ACME server's own HTTPS cert when `internal-ca`.   |
 | `RIFT_CADDY_IMAGE`        | compose            | Caddy image tag (`dns01` needs a plugin-built image).             |
-| `RIFT_CADDY_DNS_PLUGINS`  | `build-caddy.sh`   | Space-separated Go module paths to compile into the Caddy image.  |
-| `RIFT_CADDY_VERSION`      | `build-caddy.sh`   | Caddy major version or tag to build.                              |
+| `RIFT_CADDY_DNS_PLUGINS`  | `make build-caddy` | Space-separated Go module paths to compile into the Caddy image.  |
+| `RIFT_CADDY_VERSION`      | `make build-caddy` | Caddy major version or tag to build.                              |
 | `RIFT_UPSTREAM_HOST`      | Caddy              | Compose service name Caddy proxies to (default `riftd`).          |
 | `RIFT_INGRESS_PORT`       | Caddy              | Upstream ingress port Caddy dials. Must match `RIFT_INGRESS_ADDR`. |
 | `RIFT_GATEWAY_PORT`       | Caddy              | Upstream gateway port Caddy dials. Must match `RIFT_GATEWAY_ADDR`. |
@@ -153,6 +154,6 @@ place. The TLS provider credentials (`RIFT_DNS_*`, `RIFT_ACMEDNS_*`,
 | `RIFT_VPS_USER`           | `tools/`           | SSH user (default `root`).                                        |
 | `RIFT_VPS_PORT`           | `tools/`           | SSH port (default `22`).                                          |
 | `RIFT_VPS_PASSWORD`       | `tools/`           | Bootstrap-only SSH password; rotate after provisioning. Secret.   |
-| `RIFT_ADMIN_URL`          | `mint-token.sh`    | Admin API base URL (default `http://127.0.0.1:8082`).             |
+| `RIFT_ADMIN_URL`          | `tools/`           | Admin API base URL (default `http://127.0.0.1:8082`).             |
 | `RIFT_INSTALL_*`          | `install.sh`       | CLI installer overrides — see [Installation](/getting-started/installation/). |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | compose | Throwaway credentials for the **local** dev Postgres container only. |

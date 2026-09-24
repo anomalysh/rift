@@ -15,7 +15,7 @@ Bootstrap key-based SSH to the rift VPS. Idempotent — safe to re-run.
   3. Verifies key-only login works.
   4. Prints the next hardening steps (disable password auth, rotate password).
 
-Environment:
+Environment (each read from the untracked .env when not already set):
   RIFT_VPS_HOST      (required) VPS hostname or IP
   RIFT_VPS_USER      SSH user            (default: root)
   RIFT_VPS_PORT      SSH port            (default: 22)
@@ -33,6 +33,7 @@ case "${1:-}" in
 esac
 
 require_cmd ssh ssh-keygen sshpass
+load_env
 require_env RIFT_VPS_HOST RIFT_VPS_PASSWORD
 
 host="$RIFT_VPS_HOST"

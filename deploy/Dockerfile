@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # --- build ------------------------------------------------------------------
-FROM golang:1.25-alpine AS build
+FROM golang:1.26-alpine AS build
 WORKDIR /src
 
 # The Go module lives under projects/server/. Copy the manifests first so `go mod
@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/riftd .
 # --- runtime ----------------------------------------------------------------
 # Alpine (not distroless) so the image ships busybox wget for the HEALTHCHECK
 # below; distroless/static has no HTTP client to probe the health route with.
-FROM alpine:3.19 AS runtime
+FROM alpine:3.22 AS runtime
 
 RUN apk add --no-cache ca-certificates \
  && adduser -D -H -u 10001 rift
@@ -38,7 +38,7 @@ EXPOSE 8080 8081 8082
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 	CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
 
-# OCI image metadata. The publish workflow (and tools/publish-images.sh) inject
+# OCI image metadata. The publish workflow (and `rift-ops release images`) inject
 # real values via --build-arg; the defaults keep a plain `docker build` emitting
 # a valid, if generic, labelled image. Last layer on purpose: only the labels
 # change per commit, so the rest of the image stays cached.

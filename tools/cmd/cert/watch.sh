@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/../../lib/common.sh"
 
-# cert-watch.sh -- warn before a served TLS certificate expires. Silent cert
+# watch.sh -- warn before a served TLS certificate expires. Silent cert
 # expiry is the likeliest future rift outage: renewal runs unattended, and the
 # first sign of a stall is a visitor seeing an expired-cert error. This checks
 # the apex and the gateway hostname over a real TLS handshake and reports the
@@ -76,8 +76,10 @@ under=0
 # "unreachable" if the handshake or parse fails.
 cert_days() {
 	local sni="$1" enddate exp
+	# Bound the handshake: an unresponsive host would otherwise hang a cron run
+	# indefinitely.
 	enddate="$(printf '' |
-		openssl s_client -servername "$sni" -connect "$host:443" 2>/dev/null |
+		rift_timeout 25 openssl s_client -servername "$sni" -connect "$host:443" 2>/dev/null |
 		openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)"
 	[ -n "$enddate" ] || {
 		printf 'unreachable'
@@ -96,8 +98,16 @@ cert_days() {
 report() {
 	local name="$1" days="$2"
 	case "$days" in
-	unreachable) log_warn "$name: no certificate served (TLS handshake failed)" ;;
-	unparseable) log_warn "$name: could not parse the certificate's expiry" ;;
+	# A host that serves no certificate at all is the worst case, not a
+	# warning to shrug off: --strict must fail on it just as on an expiry.
+	unreachable)
+		log_error "$name: no certificate served (TLS handshake failed)"
+		under=$((under + 1))
+		;;
+	unparseable)
+		log_error "$name: could not parse the certificate's expiry"
+		under=$((under + 1))
+		;;
 	*)
 		if [ "$days" -lt 0 ]; then
 			log_error "$name: certificate EXPIRED $((-days)) day(s) ago"

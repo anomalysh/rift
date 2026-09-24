@@ -2,7 +2,7 @@
 #
 # Driven exclusively by tools/e2e-recovery.sh. Do NOT `docker compose up` this by
 # hand: the harness applies the real schema, seeds known rows and a fake
-# certificate tree, then exercises tools/backup.sh and tools/restore.sh against
+# certificate tree, then exercises the backup and restore commands against
 # it and tears everything down.
 #
 # Everything here is disposable:

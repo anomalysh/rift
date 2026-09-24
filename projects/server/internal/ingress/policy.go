@@ -50,9 +50,9 @@ func (c *policyCache) get(t core.Tunnel) (*policy.Compiled, error) {
 // basic-auth) before a request is proxied. It returns true to allow; on false it
 // has already written the response and the caller must return. It is invoked at
 // the top of both proxy() and proxyUpgrade(), which are the two paths reached
-// from handlePublic AND from the cross-node handleInternalProxy -- so a policy
+// from servePublic AND from the cross-node handleInternalProxy -- so a policy
 // covers a peer-forwarded request too, checked against the real client IP that
-// the edge stamped in X-Forwarded-For / X-Real-IP.
+// the edge resolved and carried across the hop in HeaderRiftClientIP.
 func (i *Ingress) enforce(w http.ResponseWriter, r *http.Request, sess core.Session, sub string) bool {
 	t := sess.Tunnel()
 	if t.Policy.IsZero() {
@@ -92,11 +92,12 @@ func (i *Ingress) enforce(w http.ResponseWriter, r *http.Request, sess core.Sess
 		}
 	}
 
-	// A5: rate limit. Keyed per tunnel, or per tunnel+client-IP when per_ip.
+	// A5: rate limit. Keyed per tunnel, or per tunnel+client network when
+	// per_ip (see rateLimitClientKey).
 	if rl := compiled.RateLimit(); rl != nil {
 		key := sub
 		if rl.PerIP {
-			key = sub + "|" + i.clientIP(r)
+			key = sub + "|" + rateLimitClientKey(i.clientIP(r))
 		}
 		if !i.limiter.allow(key, rl.RPS, rl.Burst) {
 			w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(rl.RPS)))
@@ -106,4 +107,20 @@ func (i *Ingress) enforce(w http.ResponseWriter, r *http.Request, sess core.Sess
 		}
 	}
 	return true
+}
+
+// rateLimitClientKey is the per-IP rate-limit identity of a client address.
+// An IPv4 address is its own key. An IPv6 client is keyed by its /64: a single
+// subscriber is routinely handed a whole /64, so keying by full address would
+// give one visitor 2^64 independent buckets and make per-IP limiting
+// meaningless.
+func rateLimitClientKey(addr string) string {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return addr
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
 }

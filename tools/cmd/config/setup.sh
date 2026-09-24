@@ -78,13 +78,11 @@ done
 
 require_cmd git
 
+# A partially written temp file must never survive as a stray secret. Through
+# register_cleanup a Ctrl-C at a prompt also exits: the bare `trap cleanup INT`
+# this replaces ran the handler and then carried on with the wizard.
 TMP_ENV=""
-cleanup() {
-	# A partially written temp file must never survive as a stray secret.
-	[ -n "$TMP_ENV" ] && [ -f "$TMP_ENV" ] && rm -f "$TMP_ENV"
-	return 0
-}
-trap cleanup EXIT INT TERM
+register_cleanup '[ -z "$TMP_ENV" ] || rm -f "$TMP_ENV"'
 
 # ---------------------------------------------------------------------------
 # Small helpers
@@ -351,7 +349,7 @@ if is_true "$REPLY_VALUE"; then
 fi
 
 # 7. Raw tunnels (rift tcp / rift tls) --------------------------------------
-# Both default OFF. Enabling one is only half the job: remote-deploy.sh layers
+# Both default OFF. Enabling one is only half the job: deploy.sh layers
 # the matching compose overlay to publish the ports, and harden.sh must open
 # them on the firewall. The wizard just records the intent in .env.
 say ""
@@ -479,8 +477,8 @@ fi
 if [ "$TCP_ON" = true ] || [ "$TLS_TUN_ON" = true ]; then
 	w ""
 	w "# --- Raw tunnels (rift tcp / rift tls) --------------------------------------"
-	w "# remote-deploy.sh publishes these ports (docker-compose.tcp.yml / .tls.yml)"
-	w "# when the matching flag is true; run tools/harden.sh to open them in nftables."
+	w "# rift-ops deploy deploy publishes these ports (docker-compose.tcp.yml / .tls.yml)"
+	w "# when the matching flag is true; run rift-ops host harden to open them in nftables."
 	if [ "$TCP_ON" = true ]; then
 		w "RIFT_TCP_ENABLED=true"
 		w "RIFT_TCP_PORT_MIN=$TCP_PORT_MIN"
@@ -527,13 +525,13 @@ say "Next steps:"
 if [ "$IS_PROD" = true ]; then
 	if [ "$TLS_MODE" = "dns01" ]; then
 		say "  1. Build a Caddy image with the '$PROVIDER' DNS plugin:  make build-caddy"
-		say "       (runs tools/build-caddy.sh; set RIFT_CADDY_IMAGE to the tag it prints)"
+		say "       (runs tools/rift-ops release caddy; set RIFT_CADDY_IMAGE to the tag it prints)"
 		say "  2. Fill in the '$PROVIDER' credentials in $OUT if you left any blank."
 		say "  3. Deploy to the VPS:                                   make deploy"
-		say "       (runs tools/remote-deploy.sh)"
+		say "       (runs tools/rift-ops deploy deploy)"
 	else
 		say "  1. Deploy to the VPS:  make deploy   (stock Caddy handles $TLS_MODE)"
-		say "       (runs tools/remote-deploy.sh)"
+		say "       (runs tools/rift-ops deploy deploy)"
 	fi
 	say "  - Mint an admin token for a user later with:  make mint-token NAME=you"
 	if [ "$TCP_ON" = true ] || [ "$TLS_TUN_ON" = true ]; then

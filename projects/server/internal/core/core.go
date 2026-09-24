@@ -45,11 +45,6 @@ func (p Protocol) Valid() bool {
 	}
 }
 
-// IsRaw reports whether the protocol is carried as a raw byte stream rather
-// than as HTTP request/response exchanges. UDP is datagram-oriented and framed
-// separately, so it is deliberately excluded here.
-func (p Protocol) IsRaw() bool { return p == ProtocolTCP || p == ProtocolTLS }
-
 // String implements fmt.Stringer.
 func (p Protocol) String() string { return string(p) }
 
@@ -60,9 +55,7 @@ var (
 	ErrSubdomainTaken    = errors.New("core: subdomain already in use")
 	ErrSubdomainReserved = errors.New("core: subdomain is reserved")
 	ErrSubdomainInvalid  = errors.New("core: subdomain is invalid")
-	ErrTunnelLimit       = errors.New("core: tunnel limit reached for token")
 	ErrConflict          = errors.New("core: conflicting write")
-	ErrUnsupportedProto  = errors.New("core: unsupported protocol")
 	// ErrDomainOwned means a custom domain is already registered to a different
 	// token, so this token may not claim it (E1).
 	ErrDomainOwned = errors.New("core: custom domain owned by another token")
@@ -108,6 +101,12 @@ type Reservation struct {
 // subdomain whose tunnel serves it (E1). The mapping is upserted each time an
 // agent connects with --domain, so it follows the live tunnel across reconnects
 // even when the subdomain is regenerated.
+//
+// The mapping names a subdomain, not a tunnel, and subdomains are reusable:
+// once the owner disconnects anyone may claim the same label. So the mapping
+// is honoured only while the tunnel holding Subdomain belongs to TokenID;
+// routing on Subdomain alone would hand the domain to whoever claims the label
+// next.
 type CustomDomain struct {
 	Domain    string // fully qualified, lower-cased, no trailing dot
 	Subdomain string // the rift subdomain this domain routes to
@@ -131,19 +130,23 @@ type Tunnel struct {
 	Policy Policy
 }
 
-// Stale reports whether the tunnel has missed heartbeats past timeout.
-func (t *Tunnel) Stale(now time.Time, timeout time.Duration) bool {
-	return now.Sub(t.LastSeenAt) > timeout
-}
+// The store ports below are implemented by the Postgres and in-memory
+// adapters, and internal/store/storetest pins them to the same behaviour: the
+// errors, orderings and edge cases documented here are the contract, not an
+// artifact of either backend.
 
 // TokenStore persists API tokens.
 type TokenStore interface {
 	// FindByHash returns the token whose TokenHash equals hash.
 	// Returns ErrNotFound when no such token exists.
 	FindByHash(ctx context.Context, hash string) (*Token, error)
+	// FindByID returns the token with id, or ErrNotFound.
 	FindByID(ctx context.Context, id string) (*Token, error)
+	// Create inserts t. A duplicate ID or TokenHash is ErrConflict.
 	Create(ctx context.Context, t *Token) error
+	// List returns every token, oldest first (by ID).
 	List(ctx context.Context) ([]Token, error)
+	// Revoke and TouchLastUsed return ErrNotFound for an unknown id.
 	Revoke(ctx context.Context, id string, at time.Time) error
 	TouchLastUsed(ctx context.Context, id string, at time.Time) error
 }
@@ -152,8 +155,12 @@ type TokenStore interface {
 type ReservationStore interface {
 	// Get returns the reservation for subdomain, or ErrNotFound.
 	Get(ctx context.Context, subdomain string) (*Reservation, error)
+	// Create inserts r. An already-reserved subdomain is ErrConflict and an
+	// unknown TokenID is ErrNotFound.
 	Create(ctx context.Context, r *Reservation) error
+	// List returns every reservation, by subdomain.
 	List(ctx context.Context) ([]Reservation, error)
+	// Delete removes the reservation, or returns ErrNotFound.
 	Delete(ctx context.Context, subdomain string) error
 }
 
@@ -163,9 +170,17 @@ type DomainStore interface {
 	// It refreshes the subdomain when the same token reconnects, and returns
 	// ErrDomainOwned when the domain is already held by a different token.
 	Upsert(ctx context.Context, d CustomDomain) error
-	// SubdomainFor returns the subdomain a custom domain maps to, or ErrNotFound.
-	SubdomainFor(ctx context.Context, domain string) (string, error)
-	// List returns every custom-domain mapping.
+	// Transfer is Upsert for a domain the caller believes is held by
+	// fromTokenID: it succeeds when the domain is unmapped or still owned by
+	// fromTokenID (or already by d.TokenID), and returns ErrDomainOwned when a
+	// third token got there first. The ownership check and the write are one
+	// atomic step, so two agents reclaiming the same abandoned domain cannot
+	// both win.
+	Transfer(ctx context.Context, d CustomDomain, fromTokenID string) error
+	// Lookup returns the mapping for a custom domain, or ErrNotFound. Callers
+	// must check that the tunnel on Subdomain belongs to TokenID before routing.
+	Lookup(ctx context.Context, domain string) (*CustomDomain, error)
+	// List returns every custom-domain mapping, by domain.
 	List(ctx context.Context) ([]CustomDomain, error)
 	// Delete removes a mapping. Deleting an absent domain is not an error.
 	Delete(ctx context.Context, domain string) error
@@ -175,7 +190,8 @@ type DomainStore interface {
 // subdomains are occupied across all gateway nodes.
 type TunnelStore interface {
 	// Claim atomically inserts the tunnel, failing with ErrSubdomainTaken if
-	// the subdomain is already held by a different tunnel.
+	// the subdomain is already held by a different tunnel, and ErrConflict if
+	// a tunnel with the same ID already exists.
 	Claim(ctx context.Context, t *Tunnel) error
 	// Release removes the tunnel by ID. Releasing an already-released tunnel
 	// is not an error.

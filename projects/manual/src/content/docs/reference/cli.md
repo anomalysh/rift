@@ -42,17 +42,32 @@ Value flags accept both `--flag value` and `--flag=value` forms.
 
 | Flag                 | Env var          | Meaning                                                  |
 | -------------------- | ---------------- | -------------------------------------------------------- |
-| `--token <t>`        | `RIFT_TOKEN`     | Gateway auth token. No default; one must be supplied.    |
-| `--server <url>`     | `RIFT_SERVER`    | Gateway `ws://` / `wss://` URL. No default; required.    |
+| `--token <t>`        | `RIFT_TOKEN`     | Gateway auth token. No default; one must be supplied. Visible in `ps` and shell history; prefer `--token-file` or the env var. |
+| `--token-file <path>`| —                | Read the token from a file (surrounding whitespace trimmed). Exclusive with `--token`. |
+| `--server <url>`     | `RIFT_SERVER`    | Gateway `wss://` URL (`ws://` only to a loopback gateway). No default; required. |
 | `--host <host>`      | `RIFT_HOST`      | Local host to forward to. Default `127.0.0.1`.           |
 | `--log-level <lvl>`  | `RIFT_LOG_LEVEL` | `debug`, `info`, `warn`, `error`, or `silent`. Default `info`. |
 | `--insecure`         | —                | Skip TLS certificate verification on the gateway `wss` connection. |
 | `--upstream-insecure`| —                | Skip verification of the local HTTPS upstream's certificate (`https` tunnels). |
+| `--allow-insecure-transport` | `RIFT_ALLOW_INSECURE_TRANSPORT` | Allow a cleartext `ws://` gateway that is not on loopback. The token then crosses the network unencrypted; rift warns every time. |
 | `--version`, `-v`    | —                | Print the version and exit.                              |
 | `--help`, `-h`       | —                | Print usage and exit.                                    |
 
 An unknown flag, a value flag with no value, or an unexpected extra positional
 argument is a usage error (exit code 2).
+
+Visitor-access and traffic-shaping flags (`--basic-auth`, `--cors`,
+`--cors-origin`, `--route`, …) are listed by `rift --help`. Note that `--cors`
+answers with `Access-Control-Allow-Origin: *` and never grants credentials;
+only an origin named with `--cors-origin` has its `Origin` echoed together with
+`Access-Control-Allow-Credentials: true`.
+
+### Gateway transport
+
+The token is sent in the first WebSocket frame, so rift refuses a `ws://`
+gateway unless its host is loopback (`127.0.0.0/8`, `::1`, `localhost`) or you
+pass `--allow-insecure-transport`. If the gateway goes silent for three
+heartbeat intervals, rift treats the connection as dead and reconnects.
 
 ## Examples
 
@@ -71,7 +86,7 @@ The `tcp` and `tls` protocols carry raw bytes on dedicated server ports that mus
 be published and firewalled; see [Raw TCP & TLS tunnels](/guides/raw-tunnels/).
 
 For an `https` tunnel the agent verifies the upstream certificate by default,
-except on a loopback host (`127.0.0.1`, `::1`, `localhost`), where a self-signed
+except on a loopback host (`127.0.0.0/8`, `::1`, `localhost`), where a self-signed
 dev certificate is expected and verification is skipped automatically. Point
 rift at an HTTPS service on another host with a self-signed certificate and pass
 `--upstream-insecure` to skip verification there too. This is independent of
@@ -82,14 +97,18 @@ rift at an HTTPS service on another host with a self-signed certificate and pass
 | Variable          | Purpose                                                         |
 | ----------------- | -------------------------------------------------------------- |
 | `RIFT_TOKEN`      | Gateway auth token (overridden by `--token`).                   |
-| `RIFT_SERVER`     | Gateway `ws://` / `wss://` URL (overridden by `--server`).      |
+| `RIFT_SERVER`     | Gateway `wss://` URL (overridden by `--server`).                |
 | `RIFT_HOST`       | Local host to forward to (overridden by `--host`).              |
 | `RIFT_LOG_LEVEL`  | Log verbosity (overridden by `--log-level`).                    |
+| `RIFT_ALLOW_INSECURE_TRANSPORT` | `1` allows a non-loopback `ws://` gateway (see `--allow-insecure-transport`). |
 | `XDG_CONFIG_HOME` | Base directory for the config file; falls back to `$HOME/.config`. |
 | `HOME`            | Used to derive the config directory when `XDG_CONFIG_HOME` is unset. |
 
 Settings resolve from flags, then environment variables, then the config file at
-`~/.config/rift/config.json`, then built-in defaults. See
+`~/.config/rift/config.json`, then built-in defaults. `rift --set-token - <
+token.txt` saves a token read from stdin, keeping it out of argv; the config
+file is written atomically with mode `0600`, and rift warns if it (or a
+`--token-file`) is readable by other users. See
 [Configuration](/getting-started/configuration/) for the full precedence rules.
 
 ## Exit codes

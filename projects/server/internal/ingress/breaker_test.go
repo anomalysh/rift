@@ -1,6 +1,7 @@
 package ingress
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -69,5 +70,39 @@ func TestBreakerIsPerNode(t *testing.T) {
 	}
 	if b.isOpen(alive) {
 		t.Fatal("a healthy node's circuit was opened by another node's failures")
+	}
+}
+
+// Failures spread out in time are not consecutive: a node that blipped a while
+// ago must not trip on its next single blip.
+func TestBreakerForgetsOldFailures(t *testing.T) {
+	b := newBreaker()
+	now := time.Unix(0, 0)
+	b.now = func() time.Time { return now }
+	const node = "http://10.0.0.2:8080"
+
+	for i := 0; i < breakerThreshold-1; i++ {
+		b.recordFailure(node)
+	}
+	now = now.Add(breakerForget)
+	b.recordFailure(node)
+	if b.isOpen(node) {
+		t.Fatal("failures a breakerForget apart opened the circuit")
+	}
+}
+
+// A node that failed and was never routed to again must not stay in the map.
+func TestBreakerSweepsIdleNodes(t *testing.T) {
+	b := newBreaker()
+	now := time.Unix(0, 0)
+	b.now = func() time.Time { return now }
+
+	for i := 0; i < 100; i++ {
+		b.recordFailure(fmt.Sprintf("http://10.0.1.%d:8080", i))
+	}
+	now = now.Add(breakerForget)
+	b.recordFailure("http://10.0.0.9:8080")
+	if n := len(b.state); n != 1 {
+		t.Fatalf("breaker holds %d nodes after the others went quiet, want 1", n)
 	}
 }

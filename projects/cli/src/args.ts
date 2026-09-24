@@ -3,6 +3,7 @@
 //
 //   rift <protocol> <port> [subdomain] [flags]
 
+import { CLI_SPEC, type CliOption } from "./cli-spec.ts";
 import type { PartialConfig } from "./config.ts";
 import {
   COMPLETION_SHELLS,
@@ -18,11 +19,14 @@ import { isLogLevel } from "./logger.ts";
 /** Flag values that feed configuration resolution (see config.ts). */
 export interface FlagConfig {
   token?: string;
+  /** Read the token from this file instead of argv (see index.ts). */
+  tokenFile?: string;
   server?: string;
   host?: string;
   logLevel?: LogLevel;
   insecure?: boolean;
   upstreamInsecure?: boolean;
+  allowInsecureTransport?: boolean;
   // Visitor-access policy (A2-A5). Repeatable flags accumulate; the rest are
   // single-valued. Raw strings here; buildPolicy validates and hashes them.
   basicAuth?: string[];
@@ -39,6 +43,7 @@ export interface FlagConfig {
   setResponseHeader?: string[];
   delResponseHeader?: string[];
   cors?: boolean;
+  corsOrigin?: string[];
   respond?: string[];
   redirect?: string[];
   route?: string[];
@@ -68,40 +73,26 @@ function isShell(v: string): v is Shell {
   return (COMPLETION_SHELLS as readonly string[]).includes(v);
 }
 
-/** Run flags that take a value; the rest are booleans. */
-const VALUE_FLAGS = new Set([
-  "--token",
-  "--server",
-  "--host",
-  "--log-level",
-  // Visitor policy value flags. --basic-auth/--allow-ip/--deny-ip may repeat.
-  "--basic-auth",
-  "--allow-ip",
-  "--deny-ip",
-  "--ttl",
-  "--max-requests",
-  "--rate-limit",
-  // Traffic-policy value flags. The header/respond/redirect/route ones repeat.
-  "--set-request-header",
-  "--del-request-header",
-  "--set-response-header",
-  "--del-response-header",
-  "--respond",
-  "--redirect",
-  "--route",
-  "--breaker-threshold",
-  "--domain",
-]);
+/**
+ * Every option by its long form and short alias. The parser reads the flag
+ * surface from CLI_SPEC -- the same spec the help, man page, and completions
+ * are rendered from -- so a documented flag is always an accepted one.
+ */
+const OPTIONS: ReadonlyMap<string, CliOption> = new Map(
+  CLI_SPEC.options.flatMap((o): [string, CliOption][] =>
+    o.short !== undefined
+      ? [
+          [o.long, o],
+          [o.short, o],
+        ]
+      : [[o.long, o]],
+  ),
+);
 
-// `--set-*` flags do not open a tunnel: they persist a value to the config file
-// and exit. They mirror the run flags one-for-one so `rift --set-token <t>`
-// saves the same setting `--token <t>` would supply for a single run.
-const SET_FLAGS = new Set([
-  "--set-token",
-  "--set-server",
-  "--set-host",
-  "--set-log-level",
-]);
+/** A run flag's FlagConfig key: its name in camelCase ("--log-level" -> logLevel). */
+export function flagKey(long: string): string {
+  return long.slice(2).replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
+}
 
 function parsePort(raw: string): number | null {
   // Strict integer: reject "3000.5", "0x10", " 80", "abc", "" up front.
@@ -115,8 +106,8 @@ function parsePort(raw: string): number | null {
   return port;
 }
 
-function isSupportedProtocol(v: string): v is SupportedProtocol {
-  return SUPPORTED_PROTOCOLS.some((p) => p === v);
+export function isSupportedProtocol(v: string): v is SupportedProtocol {
+  return (SUPPORTED_PROTOCOLS as readonly string[]).includes(v);
 }
 
 export function parseArgs(argv: readonly string[]): ParsedArgs {
@@ -131,40 +122,21 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       continue;
     }
 
-    if (arg === "--help" || arg === "-h") {
-      return { kind: "help" };
-    }
-    if (arg === "--version" || arg === "-v") {
-      return { kind: "version" };
-    }
-    if (arg === "--insecure") {
-      flags.insecure = true;
-      continue;
-    }
-    if (arg === "--upstream-insecure") {
-      flags.upstreamInsecure = true;
-      continue;
-    }
-    if (arg === "--once") {
-      flags.once = true;
-      continue;
-    }
-    if (arg === "--cors") {
-      flags.cors = true;
-      continue;
-    }
-    if (arg === "--breaker") {
-      flags.breaker = true;
-      continue;
-    }
-
-    if (arg.startsWith("--")) {
+    if (arg.startsWith("-") && arg !== "-") {
       // Support both `--flag value` and `--flag=value`.
-      const eq = arg.indexOf("=");
+      const eq = arg.startsWith("--") ? arg.indexOf("=") : -1;
       const name = eq === -1 ? arg : arg.slice(0, eq);
-      const isSet = SET_FLAGS.has(name);
-      if (!VALUE_FLAGS.has(name) && !isSet) {
+      const option = OPTIONS.get(name);
+      // A switch takes no value, so `--cors=yes` is not a flag we know.
+      if (option === undefined || (!option.takesValue && eq !== -1)) {
         return { kind: "error", message: `unknown flag: ${name}` };
+      }
+      if (option.kind === "meta") {
+        return { kind: option.long === "--help" ? "help" : "version" };
+      }
+      if (!option.takesValue) {
+        (flags as Record<string, unknown>)[flagKey(option.long)] = true;
+        continue;
       }
       let value: string | undefined;
       if (eq === -1) {
@@ -177,20 +149,16 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         return { kind: "error", message: `flag ${name} requires a value` };
       }
       let applied: string | null;
-      if (isSet) {
+      if (option.kind === "persist") {
         hasSet = true;
         applied = applySetFlag(updates, name, value);
       } else {
-        applied = applyValueFlag(flags, name, value);
+        applied = applyValueFlag(flags, option, value);
       }
       if (applied !== null) {
         return { kind: "error", message: applied };
       }
       continue;
-    }
-
-    if (arg.startsWith("-") && arg !== "-") {
-      return { kind: "error", message: `unknown flag: ${arg}` };
     }
 
     positionals.push(arg);
@@ -206,6 +174,13 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       };
     }
     return { kind: "set-config", updates };
+  }
+
+  if (flags.token !== undefined && flags.tokenFile !== undefined) {
+    return {
+      kind: "error",
+      message: "--token and --token-file are mutually exclusive",
+    };
   }
 
   // `rift start [name...]` opens named tunnels from the project config (D3).
@@ -275,76 +250,29 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   return result;
 }
 
-/** Apply a value flag; returns an error message string, or null on success. */
+/** Apply a run value flag; returns an error message string, or null on success. */
 function applyValueFlag(
   flags: FlagConfig,
-  name: string,
+  option: CliOption,
   value: string,
 ): string | null {
-  switch (name) {
-    case "--token":
-      flags.token = value;
-      return null;
-    case "--server":
-      flags.server = value;
-      return null;
-    case "--host":
-      flags.host = value;
-      return null;
-    case "--log-level":
-      if (!isLogLevel(value)) {
-        return `invalid --log-level ${JSON.stringify(value)}: expected one of ${LOG_LEVELS.join(", ")}`;
-      }
-      flags.logLevel = value;
-      return null;
-    case "--basic-auth":
-      flags.basicAuth = [...(flags.basicAuth ?? []), value];
-      return null;
-    case "--allow-ip":
-      flags.allowIp = [...(flags.allowIp ?? []), value];
-      return null;
-    case "--deny-ip":
-      flags.denyIp = [...(flags.denyIp ?? []), value];
-      return null;
-    case "--ttl":
-      flags.ttl = value;
-      return null;
-    case "--max-requests":
-      flags.maxRequests = value;
-      return null;
-    case "--rate-limit":
-      flags.rateLimit = value;
-      return null;
-    case "--set-request-header":
-      flags.setRequestHeader = [...(flags.setRequestHeader ?? []), value];
-      return null;
-    case "--del-request-header":
-      flags.delRequestHeader = [...(flags.delRequestHeader ?? []), value];
-      return null;
-    case "--set-response-header":
-      flags.setResponseHeader = [...(flags.setResponseHeader ?? []), value];
-      return null;
-    case "--del-response-header":
-      flags.delResponseHeader = [...(flags.delResponseHeader ?? []), value];
-      return null;
-    case "--respond":
-      flags.respond = [...(flags.respond ?? []), value];
-      return null;
-    case "--redirect":
-      flags.redirect = [...(flags.redirect ?? []), value];
-      return null;
-    case "--route":
-      flags.route = [...(flags.route ?? []), value];
-      return null;
-    case "--breaker-threshold":
-      flags.breakerThreshold = value;
-      return null;
-    case "--domain":
-      flags.domain = [...(flags.domain ?? []), value];
-      return null;
-    default:
-      return `unknown flag: ${name}`;
+  if (option.long === "--token-file" && value === "") {
+    return "flag --token-file requires a non-empty path";
   }
+  if (option.long === "--log-level" && !isLogLevel(value)) {
+    return `invalid --log-level ${JSON.stringify(value)}: expected one of ${LOG_LEVELS.join(", ")}`;
+  }
+  // FlagConfig's keys are the run flags in camelCase (a test pins the two
+  // together); repeatable flags accumulate, the rest keep the last value.
+  const record = flags as Record<string, unknown>;
+  const key = flagKey(option.long);
+  if (option.repeatable === true) {
+    const prior = record[key];
+    record[key] = [...(Array.isArray(prior) ? prior : []), value];
+  } else {
+    record[key] = value;
+  }
+  return null;
 }
 
 /** Apply a `--set-*` flag into the pending config updates. */
@@ -358,6 +286,8 @@ function applySetFlag(
   }
   switch (name) {
     case "--set-token":
+      // "-" means "read the token from stdin" (resolved in index.ts), so the
+      // secret need not appear in argv, `ps`, or shell history.
       updates.token = value;
       return null;
     case "--set-server":

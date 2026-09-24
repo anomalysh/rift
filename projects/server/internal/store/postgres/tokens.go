@@ -2,11 +2,8 @@ package postgres
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/anomalysh/rift/projects/server/internal/core"
@@ -27,78 +24,39 @@ func scanToken(sc scanner) (*core.Token, error) {
 }
 
 func (s *tokenStore) FindByHash(ctx context.Context, hash string) (*core.Token, error) {
-	row := s.pool.QueryRow(ctx, `SELECT `+tokenColumns+` FROM tokens WHERE token_hash = $1`, hash)
-	t, err := scanToken(row)
+	t, err := scanToken(s.pool.QueryRow(ctx, `SELECT `+tokenColumns+` FROM tokens WHERE token_hash = $1`, hash))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("token by hash: %w", core.ErrNotFound)
-		}
-		return nil, fmt.Errorf("find token by hash: %w", err)
+		// The hash identifies a credential; it stays out of the error text.
+		return nil, translate(err, "find token by hash")
 	}
 	return t, nil
 }
 
 func (s *tokenStore) FindByID(ctx context.Context, id string) (*core.Token, error) {
-	row := s.pool.QueryRow(ctx, `SELECT `+tokenColumns+` FROM tokens WHERE id = $1`, id)
-	t, err := scanToken(row)
+	t, err := scanToken(s.pool.QueryRow(ctx, `SELECT `+tokenColumns+` FROM tokens WHERE id = $1`, id))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("token %s: %w", id, core.ErrNotFound)
-		}
-		return nil, fmt.Errorf("find token by id: %w", err)
+		return nil, translate(err, "find token "+id)
 	}
 	return t, nil
 }
 
+// Create inserts a token. A duplicate ID or hash is ErrConflict.
 func (s *tokenStore) Create(ctx context.Context, t *core.Token) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO tokens (`+tokenColumns+`) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		t.ID, t.Name, t.TokenHash, t.MaxTunnels, t.CreatedAt, t.LastUsedAt, t.RevokedAt, t.ExpiresAt)
-	if err != nil {
-		return fmt.Errorf("create token: %w", err)
-	}
-	return nil
+	return translate(err, "create token "+t.ID)
 }
 
+// List returns every token oldest first (IDs are time-sortable ULIDs).
 func (s *tokenStore) List(ctx context.Context) ([]core.Token, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+tokenColumns+` FROM tokens ORDER BY id`)
-	if err != nil {
-		return nil, fmt.Errorf("list tokens: %w", err)
-	}
-	defer rows.Close()
-
-	var out []core.Token
-	for rows.Next() {
-		t, err := scanToken(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan token: %w", err)
-		}
-		out = append(out, *t)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate tokens: %w", err)
-	}
-	return out, nil
+	return collect(ctx, s.pool, "list tokens", scanToken, `SELECT `+tokenColumns+` FROM tokens ORDER BY id`)
 }
 
 func (s *tokenStore) Revoke(ctx context.Context, id string, at time.Time) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE tokens SET revoked_at = $2 WHERE id = $1`, id, at)
-	if err != nil {
-		return fmt.Errorf("revoke token: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("token %s: %w", id, core.ErrNotFound)
-	}
-	return nil
+	return execOne(ctx, s.pool, "revoke token "+id, `UPDATE tokens SET revoked_at = $2 WHERE id = $1`, id, at)
 }
 
 func (s *tokenStore) TouchLastUsed(ctx context.Context, id string, at time.Time) error {
-	tag, err := s.pool.Exec(ctx, `UPDATE tokens SET last_used_at = $2 WHERE id = $1`, id, at)
-	if err != nil {
-		return fmt.Errorf("touch token: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("token %s: %w", id, core.ErrNotFound)
-	}
-	return nil
+	return execOne(ctx, s.pool, "touch token "+id, `UPDATE tokens SET last_used_at = $2 WHERE id = $1`, id, at)
 }

@@ -44,8 +44,12 @@ type Gateway struct {
 	// are disabled.
 	udp *udpForwarder
 
-	mu       sync.Mutex
-	sessions map[*session]struct{}
+	// sessions maps every session serve is handling, displaced ones included
+	// (the registry holds only the current one per subdomain), to a channel
+	// untrack closes. shuttingDown is set once Shutdown begins.
+	mu           sync.Mutex
+	sessions     map[*session]chan struct{}
+	shuttingDown bool
 }
 
 // New builds a Gateway. It does not listen; mount Handler on a mux.
@@ -68,7 +72,7 @@ func New(
 		registry:     reg,
 		tcp:          newTCPForwarder(cfg, logger),
 		udp:          newUDPForwarder(cfg, logger),
-		sessions:     make(map[*session]struct{}),
+		sessions:     make(map[*session]chan struct{}),
 	}
 }
 
@@ -124,6 +128,20 @@ func (g *Gateway) serve(r *http.Request, conn *websocket.Conn) {
 	)
 	sess := newSession(conn, *tunnel, g.cfg, g.tunnels, g.tokens, sessLogger)
 
+	// Every exit before the session's loops start must still close it. newSession
+	// may have armed an agent-chosen TTL timer that would otherwise pin the
+	// session in memory until it fires, and a public request routed to it in the
+	// moment it was registered would wait on a session nothing will ever serve.
+	// Close only stops the timer and wakes those waiters; it touches neither the
+	// socket nor the registry, so it cannot double up the cleanup each exit
+	// path already does. Once the loops run, they own shutdown instead.
+	loopsStarted := false
+	defer func() {
+		if !loopsStarted {
+			_ = sess.Close(string(tunnelproto.ShutdownServerShutdown))
+		}
+	}()
+
 	// The session outlives the HTTP handler that created it.
 	runCtx, runCancel := context.WithCancel(context.WithoutCancel(r.Context()))
 	defer runCancel()
@@ -142,65 +160,15 @@ func (g *Gateway) serve(r *http.Request, conn *websocket.Conn) {
 	g.track(sess)
 	defer g.untrack(sess)
 
-	// A raw tunnel (tcp/tls) is reached at a host:port, not the http URL. Work
-	// it out now, while we can still cleanly reject the handshake on failure.
-	bindAddr := ""
-	switch tunnel.Protocol {
-	case core.ProtocolTCP:
-		if g.tcp == nil {
-			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeUnsupportedProtocol,
-				"tcp tunnels are not enabled on this server")
-			return
-		}
-		addr, err := g.tcp.bind(sess)
-		if err != nil {
-			g.logger.Error("could not allocate tcp port", slog.Any("error", err))
-			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeInternal,
-				"could not allocate a public tcp port")
-			return
-		}
-		bindAddr = addr
-		defer g.tcp.release(sess)
-
-	case core.ProtocolUDP:
-		if g.udp == nil {
-			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeUnsupportedProtocol,
-				"udp tunnels are not enabled on this server")
-			return
-		}
-		addr, err := g.udp.bind(sess)
-		if err != nil {
-			g.logger.Error("could not allocate udp port", slog.Any("error", err))
-			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeInternal,
-				"could not allocate a public udp port")
-			return
-		}
-		bindAddr = addr
-		defer g.udp.release(sess)
-
-	case core.ProtocolTLS:
-		if !g.cfg.TLSTunnel.Enabled {
-			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeUnsupportedProtocol,
-				"tls tunnels are not enabled on this server")
-			return
-		}
-		// A tls tunnel needs no per-tunnel listener: the shared SNI-routed
-		// listener multiplexes them. It is reached at its subdomain host.
-		bindAddr = net.JoinHostPort(
-			core.Hostname(tunnel.Subdomain, g.cfg.Tunnel.BaseDomain),
-			strconv.Itoa(g.cfg.TLSTunnel.Port()))
-
-	case core.ProtocolGRPC:
-		if !g.cfg.GRPC.Enabled {
-			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeUnsupportedProtocol,
-				"grpc tunnels are not enabled on this server")
-			return
-		}
-		// Like tls, a grpc tunnel needs no per-tunnel listener: the shared h2c
-		// listener routes by :authority. It is reached at its subdomain host.
-		bindAddr = net.JoinHostPort(
-			core.Hostname(tunnel.Subdomain, g.cfg.Tunnel.BaseDomain),
-			strconv.Itoa(g.cfg.GRPC.Port()))
+	// A raw tunnel is reached at a host:port, not the http URL. Work it out
+	// now, while we can still cleanly reject the handshake on failure.
+	bindAddr, releaseBind, herr := g.bindPublic(sess)
+	if herr != nil {
+		g.rejectAfterRegister(hsCtx, runCtx, conn, sess, herr)
+		return
+	}
+	if releaseBind != nil {
+		defer releaseBind()
 	}
 
 	ok := tunnelproto.HelloOK{
@@ -216,6 +184,9 @@ func (g *Gateway) serve(r *http.Request, conn *websocket.Conn) {
 	if err != nil {
 		g.logger.Error("could not encode hello_ok", slog.Any("error", err))
 		_ = conn.Close(websocket.StatusInternalError, "internal error")
+		// The session is registered and its row claimed; drop both, exactly as
+		// the failed write below does.
+		g.cleanupSession(runCtx, sess)
 		return
 	}
 	if err := conn.Write(hsCtx, websocket.MessageBinary, frame); err != nil {
@@ -228,6 +199,7 @@ func (g *Gateway) serve(r *http.Request, conn *websocket.Conn) {
 
 	sessLogger.Info("tunnel established", slog.String("url", ok.URL))
 
+	loopsStarted = true
 	sess.wg.Add(3)
 	go sess.writeLoop()
 	go sess.watchdog(runCtx)
@@ -268,30 +240,55 @@ func (g *Gateway) cleanupSession(ctx context.Context, s *session) {
 	}
 }
 
+// track records a session serve is responsible for until untrack. A session
+// that arrives once Shutdown has begun is closed straight away, so it tells
+// its agent to reconnect elsewhere instead of outliving the shutdown.
 func (g *Gateway) track(s *session) {
 	g.mu.Lock()
-	g.sessions[s] = struct{}{}
+	g.sessions[s] = make(chan struct{})
+	closing := g.shuttingDown
 	g.mu.Unlock()
+	if closing {
+		_ = s.Close(string(tunnelproto.ShutdownServerShutdown))
+	}
 }
 
+// untrack is serve's last word on a session: its routing entry and tunnel row
+// are gone and its loops have exited.
 func (g *Gateway) untrack(s *session) {
 	g.mu.Lock()
-	delete(g.sessions, s)
+	if done, ok := g.sessions[s]; ok {
+		close(done)
+		delete(g.sessions, s)
+	}
 	g.mu.Unlock()
 }
 
 // Shutdown closes every live tunnel, telling agents the server is going away
-// so they reconnect rather than treat it as a fatal error.
-func (g *Gateway) Shutdown(context.Context) error {
+// so they reconnect rather than treat it as a fatal error, and waits until
+// each has been torn down or ctx ends. Waiting is what lets the shutdown
+// frame reach the agent and the tunnel row be released before the process
+// exits; otherwise the subdomain stays claimed until the reaper notices.
+func (g *Gateway) Shutdown(ctx context.Context) error {
 	g.mu.Lock()
+	g.shuttingDown = true
 	sessions := make([]*session, 0, len(g.sessions))
-	for s := range g.sessions {
+	waits := make([]chan struct{}, 0, len(g.sessions))
+	for s, done := range g.sessions {
 		sessions = append(sessions, s)
+		waits = append(waits, done)
 	}
 	g.mu.Unlock()
 
 	for _, s := range sessions {
 		_ = s.Close(string(tunnelproto.ShutdownServerShutdown))
+	}
+	for _, done := range waits {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return nil
 }
@@ -307,9 +304,71 @@ func (e *handshakeError) Error() string { return string(e.code) + ": " + e.messa
 // rejectAfterRegister tears down a session that was registered but cannot be
 // served (e.g. its protocol is disabled or no port is free), then rejects the
 // handshake so the agent learns why.
-func (g *Gateway) rejectAfterRegister(hsCtx, runCtx context.Context, conn *websocket.Conn, sess *session, code tunnelproto.ErrorCode, message string) {
+func (g *Gateway) rejectAfterRegister(hsCtx, runCtx context.Context, conn *websocket.Conn, sess *session, herr *handshakeError) {
+	// Close first so a request routed here in the meantime fails now rather
+	// than after the rejection's close handshake. serve's deferred Close makes
+	// this redundant for correctness, but not for latency.
+	_ = sess.Close(string(tunnelproto.ShutdownServerShutdown))
 	g.cleanupSession(runCtx, sess)
-	g.rejectHandshake(hsCtx, conn, &handshakeError{code: code, message: message})
+	g.rejectHandshake(hsCtx, conn, herr)
+}
+
+// portForwarder is a per-tunnel public listener allocator: the tcp and udp
+// forwarders.
+type portForwarder interface {
+	bind(sess *session) (addr string, err error)
+	release(sess *session)
+}
+
+// bindPublic reserves what a raw tunnel is reached at besides its URL and
+// returns the host:port to advertise, plus a release func when a per-tunnel
+// port was allocated. An http tunnel needs nothing. A protocol this server
+// has disabled, or a port range with nothing free, rejects the handshake.
+func (g *Gateway) bindPublic(sess *session) (addr string, release func(), herr *handshakeError) {
+	proto := sess.tunnel.Protocol
+	disabled := &handshakeError{
+		code:    tunnelproto.ErrCodeUnsupportedProtocol,
+		message: fmt.Sprintf("%s tunnels are not enabled on this server", proto),
+	}
+
+	switch proto {
+	case core.ProtocolTCP, core.ProtocolUDP:
+		// Assign only a non-nil forwarder: a nil *tcpForwarder in the
+		// interface would not compare equal to nil.
+		var fwd portForwarder
+		if proto == core.ProtocolTCP && g.tcp != nil {
+			fwd = g.tcp
+		} else if proto == core.ProtocolUDP && g.udp != nil {
+			fwd = g.udp
+		}
+		if fwd == nil {
+			return "", nil, disabled
+		}
+		addr, err := fwd.bind(sess)
+		if err != nil {
+			g.logger.Error("could not allocate "+string(proto)+" port", slog.Any("error", err))
+			return "", nil, &handshakeError{
+				code:    tunnelproto.ErrCodeInternal,
+				message: fmt.Sprintf("could not allocate a public %s port", proto),
+			}
+		}
+		return addr, func() { fwd.release(sess) }, nil
+
+	case core.ProtocolTLS, core.ProtocolGRPC:
+		// No per-tunnel listener: one shared listener routes every tunnel of
+		// the protocol (tls by SNI, grpc by :authority), so the tunnel is
+		// reached at its subdomain host on that listener's port.
+		enabled, port := g.cfg.TLSTunnel.Enabled, g.cfg.TLSTunnel.Port()
+		if proto == core.ProtocolGRPC {
+			enabled, port = g.cfg.GRPC.Enabled, g.cfg.GRPC.Port()
+		}
+		if !enabled {
+			return "", nil, disabled
+		}
+		host := core.Hostname(sess.tunnel.Subdomain, g.cfg.Tunnel.BaseDomain)
+		return net.JoinHostPort(host, strconv.Itoa(port)), nil, nil
+	}
+	return "", nil, nil
 }
 
 func (g *Gateway) rejectHandshake(ctx context.Context, conn *websocket.Conn, herr *handshakeError) {
@@ -425,14 +484,32 @@ func (g *Gateway) authorize(ctx context.Context, r *http.Request, hello *tunnelp
 	// the TLS-ask endpoint will authorize a certificate and the ingress can
 	// route the domain to this tunnel.
 	if herr := g.registerDomains(ctx, hello.Domains, tunnel.Subdomain, token.ID); herr != nil {
+		// The subdomain is already claimed in the store. Rejecting the
+		// handshake without releasing it would leave the label occupied (and
+		// counted against the token's tunnel limit) until the reaper noticed
+		// the missing heartbeats. WithoutCancel: a handshake that failed on
+		// its deadline must still clean up.
+		if err := g.tunnels.Release(context.WithoutCancel(ctx), tunnel.ID); err != nil {
+			g.logger.Warn("could not release tunnel after a rejected domain registration",
+				slog.String("tunnel_id", tunnel.ID), slog.Any("error", err))
+		}
 		return nil, nil, herr
 	}
 	return tunnel, token, nil
 }
 
 // registerDomains upserts each requested custom domain against the tunnel's
-// subdomain. It rejects a malformed domain, one that lies under the base domain
-// (that is a subdomain, requested differently), or one owned by another token.
+// subdomain. It rejects too many domains, a malformed domain, one this server
+// serves in its own right, or one owned by another active token.
+//
+// Server-owned names are the base domain itself, anything under it (including
+// multi-label names such as a.b.<base>, which are not valid subdomains), and
+// the gateway hostname. The ingress routes a custom domain before it would
+// answer "not a tunnel", so registering the apex or the gateway hostname would
+// let one token capture the deployment's own front door.
+//
+// Every domain is validated before any is written, so a hello with one bad
+// entry leaves no partial registrations behind.
 func (g *Gateway) registerDomains(ctx context.Context, domains []string, subdomain, tokenID string) *handshakeError {
 	if len(domains) == 0 {
 		return nil
@@ -443,7 +520,14 @@ func (g *Gateway) registerDomains(ctx context.Context, domains []string, subdoma
 			message: "custom domains are not supported by this server",
 		}
 	}
-	now := time.Now()
+	if limit := g.cfg.Tunnel.CustomDomainLimit(); len(domains) > limit {
+		return &handshakeError{
+			code:    tunnelproto.ErrCodeInvalidDomain,
+			message: fmt.Sprintf("a tunnel may register at most %d custom domains, got %d", limit, len(domains)),
+		}
+	}
+
+	normalized := make([]string, 0, len(domains))
 	for _, raw := range domains {
 		d := core.NormalizeDomain(raw)
 		if d == "" {
@@ -452,15 +536,22 @@ func (g *Gateway) registerDomains(ctx context.Context, domains []string, subdoma
 				message: fmt.Sprintf("invalid custom domain %q", raw),
 			}
 		}
-		if _, ok := core.SubdomainFromHost(d, g.cfg.Tunnel.BaseDomain); ok {
+		if core.IsServerHostname(d, g.cfg.Tunnel.BaseDomain, g.cfg.Gateway.Hostname) {
 			return &handshakeError{
 				code:    tunnelproto.ErrCodeInvalidDomain,
-				message: fmt.Sprintf("%q is under this server's base domain; request it as a subdomain instead", d),
+				message: fmt.Sprintf("%q is this server's own domain or lies under it; request a subdomain instead", d),
 			}
 		}
-		err := g.domains.Upsert(ctx, core.CustomDomain{
-			Domain: d, Subdomain: subdomain, TokenID: tokenID, CreatedAt: now,
-		})
+		normalized = append(normalized, d)
+	}
+
+	now := time.Now()
+	for _, d := range normalized {
+		mapping := core.CustomDomain{Domain: d, Subdomain: subdomain, TokenID: tokenID, CreatedAt: now}
+		err := g.domains.Upsert(ctx, mapping)
+		if errors.Is(err, core.ErrDomainOwned) {
+			err = g.reclaimAbandonedDomain(ctx, mapping, now)
+		}
 		switch {
 		case errors.Is(err, core.ErrDomainOwned):
 			return &handshakeError{
@@ -472,6 +563,38 @@ func (g *Gateway) registerDomains(ctx context.Context, domains []string, subdoma
 			return &handshakeError{code: tunnelproto.ErrCodeInternal, message: "could not register custom domain"}
 		}
 	}
+	return nil
+}
+
+// reclaimAbandonedDomain lets a token take over a custom domain whose owning
+// token can no longer use it (revoked, expired, or deleted). Without this a
+// mapping would outlive its owner forever and squat the domain against the
+// customer who actually controls its DNS. It returns ErrDomainOwned when the
+// current owner is still active, or when another token reclaimed it first.
+func (g *Gateway) reclaimAbandonedDomain(ctx context.Context, mapping core.CustomDomain, now time.Time) error {
+	existing, err := g.domains.Lookup(ctx, mapping.Domain)
+	if errors.Is(err, core.ErrNotFound) {
+		// Deleted between the upsert and now; the transfer below recreates it.
+		existing = &core.CustomDomain{}
+	} else if err != nil {
+		return err
+	}
+	if existing.TokenID != "" {
+		owner, err := g.tokens.FindByID(ctx, existing.TokenID)
+		switch {
+		case err == nil && owner.Active(now):
+			return fmt.Errorf("domain %s: %w", mapping.Domain, core.ErrDomainOwned)
+		case err != nil && !errors.Is(err, core.ErrNotFound):
+			return err
+		}
+	}
+	if err := g.domains.Transfer(ctx, mapping, existing.TokenID); err != nil {
+		return err
+	}
+	g.logger.Info("custom domain reclaimed from an inactive token",
+		slog.String("domain", mapping.Domain),
+		slog.String("previous_token_id", existing.TokenID),
+		slog.String("token_id", mapping.TokenID))
 	return nil
 }
 

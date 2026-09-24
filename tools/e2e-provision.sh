@@ -8,9 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/common.sh"
 # shellcheck source=tools/lib/e2e-harness.sh
 . "$SCRIPT_DIR/lib/e2e-harness.sh"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$RIFT_REPO_ROOT"
 
-# End-to-end test for tools/provision.sh and the Linode provider. Hermetic: it
+# End-to-end test for tools/cmd/provision/provision.sh and the Linode provider. Hermetic: it
 # drives provision.sh against a MOCK Linode API and a throwaway sshd, both in
 # Docker. No real cloud, no token, no cost. Every assertion is made against the
 # mock's observed HTTP traffic (its request log) and real process exit codes --
@@ -32,7 +32,7 @@ usage() {
 	cat >&2 <<EOF
 Usage: tools/e2e-provision.sh [--keep] [--verbose]
 
-Drive tools/provision.sh end to end against a mock Linode API in Docker. Nothing
+Drive tools/cmd/provision/provision.sh end to end against a mock Linode API in Docker. Nothing
 reaches a real cloud; provisioning is exercised with a placeholder token.
 
 Options:
@@ -77,20 +77,6 @@ trap cleanup EXIT INT TERM
 
 compose() { docker compose -f "$COMPOSE_FILE" -p "$PROJECT" "$@"; }
 
-# Same buildkit fallback the main e2e uses: some hosts have a misconfigured
-# container runtime that only the legacy builder tolerates.
-build_images() {
-	if compose build >"$TMPDIR_E2E/build.log" 2>&1; then
-		return 0
-	fi
-	log_warn "buildkit build failed; retrying with the legacy builder"
-	if DOCKER_BUILDKIT=0 compose build >>"$TMPDIR_E2E/build.log" 2>&1; then
-		return 0
-	fi
-	tail -20 "$TMPDIR_E2E/build.log" >&2
-	die "could not build the provisioning e2e images"
-}
-
 # --- mock control plane -----------------------------------------------------
 mock_url() { printf 'http://127.0.0.1:%s' "$MOCK_PORT"; }
 mock_reset() { curl -fsS -X POST "$(mock_url)/_mock/reset" >/dev/null; }
@@ -101,13 +87,8 @@ mock_config() {
 mock_requests() { curl -fsS "$(mock_url)/_mock/requests"; }
 
 wait_for_mock() {
-	for _ in $(seq 1 30); do
-		if curl -fsS "$(mock_url)/_mock/requests" >/dev/null 2>&1; then
-			return 0
-		fi
-		sleep 1
-	done
-	die "mock API never answered on $(mock_url)"
+	wait_until 30 curl -fsS "$(mock_url)/_mock/requests" >/dev/null 2>&1 ||
+		die "mock API never answered on $(mock_url)"
 }
 
 count_all_requests() { mock_requests | grep -c . || true; }
@@ -165,7 +146,7 @@ is_valid_json() { python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$1
 
 # --- bring the stack up -----------------------------------------------------
 log_info "building images"
-build_images
+e2e_build "$TMPDIR_E2E/build.log" "the provisioning e2e images"
 log_info "starting mock + sshd"
 compose down -v --remove-orphans >/dev/null 2>&1 || true
 compose up -d >/dev/null
