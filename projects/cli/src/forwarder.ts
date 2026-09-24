@@ -262,8 +262,9 @@ export class RequestStream implements Stream {
       return;
     }
     this.aborted = true;
-    this.failBody(`stream reset: ${code}`);
+    this.deps.logger.debug(`stream ${this.streamId} reset: ${code}`);
     this.controller.abort();
+    this.failBody();
   }
 
   /** Abort the exchange from this side, telling the gateway why. */
@@ -274,8 +275,8 @@ export class RequestStream implements Stream {
     this.deps.logger.warn(`resetting stream ${this.streamId}: ${message}`);
     this.sendReset(code, message);
     this.aborted = true;
-    this.failBody(message);
     this.controller.abort();
+    this.failBody();
     this.finish();
   }
 
@@ -492,10 +493,21 @@ export class RequestStream implements Stream {
     this.deps.sink.sendJson(FrameType.RESET, this.streamId, reset);
   }
 
-  private failBody(reason: string): void {
+  /**
+   * Stop feeding the upstream request body. Call it only AFTER aborting the
+   * fetch: the abort cancels the body stream fetch is reading, which releases
+   * the queued chunks. Erroring that stream instead (controller.error) makes
+   * Bun's fetch body pump reject with nobody awaiting it -- from Bun 1.3.14 an
+   * unhandled rejection, which would take the whole agent down with it.
+   */
+  private failBody(): void {
     if (this.bodyController !== null && !this.bodyClosed) {
       this.bodyClosed = true;
-      this.bodyController.error(new Error(reason));
+      try {
+        this.bodyController.close();
+      } catch {
+        // Already cancelled by the aborted fetch: nothing left to release.
+      }
     }
   }
 
