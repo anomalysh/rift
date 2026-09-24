@@ -17,6 +17,14 @@ const breakerThreshold = 3
 // back.
 const breakerCooldown = 10 * time.Second
 
+// breakerForget is how long a node's failure record outlives its last failure.
+// Only a success used to delete a record, so a node that failed and then left
+// the cluster (a replaced pod, a new advertise address) kept one forever, and
+// failures minutes or days apart still counted as "consecutive" and could
+// open the circuit on a healthy node. A minute of quiet wipes the slate; a
+// node still dead then costs at most breakerThreshold dials to re-detect.
+const breakerForget = time.Minute
+
 // breaker is a per-peer circuit breaker. It exists so that a node which has
 // died does not cost every subsequent request a full dial timeout before it is
 // declared unreachable: after a few consecutive failures the circuit opens and
@@ -32,8 +40,9 @@ type breaker struct {
 }
 
 type breakerEntry struct {
-	failures int
-	openedAt time.Time
+	failures    int
+	openedAt    time.Time
+	lastFailure time.Time
 }
 
 func newBreaker() *breaker {
@@ -63,17 +72,27 @@ func (b *breaker) recordFailure(node string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	now := b.now()
+	// Sweep on the failure path only: it is rare, and the map holds at most
+	// the nodes that failed within the last breakerForget.
+	for n, e := range b.state {
+		if now.Sub(e.lastFailure) >= breakerForget {
+			delete(b.state, n)
+		}
+	}
+
 	e := b.state[node]
 	if e == nil {
 		e = &breakerEntry{}
 		b.state[node] = e
 	}
 	e.failures++
+	e.lastFailure = now
 	if e.failures == breakerThreshold {
-		e.openedAt = b.now()
-	} else if e.failures > breakerThreshold && b.now().Sub(e.openedAt) >= breakerCooldown {
+		e.openedAt = now
+	} else if e.failures > breakerThreshold && now.Sub(e.openedAt) >= breakerCooldown {
 		// A probe after cooldown failed again: re-open from now.
-		e.openedAt = b.now()
+		e.openedAt = now
 	}
 }
 
