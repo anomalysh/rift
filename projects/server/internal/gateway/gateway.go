@@ -124,6 +124,20 @@ func (g *Gateway) serve(r *http.Request, conn *websocket.Conn) {
 	)
 	sess := newSession(conn, *tunnel, g.cfg, g.tunnels, g.tokens, sessLogger)
 
+	// Every exit before the session's loops start must still close it. newSession
+	// may have armed an agent-chosen TTL timer that would otherwise pin the
+	// session in memory until it fires, and a public request routed to it in the
+	// moment it was registered would wait on a session nothing will ever serve.
+	// Close only stops the timer and wakes those waiters; it touches neither the
+	// socket nor the registry, so it cannot double up the cleanup each exit
+	// path already does. Once the loops run, they own shutdown instead.
+	loopsStarted := false
+	defer func() {
+		if !loopsStarted {
+			_ = sess.Close(string(tunnelproto.ShutdownServerShutdown))
+		}
+	}()
+
 	// The session outlives the HTTP handler that created it.
 	runCtx, runCancel := context.WithCancel(context.WithoutCancel(r.Context()))
 	defer runCancel()
@@ -216,6 +230,9 @@ func (g *Gateway) serve(r *http.Request, conn *websocket.Conn) {
 	if err != nil {
 		g.logger.Error("could not encode hello_ok", slog.Any("error", err))
 		_ = conn.Close(websocket.StatusInternalError, "internal error")
+		// The session is registered and its row claimed; drop both, exactly as
+		// the failed write below does.
+		g.cleanupSession(runCtx, sess)
 		return
 	}
 	if err := conn.Write(hsCtx, websocket.MessageBinary, frame); err != nil {
@@ -228,6 +245,7 @@ func (g *Gateway) serve(r *http.Request, conn *websocket.Conn) {
 
 	sessLogger.Info("tunnel established", slog.String("url", ok.URL))
 
+	loopsStarted = true
 	sess.wg.Add(3)
 	go sess.writeLoop()
 	go sess.watchdog(runCtx)
@@ -308,6 +326,10 @@ func (e *handshakeError) Error() string { return string(e.code) + ": " + e.messa
 // served (e.g. its protocol is disabled or no port is free), then rejects the
 // handshake so the agent learns why.
 func (g *Gateway) rejectAfterRegister(hsCtx, runCtx context.Context, conn *websocket.Conn, sess *session, code tunnelproto.ErrorCode, message string) {
+	// Close first so a request routed here in the meantime fails now rather
+	// than after the rejection's close handshake. serve's deferred Close makes
+	// this redundant for correctness, but not for latency.
+	_ = sess.Close(string(tunnelproto.ShutdownServerShutdown))
 	g.cleanupSession(runCtx, sess)
 	g.rejectHandshake(hsCtx, conn, &handshakeError{code: code, message: message})
 }

@@ -24,13 +24,18 @@ func (s *session) Upgrade(req *http.Request) (*http.Response, core.TunnelConn, e
 	default:
 	}
 
-	ctx := req.Context()
-	id := s.nextID.Add(1)
-	st := newStream(id, s.cfg.Tunnel.StreamBufferSize)
+	// An upgrade reaches the local service as an HTTP request just like
+	// RoundTrip, so it counts against the same A4 quota.
+	if err := s.admitRequest(); err != nil {
+		return nil, nil, err
+	}
 
-	s.streamsMu.Lock()
-	s.streams[id] = st
-	s.streamsMu.Unlock()
+	ctx := req.Context()
+	st, err := s.openStream()
+	if err != nil {
+		return nil, nil, err
+	}
+	id := st.id
 
 	head := tunnelproto.RequestHead{
 		Method:     req.Method,
@@ -66,6 +71,9 @@ func (s *session) Upgrade(req *http.Request) (*http.Response, core.TunnelConn, e
 			return upgradeResponse(req, rh), conn, nil
 		}
 		// The service answered without switching protocols; relay it normally.
+		if !validResponseStatus(rh.Status) {
+			return nil, nil, s.rejectResponseHead(st, rh)
+		}
 		return s.buildResponse(req, st, rh), nil, nil
 
 	case <-st.done:
@@ -99,11 +107,11 @@ func (s *session) OpenRaw(ctx context.Context) (core.TunnelConn, error) {
 	default:
 	}
 
-	id := s.nextID.Add(1)
-	st := newStream(id, s.cfg.Tunnel.StreamBufferSize)
-	s.streamsMu.Lock()
-	s.streams[id] = st
-	s.streamsMu.Unlock()
+	st, err := s.openStream()
+	if err != nil {
+		return nil, err
+	}
+	id := st.id
 
 	frame, err := tunnelproto.EncodeJSONFrame(tunnelproto.FrameReqHead, id, tunnelproto.RequestHead{Raw: true})
 	if err != nil {
@@ -226,6 +234,12 @@ func (c *tunnelConn) CloseWrite() error {
 // Close tears the stream down in both directions. It aborts the stream, forgets
 // it, and resets the agent if the service->client side was not fully drained.
 func (c *tunnelConn) Close() error {
+	// Cancel before taking writeMu: a Write blocked in enqueue on a full send
+	// queue holds writeMu, and only this cancel can unblock it. Locking first
+	// would make Close wait for the very Write it exists to interrupt.
+	// Cancelling twice is harmless, so this needs no guard.
+	c.cancel()
+
 	c.writeMu.Lock()
 	if c.closed {
 		c.writeMu.Unlock()
@@ -234,6 +248,5 @@ func (c *tunnelConn) Close() error {
 	c.closed = true
 	c.writeMu.Unlock()
 
-	c.cancel()
 	return c.rd.Close()
 }

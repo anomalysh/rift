@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -21,6 +22,32 @@ import (
 // requestChunkSize is how much request body we read per REQ_BODY frame. Well
 // under tunnelproto.MaxPayloadBytes so a chunk never has to be split again.
 const requestChunkSize = 64 << 10
+
+// maxBodyStall bounds how long the read loop may wait for one slow public
+// client to make room in its stream's body buffer. The read loop is shared by
+// every stream on the tunnel and also carries the agent's pings, so while it
+// waits nothing else on the tunnel moves. The budget must therefore sit well
+// under the heartbeat timeout; newSession further caps it at a quarter of
+// HeartbeatTimeout so a tightly tuned deployment keeps the same margin. A
+// client that cannot drain a single chunk in this long has its stream reset
+// rather than holding the whole tunnel hostage.
+const maxBodyStall = 5 * time.Second
+
+// maxStreamsPerSession caps concurrent in-flight streams (requests, upgrades
+// and raw tcp/tls/grpc/udp pipes) on one tunnel. Each stream costs a goroutine
+// or two plus a bounded chunk buffer, so without a cap a flood of public
+// connections to one tunnel grows server memory without bound. Opens beyond
+// the cap fail fast instead of queueing.
+const maxStreamsPerSession = 1024
+
+// errTooManyStreams refuses a new stream on a tunnel already at
+// maxStreamsPerSession.
+var errTooManyStreams = fmt.Errorf("gateway: tunnel has too many concurrent streams: %w", core.ErrTunnelUnavailable)
+
+// errInvalidResponseStatus rejects a RES_HEAD whose status net/http cannot
+// write (WriteHeader panics outside 100-999) or that is meaningless as the
+// final response to an ordinary request (101 Switching Protocols).
+var errInvalidResponseStatus = errors.New("gateway: agent sent an invalid response status")
 
 // hopByHopHeaders are connection-scoped and must not be forwarded through a
 // proxy (RFC 7230 section 6.1). Keys are canonical MIME header form.
@@ -72,6 +99,15 @@ type session struct {
 
 	lastSeenNanos atomic.Int64
 
+	// lastHeartbeatPersist is when a ping last reached the tunnel store. Only
+	// the read loop touches it. See handleControl for why not every ping is
+	// persisted.
+	lastHeartbeatPersist time.Time
+
+	// bodyStallBudget is how long deliverBody may block on one stream. See
+	// maxBodyStall.
+	bodyStallBudget time.Duration
+
 	// requestsServed counts proxied requests, for the A4 --once/--max-requests
 	// lifetime bound. ttlTimer, when set, retires the tunnel after the A4 --ttl
 	// wall-clock budget.
@@ -95,6 +131,10 @@ func newSession(conn *websocket.Conn, t core.Tunnel, cfg *config.Config, tunnels
 		streams: make(map[uint64]*stream),
 	}
 	s.lastSeenNanos.Store(time.Now().UnixNano())
+	s.bodyStallBudget = maxBodyStall
+	if q := cfg.Tunnel.HeartbeatTimeout / 4; q > 0 && q < s.bodyStallBudget {
+		s.bodyStallBudget = q
+	}
 	// A4: retire the tunnel after a wall-clock TTL. The timer fires Close, which
 	// is idempotent, so a session that closes first simply makes it a no-op.
 	if ttl := t.Policy.TTLSeconds; ttl > 0 {
@@ -116,6 +156,44 @@ func (s *session) maxRequests() int64 {
 		return 1
 	}
 	return int64(s.tunnel.Policy.MaxRequests)
+}
+
+// admitRequest charges one request against the A4 --once / --max-requests
+// quota. Requests 1..max are served; the one that would exceed the quota is
+// refused and retires the tunnel, so subsequent requests 404 rather than
+// error. Every entry point that reaches the local service as an HTTP request
+// (RoundTrip and Upgrade) must call it, or a visitor could bypass the quota
+// simply by adding an Upgrade header.
+func (s *session) admitRequest() error {
+	if maxReq := s.maxRequests(); maxReq > 0 {
+		if s.requestsServed.Add(1) > maxReq {
+			_ = s.Close(string(tunnelproto.ShutdownPolicyExpired))
+			return errSessionClosed
+		}
+	}
+	return nil
+}
+
+// openStream allocates a stream id and registers the stream so the read loop
+// can route the agent's frames to it. It refuses once the tunnel already has
+// maxStreamsPerSession streams in flight.
+func (s *session) openStream() (*stream, error) {
+	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	if len(s.streams) >= maxStreamsPerSession {
+		return nil, errTooManyStreams
+	}
+	id := s.nextID.Add(1)
+	st := newStream(id, s.cfg.Tunnel.StreamBufferSize)
+	s.streams[id] = st
+	return st, nil
+}
+
+// validResponseStatus reports whether status can be relayed as the final
+// response to an ordinary (non-upgrade) request. 101 is only meaningful on the
+// upgrade path, which handles it before calling this.
+func validResponseStatus(status int) bool {
+	return status >= 100 && status <= 599 && status != http.StatusSwitchingProtocols
 }
 
 // Close implements core.Session. It requests teardown and returns immediately;
@@ -258,6 +336,15 @@ func (s *session) writeLoop() {
 func (s *session) readLoop(ctx context.Context) {
 	defer s.wg.Done()
 	defer s.abortAllStreams(errSessionClosed)
+	// Every frame here comes from an untrusted agent. A bug in handling one
+	// must cost that agent its tunnel, not take down every tunnel on the node,
+	// which is what an unrecovered panic on this goroutine would do.
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("tunnel read loop panicked; closing tunnel", slog.Any("recover", r))
+			_ = s.Close(string(tunnelproto.ShutdownServerShutdown))
+		}
+	}()
 
 	for {
 		typ, data, err := s.conn.Read(ctx)
@@ -266,6 +353,10 @@ func (s *session) readLoop(ctx context.Context) {
 			_ = s.Close(string(tunnelproto.ShutdownServerShutdown))
 			return
 		}
+		// Any frame proves the agent is alive, not just a ping: a tunnel busy
+		// streaming responses must not be judged dead because its pings are
+		// queued behind body frames.
+		s.lastSeenNanos.Store(time.Now().UnixNano())
 		if typ != websocket.MessageBinary {
 			s.logger.Warn("agent sent a non-binary message; closing tunnel")
 			_ = s.Close(string(tunnelproto.ShutdownServerShutdown))
@@ -312,6 +403,18 @@ func (s *session) dispatch(ctx context.Context, f tunnelproto.Frame) bool {
 		if !ok {
 			return true
 		}
+		if st.bodyEnded() {
+			// Body after RES_END is a protocol violation. The response the
+			// public client is reading is already complete, so drop the chunk
+			// and tell the agent to stop rather than corrupt it.
+			s.logger.Debug("agent sent RES_BODY after RES_END; dropping",
+				slog.Uint64("stream_id", f.StreamID))
+			s.sendReset(st.id, tunnelproto.StreamReset{
+				Code:    tunnelproto.ResetCanceled,
+				Message: "response body after end of stream",
+			})
+			return true
+		}
 		s.deliverBody(st, f.Payload)
 
 	case tunnelproto.FrameResEnd:
@@ -338,12 +441,15 @@ func (s *session) dispatch(ctx context.Context, f tunnelproto.Frame) bool {
 	return true
 }
 
-// deliverBody pushes a chunk to the stream's consumer.
+// deliverBody pushes a chunk to the stream's consumer. Only the read loop
+// calls it, and only after checking that the body has not ended; see
+// stream.body for why that makes the send safe.
 //
 // The chunk channel is bounded, so a public client that stops reading will
-// eventually stall this loop and, with it, every other stream on the tunnel.
-// Rather than block forever we give the slow stream RequestTimeout to catch
-// up, then reset just that stream and keep the tunnel serving the others.
+// eventually stall this loop and, with it, every other stream on the tunnel
+// and the agent's heartbeats. Rather than block for long we give the slow
+// stream bodyStallBudget to make room, then reset just that stream and keep
+// the tunnel serving the others.
 func (s *session) deliverBody(st *stream, chunk []byte) {
 	// coder/websocket allocates a fresh buffer per Read, so retaining the
 	// payload beyond this call is safe.
@@ -357,7 +463,7 @@ func (s *session) deliverBody(st *stream, chunk []byte) {
 	default:
 	}
 
-	timer := time.NewTimer(s.cfg.Tunnel.RequestTimeout)
+	timer := time.NewTimer(s.bodyStallBudget)
 	defer timer.Stop()
 
 	select {
@@ -387,17 +493,26 @@ func (s *session) handleControl(ctx context.Context, payload []byte) bool {
 		if err := tunnelproto.UnmarshalPayload(env, &hb); err != nil {
 			return true
 		}
-		s.lastSeenNanos.Store(time.Now().UnixNano())
-
-		// A reaped or taken-over tunnel is gone from the store. Learning that
-		// here is how a node discovers another node claimed its subdomain.
-		if err := s.tunnels.Heartbeat(ctx, s.tunnel.ID, time.Now()); err != nil {
-			if errors.Is(err, core.ErrNotFound) {
-				s.logger.Info("tunnel no longer registered; closing")
-				_ = s.Close(string(tunnelproto.ShutdownReplaced))
-				return false
+		// Every ping is answered, but at most one per half heartbeat interval
+		// reaches the store. The agent chooses how often it pings, and a
+		// database write per ping would let one agent flooding pings saturate
+		// the connection pool every other tunnel shares. Half an interval
+		// still persists every ping from an agent pinging at the advertised
+		// rate, keeping last_seen_at well inside the reaper's window.
+		now := time.Now()
+		if now.Sub(s.lastHeartbeatPersist) >= s.cfg.Tunnel.HeartbeatInterval/2 {
+			s.lastHeartbeatPersist = now
+			// A reaped or taken-over tunnel is gone from the store. Learning
+			// that here is how a node discovers another node claimed its
+			// subdomain.
+			if err := s.tunnels.Heartbeat(ctx, s.tunnel.ID, now); err != nil {
+				if errors.Is(err, core.ErrNotFound) {
+					s.logger.Info("tunnel no longer registered; closing")
+					_ = s.Close(string(tunnelproto.ShutdownReplaced))
+					return false
+				}
+				s.logger.Error("heartbeat persistence failed", slog.Any("error", err))
 			}
-			s.logger.Error("heartbeat persistence failed", slog.Any("error", err))
 		}
 
 		frame, err := tunnelproto.EncodeControl(tunnelproto.ControlPong, tunnelproto.Heartbeat{TS: hb.TS})
@@ -407,7 +522,7 @@ func (s *session) handleControl(ctx context.Context, payload []byte) bool {
 		_ = s.enqueue(ctx, frame)
 
 	case tunnelproto.ControlPong:
-		s.lastSeenNanos.Store(time.Now().UnixNano())
+		// Nothing to do: readLoop already records liveness for every frame.
 
 	default:
 		s.logger.Debug("ignoring unexpected control message", slog.String("type", string(env.Type)))
@@ -483,23 +598,16 @@ func (s *session) RoundTrip(req *http.Request) (*http.Response, error) {
 	default:
 	}
 
-	// A4: --once / --max-requests. Requests 1..max are served; the one that would
-	// exceed the quota is refused and retires the tunnel, so subsequent requests
-	// 404 rather than error.
-	if maxReq := s.maxRequests(); maxReq > 0 {
-		if s.requestsServed.Add(1) > maxReq {
-			_ = s.Close(string(tunnelproto.ShutdownPolicyExpired))
-			return nil, errSessionClosed
-		}
+	if err := s.admitRequest(); err != nil {
+		return nil, err
 	}
 
 	ctx := req.Context()
-	id := s.nextID.Add(1)
-	st := newStream(id, s.cfg.Tunnel.StreamBufferSize)
-
-	s.streamsMu.Lock()
-	s.streams[id] = st
-	s.streamsMu.Unlock()
+	st, err := s.openStream()
+	if err != nil {
+		return nil, err
+	}
+	id := st.id
 
 	hasBody := req.Body != nil && req.Body != http.NoBody && req.ContentLength != 0
 
@@ -533,6 +641,9 @@ func (s *session) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	select {
 	case rh := <-st.head:
+		if !validResponseStatus(rh.Status) {
+			return nil, s.rejectResponseHead(st, rh)
+		}
 		return s.buildResponse(req, st, rh), nil
 
 	case <-st.done:
@@ -554,6 +665,22 @@ func (s *session) RoundTrip(req *http.Request) (*http.Response, error) {
 		})
 		return nil, ctx.Err()
 	}
+}
+
+// rejectResponseHead fails a stream whose RES_HEAD cannot be relayed: the
+// public side gets an error (a 502) instead of a status net/http would panic
+// on, and the agent is told to stop sending the body.
+func (s *session) rejectResponseHead(st *stream, rh tunnelproto.ResponseHead) error {
+	err := fmt.Errorf("%w: %d", errInvalidResponseStatus, rh.Status)
+	s.logger.Debug("rejecting response head",
+		slog.Uint64("stream_id", st.id), slog.Int("status", rh.Status))
+	st.abort(err)
+	s.forgetStream(st.id)
+	s.sendReset(st.id, tunnelproto.StreamReset{
+		Code:    tunnelproto.ResetCanceled,
+		Message: "invalid response status",
+	})
+	return err
 }
 
 func (s *session) buildResponse(req *http.Request, st *stream, rh tunnelproto.ResponseHead) *http.Response {
