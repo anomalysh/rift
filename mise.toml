@@ -13,7 +13,7 @@ config_roots = ["projects/cli", "projects/server", "projects/manual"]
 # stay current with standard-library security fixes (see projects/server/go.mod).
 # Bumping here should move alongside deploy/Dockerfile and .github/workflows/ci.yml.
 # Shared at the root so every project inherits the same go/bun.
-go = "1.25"
+go = "1.26"
 bun = "1.3.14"
 
 # Aggregate tasks span projects, so they live at the root and depend on the

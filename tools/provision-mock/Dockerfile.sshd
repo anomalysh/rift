@@ -3,7 +3,7 @@
 # loop. No account or key is usable and none needs to be: the provisioner only
 # checks that the port answers. Driven by tools/e2e-provision.sh; not for manual
 # use.
-FROM alpine:3.20
+FROM alpine:3.22
 RUN apk add --no-cache openssh-server \
 	&& ssh-keygen -A
 EXPOSE 22
