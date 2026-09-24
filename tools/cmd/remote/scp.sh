@@ -9,7 +9,7 @@ usage() {
 	cat >&2 <<'EOF'
 Usage: rift-ops ssh scp [--pull] [-r|--recursive] SRC DST
 
-Copy files to/from the rift VPS using the same auth logic as tools/ssh.sh.
+Copy files to/from the rift VPS using the same auth logic as `rift-ops ssh ssh`.
   push (default): copy local SRC -> VPS:DST
   --pull:         copy VPS:SRC  -> local DST
 
@@ -58,23 +58,14 @@ dst="${positionals[1]}"
 require_cmd scp
 require_env RIFT_VPS_HOST
 
-host="$RIFT_VPS_HOST"
-user="${RIFT_VPS_USER:-root}"
-port="${RIFT_VPS_PORT:-22}"
-
-# scp uses uppercase -P for the port.
-scp_args=("${RIFT_SSH_OPTS[@]}" -P "$port")
+# Same auth and options as ssh.sh, shared via rift_ssh_cmd in lib/common.sh.
+rift_ssh_cmd scp
 if [ "$recursive" = true ]; then
-	scp_args+=(-r)
+	RIFT_SSH_CMD+=(-r)
 fi
 
-# Same auth logic as tools/ssh.sh, shared via rift_ssh_auth in lib/common.sh.
-auth=() prefix=()
-rift_ssh_auth auth prefix
-cmd=("${prefix[@]}" scp "${scp_args[@]}" "${auth[@]}")
-
-remote="$user@$host"
+remote="${RIFT_VPS_USER:-root}@$RIFT_VPS_HOST"
 case "$direction" in
-push) exec "${cmd[@]}" "$src" "$remote:$dst" ;;
-pull) exec "${cmd[@]}" "$remote:$src" "$dst" ;;
+push) exec "${RIFT_SSH_CMD[@]}" "$src" "$remote:$dst" ;;
+pull) exec "${RIFT_SSH_CMD[@]}" "$remote:$src" "$dst" ;;
 esac

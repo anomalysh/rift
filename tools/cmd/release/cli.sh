@@ -210,7 +210,7 @@ write_checksums() {
 	(
 		cd "$out"
 		# Deterministic ordering; exclude any pre-existing SHA256SUMS.
-		find . -maxdepth 1 -type f ! -name 'SHA256SUMS' -printf '%P\n' |
+		find . -maxdepth 1 -type f ! -name 'SHA256SUMS' | sed 's|^\./||' |
 			sort |
 			xargs sha256sum >SHA256SUMS
 	)
@@ -266,10 +266,10 @@ print_summary() {
 	printf '  %-28s %10s  %s\n' "--------" "----" "------" >&2
 	local name size sum
 	while IFS= read -r name; do
-		size="$(stat -c '%s' "$out/$name")"
+		size="$(wc -c <"$out/$name" | tr -d ' ')"
 		sum="$(sha256sum "$out/$name" | cut -c1-16)"
 		printf '  %-28s %10s  %s…\n' "$name" "$(human_size "$size")" "$sum" >&2
-	done < <(find "$out" -maxdepth 1 -type f ! -name 'SHA256SUMS' -printf '%P\n' | sort)
+	done < <(cd "$out" && find . -maxdepth 1 -type f ! -name 'SHA256SUMS' | sed 's|^\./||' | sort)
 	printf '\n' >&2
 }
 

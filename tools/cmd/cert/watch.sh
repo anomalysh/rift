@@ -77,11 +77,9 @@ under=0
 cert_days() {
 	local sni="$1" enddate exp
 	# Bound the handshake: an unresponsive host would otherwise hang a cron run
-	# indefinitely. timeout(1) is GNU coreutils; without it, run unbounded.
-	local bound=()
-	command -v timeout >/dev/null 2>&1 && bound=(timeout 25)
+	# indefinitely.
 	enddate="$(printf '' |
-		${bound[@]+"${bound[@]}"} openssl s_client -servername "$sni" -connect "$host:443" 2>/dev/null |
+		rift_timeout 25 openssl s_client -servername "$sni" -connect "$host:443" 2>/dev/null |
 		openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)"
 	[ -n "$enddate" ] || {
 		printf 'unreachable'
