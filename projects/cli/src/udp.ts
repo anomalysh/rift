@@ -70,12 +70,16 @@ export class Deframer {
  */
 export class UdpStream implements Stream {
   private socket: udp.ConnectedSocket<"buffer"> | null = null;
+  // Set once the flow is torn down for any reason (REQ_END, RESET, error); no
+  // datagram is relayed in either direction after it.
   private aborted = false;
   private finished = false;
   private readonly deframer = new Deframer();
   // Datagrams that arrived before the socket finished connecting.
   private pending: Uint8Array[] = [];
   private pendingBytes = 0;
+  // REQ_END arrived before the socket connected: end once pending is flushed.
+  private endPending = false;
   // Replies dropped because the gateway link was backed up (logged once).
   private droppedReplies = 0;
 
@@ -88,25 +92,33 @@ export class UdpStream implements Stream {
 
   private async connect(): Promise<void> {
     const { host, port } = this.deps.target;
+    let socket: udp.ConnectedSocket<"buffer">;
     try {
-      this.socket = await Bun.udpSocket({
+      socket = await Bun.udpSocket({
         connect: { hostname: host, port },
         socket: {
           data: (_sock, data) => this.onServiceDatagram(data),
           error: (_sock, err) => this.onError(err),
         },
       });
-      if (this.aborted) {
-        this.terminateSocket();
-        return;
-      }
-      for (const dgram of this.pending) {
-        this.socket.send(dgram);
-      }
-      this.pending = [];
-      this.pendingBytes = 0;
     } catch (err) {
       this.onError(err);
+      return;
+    }
+    this.socket = socket;
+    if (this.aborted) {
+      // Torn down while connecting: the socket must not outlive the flow.
+      this.closeSocket();
+      return;
+    }
+    const pending = this.pending;
+    this.pending = [];
+    this.pendingBytes = 0;
+    for (const dgram of pending) {
+      this.sendToService(dgram);
+    }
+    if (this.endPending) {
+      this.end();
     }
   }
 
@@ -120,13 +132,13 @@ export class UdpStream implements Stream {
       datagrams = this.deframer.push(chunk);
     } catch (err) {
       const message = errorMessage(err);
-      this.deps.logger.warn(
-        `udp framing error on stream ${this.streamId}: ${message}`,
-      );
       // The gateway still considers the flow open; tell it why it is gone
       // before tearing down locally, or its side lingers until a timeout.
-      this.sendReset(ResetCode.INTERNAL, message);
-      this.reset(ResetCode.INTERNAL);
+      this.fail(
+        ResetCode.INTERNAL,
+        message,
+        `udp framing error on stream ${this.streamId}: ${message}`,
+      );
       return;
     }
     for (const dgram of datagrams) {
@@ -134,20 +146,26 @@ export class UdpStream implements Stream {
     }
   }
 
-  /** REQ_END: the client flow ended. UDP has no FIN, so just tear down. */
+  /**
+   * REQ_END: the client flow ended. UDP has no FIN, so the flow is torn down --
+   * after the datagrams that preceded it, if the socket is still connecting.
+   */
   endBody(): void {
-    this.finishAndClose();
-  }
-
-  /** RESET (or local transport loss): abort the flow. */
-  reset(code: string): void {
     if (this.aborted) {
       return;
     }
-    this.aborted = true;
-    void code;
-    this.terminateSocket();
-    this.finish();
+    if (this.socket === null) {
+      this.endPending = true;
+      return;
+    }
+    this.end();
+  }
+
+  /** RESET (or local transport loss): abort the flow. */
+  reset(_code: string): void {
+    if (!this.aborted) {
+      this.teardown();
+    }
   }
 
   private sendToService(dgram: Uint8Array): void {
@@ -155,11 +173,11 @@ export class UdpStream implements Stream {
       this.pending.push(dgram);
       this.pendingBytes += dgram.length;
       if (this.pendingBytes > MAX_STREAM_BUFFER_BYTES) {
-        this.deps.logger.warn(
+        this.fail(
+          ResetCode.PAYLOAD_TOO_LARGE,
+          "pre-connect backlog full",
           `udp flow ${this.streamId}: pre-connect backlog exceeded ${MAX_STREAM_BUFFER_BYTES} bytes`,
         );
-        this.sendReset(ResetCode.PAYLOAD_TOO_LARGE, "pre-connect backlog full");
-        this.reset(ResetCode.PAYLOAD_TOO_LARGE);
       }
       return;
     }
@@ -198,41 +216,49 @@ export class UdpStream implements Stream {
   }
 
   private onError(err: unknown): void {
-    if (this.aborted || this.finished) {
-      return;
-    }
     const message = errorMessage(err);
-    this.deps.logger.warn(`udp flow ${this.streamId} error: ${message}`);
-    this.sendReset(ResetCode.UPSTREAM_ERROR, message);
-    this.terminateSocket();
-    this.finish();
+    this.fail(
+      ResetCode.UPSTREAM_ERROR,
+      message,
+      `udp flow ${this.streamId} error: ${message}`,
+    );
   }
 
-  private finishAndClose(): void {
-    if (this.finished) {
-      return;
-    }
+  /** End the flow cleanly: RES_END, then tear down. */
+  private end(): void {
     sendStreamEnd(this.deps.sink, this.streamId);
-    this.terminateSocket();
-    this.finish();
+    this.teardown();
   }
 
-  private sendReset(code: ResetCodeValue, message: string): void {
-    sendStreamReset(this.deps.sink, this.streamId, code, message);
-  }
-
-  private terminateSocket(): void {
-    if (this.socket !== null) {
-      this.socket.close();
-      this.socket = null;
-    }
-  }
-
-  private finish(): void {
-    if (this.finished) {
+  /** Abort from this side: log why, tell the gateway, and tear down. */
+  private fail(code: ResetCodeValue, message: string, log: string): void {
+    if (this.aborted) {
       return;
     }
-    this.finished = true;
-    this.deps.onDone(this.streamId);
+    this.deps.logger.warn(log);
+    sendStreamReset(this.deps.sink, this.streamId, code, message);
+    this.teardown();
+  }
+
+  /** Stop relaying, close the socket, and retire the stream (idempotent). */
+  private teardown(): void {
+    this.aborted = true;
+    this.pending = [];
+    this.pendingBytes = 0;
+    this.closeSocket();
+    if (!this.finished) {
+      this.finished = true;
+      this.deps.onDone(this.streamId);
+    }
+  }
+
+  private closeSocket(): void {
+    const socket = this.socket;
+    this.socket = null;
+    try {
+      socket?.close();
+    } catch {
+      // Already closed.
+    }
   }
 }
