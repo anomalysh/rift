@@ -2,10 +2,7 @@ package postgres
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/anomalysh/rift/projects/server/internal/core"
@@ -26,55 +23,30 @@ func scanReservation(sc scanner) (*core.Reservation, error) {
 }
 
 func (s *reservationStore) Get(ctx context.Context, subdomain string) (*core.Reservation, error) {
-	row := s.pool.QueryRow(ctx, `SELECT `+reservationColumns+` FROM reservations WHERE subdomain = $1`, subdomain)
-	r, err := scanReservation(row)
+	r, err := scanReservation(s.pool.QueryRow(ctx,
+		`SELECT `+reservationColumns+` FROM reservations WHERE subdomain = $1`, subdomain))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("reservation %s: %w", subdomain, core.ErrNotFound)
-		}
-		return nil, fmt.Errorf("get reservation: %w", err)
+		return nil, translate(err, "get reservation "+subdomain)
 	}
 	return r, nil
 }
 
+// Create inserts a reservation. An already-reserved subdomain is ErrConflict
+// and an unknown token is ErrNotFound, as in the memory adapter; the admin API
+// relies on the former to answer 409 rather than 500.
 func (s *reservationStore) Create(ctx context.Context, r *core.Reservation) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO reservations (`+reservationColumns+`) VALUES ($1, $2, $3, $4)`,
 		r.Subdomain, r.TokenID, r.Note, r.CreatedAt)
-	if err != nil {
-		return fmt.Errorf("create reservation: %w", err)
-	}
-	return nil
+	return translate(err, "create reservation "+r.Subdomain)
 }
 
 func (s *reservationStore) List(ctx context.Context) ([]core.Reservation, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+reservationColumns+` FROM reservations ORDER BY subdomain`)
-	if err != nil {
-		return nil, fmt.Errorf("list reservations: %w", err)
-	}
-	defer rows.Close()
-
-	var out []core.Reservation
-	for rows.Next() {
-		r, err := scanReservation(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan reservation: %w", err)
-		}
-		out = append(out, *r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate reservations: %w", err)
-	}
-	return out, nil
+	return collect(ctx, s.pool, "list reservations", scanReservation,
+		`SELECT `+reservationColumns+` FROM reservations ORDER BY subdomain`)
 }
 
 func (s *reservationStore) Delete(ctx context.Context, subdomain string) error {
-	tag, err := s.pool.Exec(ctx, `DELETE FROM reservations WHERE subdomain = $1`, subdomain)
-	if err != nil {
-		return fmt.Errorf("delete reservation: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("reservation %s: %w", subdomain, core.ErrNotFound)
-	}
-	return nil
+	return execOne(ctx, s.pool, "delete reservation "+subdomain,
+		`DELETE FROM reservations WHERE subdomain = $1`, subdomain)
 }
