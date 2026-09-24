@@ -156,65 +156,15 @@ func (g *Gateway) serve(r *http.Request, conn *websocket.Conn) {
 	g.track(sess)
 	defer g.untrack(sess)
 
-	// A raw tunnel (tcp/tls) is reached at a host:port, not the http URL. Work
-	// it out now, while we can still cleanly reject the handshake on failure.
-	bindAddr := ""
-	switch tunnel.Protocol {
-	case core.ProtocolTCP:
-		if g.tcp == nil {
-			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeUnsupportedProtocol,
-				"tcp tunnels are not enabled on this server")
-			return
-		}
-		addr, err := g.tcp.bind(sess)
-		if err != nil {
-			g.logger.Error("could not allocate tcp port", slog.Any("error", err))
-			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeInternal,
-				"could not allocate a public tcp port")
-			return
-		}
-		bindAddr = addr
-		defer g.tcp.release(sess)
-
-	case core.ProtocolUDP:
-		if g.udp == nil {
-			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeUnsupportedProtocol,
-				"udp tunnels are not enabled on this server")
-			return
-		}
-		addr, err := g.udp.bind(sess)
-		if err != nil {
-			g.logger.Error("could not allocate udp port", slog.Any("error", err))
-			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeInternal,
-				"could not allocate a public udp port")
-			return
-		}
-		bindAddr = addr
-		defer g.udp.release(sess)
-
-	case core.ProtocolTLS:
-		if !g.cfg.TLSTunnel.Enabled {
-			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeUnsupportedProtocol,
-				"tls tunnels are not enabled on this server")
-			return
-		}
-		// A tls tunnel needs no per-tunnel listener: the shared SNI-routed
-		// listener multiplexes them. It is reached at its subdomain host.
-		bindAddr = net.JoinHostPort(
-			core.Hostname(tunnel.Subdomain, g.cfg.Tunnel.BaseDomain),
-			strconv.Itoa(g.cfg.TLSTunnel.Port()))
-
-	case core.ProtocolGRPC:
-		if !g.cfg.GRPC.Enabled {
-			g.rejectAfterRegister(hsCtx, runCtx, conn, sess, tunnelproto.ErrCodeUnsupportedProtocol,
-				"grpc tunnels are not enabled on this server")
-			return
-		}
-		// Like tls, a grpc tunnel needs no per-tunnel listener: the shared h2c
-		// listener routes by :authority. It is reached at its subdomain host.
-		bindAddr = net.JoinHostPort(
-			core.Hostname(tunnel.Subdomain, g.cfg.Tunnel.BaseDomain),
-			strconv.Itoa(g.cfg.GRPC.Port()))
+	// A raw tunnel is reached at a host:port, not the http URL. Work it out
+	// now, while we can still cleanly reject the handshake on failure.
+	bindAddr, releaseBind, herr := g.bindPublic(sess)
+	if herr != nil {
+		g.rejectAfterRegister(hsCtx, runCtx, conn, sess, herr)
+		return
+	}
+	if releaseBind != nil {
+		defer releaseBind()
 	}
 
 	ok := tunnelproto.HelloOK{
@@ -325,13 +275,71 @@ func (e *handshakeError) Error() string { return string(e.code) + ": " + e.messa
 // rejectAfterRegister tears down a session that was registered but cannot be
 // served (e.g. its protocol is disabled or no port is free), then rejects the
 // handshake so the agent learns why.
-func (g *Gateway) rejectAfterRegister(hsCtx, runCtx context.Context, conn *websocket.Conn, sess *session, code tunnelproto.ErrorCode, message string) {
+func (g *Gateway) rejectAfterRegister(hsCtx, runCtx context.Context, conn *websocket.Conn, sess *session, herr *handshakeError) {
 	// Close first so a request routed here in the meantime fails now rather
 	// than after the rejection's close handshake. serve's deferred Close makes
 	// this redundant for correctness, but not for latency.
 	_ = sess.Close(string(tunnelproto.ShutdownServerShutdown))
 	g.cleanupSession(runCtx, sess)
-	g.rejectHandshake(hsCtx, conn, &handshakeError{code: code, message: message})
+	g.rejectHandshake(hsCtx, conn, herr)
+}
+
+// portForwarder is a per-tunnel public listener allocator: the tcp and udp
+// forwarders.
+type portForwarder interface {
+	bind(sess *session) (addr string, err error)
+	release(sess *session)
+}
+
+// bindPublic reserves what a raw tunnel is reached at besides its URL and
+// returns the host:port to advertise, plus a release func when a per-tunnel
+// port was allocated. An http tunnel needs nothing. A protocol this server
+// has disabled, or a port range with nothing free, rejects the handshake.
+func (g *Gateway) bindPublic(sess *session) (addr string, release func(), herr *handshakeError) {
+	proto := sess.tunnel.Protocol
+	disabled := &handshakeError{
+		code:    tunnelproto.ErrCodeUnsupportedProtocol,
+		message: fmt.Sprintf("%s tunnels are not enabled on this server", proto),
+	}
+
+	switch proto {
+	case core.ProtocolTCP, core.ProtocolUDP:
+		// Assign only a non-nil forwarder: a nil *tcpForwarder in the
+		// interface would not compare equal to nil.
+		var fwd portForwarder
+		if proto == core.ProtocolTCP && g.tcp != nil {
+			fwd = g.tcp
+		} else if proto == core.ProtocolUDP && g.udp != nil {
+			fwd = g.udp
+		}
+		if fwd == nil {
+			return "", nil, disabled
+		}
+		addr, err := fwd.bind(sess)
+		if err != nil {
+			g.logger.Error("could not allocate "+string(proto)+" port", slog.Any("error", err))
+			return "", nil, &handshakeError{
+				code:    tunnelproto.ErrCodeInternal,
+				message: fmt.Sprintf("could not allocate a public %s port", proto),
+			}
+		}
+		return addr, func() { fwd.release(sess) }, nil
+
+	case core.ProtocolTLS, core.ProtocolGRPC:
+		// No per-tunnel listener: one shared listener routes every tunnel of
+		// the protocol (tls by SNI, grpc by :authority), so the tunnel is
+		// reached at its subdomain host on that listener's port.
+		enabled, port := g.cfg.TLSTunnel.Enabled, g.cfg.TLSTunnel.Port()
+		if proto == core.ProtocolGRPC {
+			enabled, port = g.cfg.GRPC.Enabled, g.cfg.GRPC.Port()
+		}
+		if !enabled {
+			return "", nil, disabled
+		}
+		host := core.Hostname(sess.tunnel.Subdomain, g.cfg.Tunnel.BaseDomain)
+		return net.JoinHostPort(host, strconv.Itoa(port)), nil, nil
+	}
+	return "", nil, nil
 }
 
 func (g *Gateway) rejectHandshake(ctx context.Context, conn *websocket.Conn, herr *handshakeError) {
