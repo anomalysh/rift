@@ -111,11 +111,9 @@ func TestRejectAfterRegisterClosesSession(t *testing.T) {
 		t.Fatalf("registered %d sessions, want 1", len(regs))
 	}
 	sess := regs[0].(*session)
-	select {
-	case <-sess.closing:
-	case <-time.After(2 * time.Second):
-		t.Fatal("rejected session was never closed")
-	}
+	// The session is closed before the rejection is written, so by the time
+	// the agent has read it the session must already be closed.
+	assertClosedWith(t, sess, tunnelproto.ShutdownServerShutdown)
 	if sess.ttlTimer == nil {
 		t.Fatal("expected a ttl timer to have been armed")
 	}

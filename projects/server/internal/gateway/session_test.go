@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"testing"
 	"time"
 
@@ -38,20 +39,23 @@ func TestSessionMaxRequests(t *testing.T) {
 	}
 }
 
-// The RoundTrip gate admits exactly maxRequests before it starts rejecting, so
-// a --max-requests=3 tunnel serves 3 and throttles the 4th.
+// The request gate admits exactly maxRequests before it starts rejecting, so
+// a --max-requests=3 tunnel serves 3, refuses the 4th, and retires.
 func TestSessionRequestQuotaGate(t *testing.T) {
-	s := &session{tunnel: core.Tunnel{Policy: core.Policy{MaxRequests: 3}}}
-	maxReq := s.maxRequests()
+	s := newSession(nil, core.Tunnel{ID: "t", Policy: core.Policy{MaxRequests: 3}},
+		testConfig(), &countingTunnels{}, nil, testLogger())
 	served := 0
 	for n := 1; n <= 5; n++ {
-		if s.requestsServed.Add(1) <= maxReq {
+		if err := s.admitRequest(); err == nil {
 			served++
+		} else if !errors.Is(err, errSessionClosed) {
+			t.Fatalf("request %d: err = %v, want errSessionClosed", n, err)
 		}
 	}
 	if served != 3 {
 		t.Fatalf("served %d requests, want 3 within the quota", served)
 	}
+	assertClosedWith(t, s, tunnelproto.ShutdownPolicyExpired)
 }
 
 // RES_BODY after RES_END used to send on the closed body channel and panic
@@ -249,14 +253,8 @@ func TestUpgradeCountsAgainstRequestQuota(t *testing.T) {
 	if r := awaitResult(t, upgrade()); r.err == nil {
 		t.Fatal("second upgrade on a --once tunnel was served")
 	}
-	select {
-	case <-s.closing:
-	case <-time.After(2 * time.Second):
-		t.Fatal("an exhausted --once tunnel did not close")
-	}
-	if got := closeReasonOf(s); got != string(tunnelproto.ShutdownPolicyExpired) {
-		t.Fatalf("close reason = %q, want %q", got, tunnelproto.ShutdownPolicyExpired)
-	}
+	// The refusal retires the tunnel before Upgrade returns.
+	assertClosedWith(t, s, tunnelproto.ShutdownPolicyExpired)
 }
 
 // A status net/http cannot write (it panics in WriteHeader) or a 101 on an
@@ -313,8 +311,13 @@ func TestTunnelConnCloseUnblocksPendingWrite(t *testing.T) {
 		_, err := tc.Write([]byte("stuck"))
 		writeErr <- err
 	}()
-	// Let the Write take writeMu and block in enqueue.
-	time.Sleep(50 * time.Millisecond)
+	// Wait until the Write holds writeMu. The queue is full, so from there it
+	// can only be blocked in enqueue (or about to be): the case under test.
+	conn := tc.(*tunnelConn)
+	for conn.writeMu.TryLock() {
+		conn.writeMu.Unlock()
+		runtime.Gosched()
+	}
 
 	closed := make(chan struct{})
 	go func() {

@@ -263,6 +263,19 @@ func (s *session) streamCount() int {
 	return len(s.streams)
 }
 
+// assertClosedWith fails unless s has already been closed, for reason.
+func assertClosedWith(t *testing.T, s *session, reason tunnelproto.ShutdownReason) {
+	t.Helper()
+	select {
+	case <-s.closing:
+	default:
+		t.Fatal("session is still open")
+	}
+	if got := closeReasonOf(s); got != string(reason) {
+		t.Fatalf("close reason = %q, want %q", got, reason)
+	}
+}
+
 func assertOpen(t *testing.T, s *session) {
 	t.Helper()
 	select {
