@@ -18,7 +18,7 @@ usage() {
 	cat >&2 <<EOF
 Usage: tools/e2e-hostcheck.sh [--keep] [--verbose]
 
-Prove tools/harden.sh actually hardens a host. Builds a throwaway Debian trixie
+Prove tools/cmd/host/harden.sh actually hardens a host. Builds a throwaway Debian trixie
 container (mirroring the production VPS), starts sshd inside it, mints a
 throwaway SSH keypair, and asserts every hardening area took effect -- with real
 observations (sshd -T, a live login, nft list, valid JSON) rather than by

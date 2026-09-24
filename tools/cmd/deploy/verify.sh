@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/../../lib/common.sh"
 
-# verify-deploy.sh -- assert a live rift deployment actually works.
+# verify.sh -- assert a live rift deployment actually works.
 #
 # This is the gate the two TLS incidents needed: a deploy that "succeeded" but
 # left the gateway or the apex without a certificate still handed visitors a

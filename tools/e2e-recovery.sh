@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/e2e-recovery.sh — prove tools/backup.sh and tools/restore.sh actually
+# tools/e2e-recovery.sh — prove the backup and restore commands actually
 # work, in a throwaway Docker stack, never against a real deployment.
 #
 # It does not merely check that files appeared: it seeds known database rows and
@@ -31,7 +31,7 @@ usage() {
 	cat >&2 <<EOF
 Usage: tools/e2e-recovery.sh [--keep]
 
-Exercise tools/backup.sh and tools/restore.sh end to end in a hermetic Docker
+Exercise rift-ops backup backup/restore end to end in a hermetic Docker
 stack (deploy/docker-compose.recovery.yml). Seeds known state, backs it up,
 destroys it, restores it, and asserts it all came back -- plus tamper detection,
 retention, and the --yes gate.

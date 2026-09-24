@@ -1,6 +1,6 @@
 # Provisioning providers
 
-`tools/provision.sh` is provider-agnostic. Everything cloud-specific lives in one
+`tools/cmd/provision/provision.sh` is provider-agnostic. Everything cloud-specific lives in one
 file per provider, `tools/providers/<name>.sh`, which `provision.sh` **sources**.
 Adding Hetzner, Vultr, DigitalOcean, … is a single new file that implements the
 contract below — no change to `provision.sh`.

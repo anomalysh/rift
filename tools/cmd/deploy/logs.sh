@@ -10,7 +10,7 @@ REMOTE_DIR="/opt/rift"
 # logs.sh -- tail the deployed stack's logs over SSH, the first thing anyone
 # reaches for during an incident. A thin, safe wrapper over `docker compose
 # logs` on the VPS (read-only), so nobody has to remember the -f file list or
-# the compose project name. Reuses tools/ssh.sh (and its ControlMaster mux).
+# the compose project name. Reuses ssh.sh (and its ControlMaster mux).
 
 usage() {
 	cat >&2 <<EOF
@@ -25,7 +25,7 @@ Options:
   --since T      Only lines newer than T (e.g. 10m, 2h, 2026-07-10T00:00:00).
   SERVICE        Limit to one compose service.
 
-Environment: RIFT_VPS_HOST (required); see tools/ssh.sh for auth and the rest.
+Environment: RIFT_VPS_HOST (required); see rift-ops ssh ssh --help for auth and the rest.
 EOF
 }
 

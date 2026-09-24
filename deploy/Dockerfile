@@ -38,7 +38,7 @@ EXPOSE 8080 8081 8082
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 	CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
 
-# OCI image metadata. The publish workflow (and tools/publish-images.sh) inject
+# OCI image metadata. The publish workflow (and `rift-ops release images`) inject
 # real values via --build-arg; the defaults keep a plain `docker build` emitting
 # a valid, if generic, labelled image. Last layer on purpose: only the labels
 # change per commit, so the rest of the image stays cached.

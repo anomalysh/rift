@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Shared helpers for the rift backup/restore tooling (tools/backup.sh and
-# tools/restore.sh). SOURCED, not executed; side-effect free at source time.
+# Shared helpers for the rift backup/restore tooling (tools/cmd/backup/backup.sh
+# and restore.sh). SOURCED, not executed; side-effect free at source time.
 # Sourcing scripts run under `set -euo pipefail` and must have already sourced
 # tools/lib/common.sh (for log_info/die/require_cmd).
 #

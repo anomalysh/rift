@@ -96,7 +96,7 @@ shift
 script="$(lookup "$group" "$verb")"
 [ -n "$script" ] || die "unknown verb '$verb' in group '$group' (try: rift-ops $group)"
 
-# `deploy plan` is `remote-deploy.sh --plan`; wire that one alias explicitly.
+# `deploy plan` is `deploy.sh --plan`; wire that one alias explicitly.
 if [ "$group" = deploy ] && [ "$verb" = plan ]; then
 	set -- --plan "$@"
 fi

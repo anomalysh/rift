@@ -71,7 +71,7 @@ Unlike HTTP tunnels, these ports are **not** fronted by Caddy — riftd publishe
 them from its container directly, and the host firewall must allow them. Both
 steps are automatic when the flags above are set:
 
-- **`make deploy`** ([`remote-deploy.sh`](/guides/deploying/)) layers
+- **`make deploy`** ([`rift-ops deploy deploy`](/guides/deploying/)) layers
   `docker-compose.tcp.yml` when `RIFT_TCP_ENABLED` is true, and
   `docker-compose.tls.yml` when `RIFT_TLS_TUNNEL_ENABLED` is true — publishing
   exactly the ports whose feature is on.

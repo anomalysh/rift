@@ -23,7 +23,7 @@ state and health, plus host disk and memory headroom. Read-only.
 Options:
   --strict   Exit non-zero if any container is not running/healthy.
 
-Environment: RIFT_VPS_HOST (required); see tools/ssh.sh for auth.
+Environment: RIFT_VPS_HOST (required); see rift-ops ssh ssh --help for auth.
 EOF
 }
 

@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=tools/lib/e2e-harness.sh
+. "$SCRIPT_DIR/lib/e2e-harness.sh"
 
 # smoke.sh -- a near-free regression net over the 23 hand-rolled argument
 # parsers in tools/. Every operator script must answer `--help` with exit 0 and a
@@ -27,9 +29,6 @@ case "${1:-}" in
 	exit 0
 	;;
 esac
-
-pass=0
-fail=0
 
 # check_help TOOL -- run `TOOL --help` in a subshell and assert exit 0 with
 # output. The subshell contains any stray side effect a broken tool might have.
@@ -79,6 +78,21 @@ while IFS=: read -r file _ ref; do
 done < <(grep -rnoE '\$(RIFT_TOOLS_DIR|SCRIPT_DIR)/[A-Za-z0-9_./-]+\.sh' \
 	"$RIFT_TOOLS_DIR" --include='*.sh' --include=rift-ops)
 
-printf '\n=== summary ===\n  passed=%d failed=%d\n' "$pass" "$fail"
-[ "$fail" -eq 0 ] || die "smoke test failed"
-log_info "smoke test passed"
+printf '\n=== documented script paths exist ===\n'
+# The same rename left help text, comments, compose files and the manual telling
+# operators to run harden.sh, remote-deploy.sh, ssh.sh, ... straight from tools/.
+# Every repo-relative tools/<path>.sh mentioned outside .github/ (whose edits go
+# through a separate review) must name a file that exists.
+while IFS=: read -r file line ref; do
+	ref="tools/${ref#*tools/}"
+	if [ -f "$RIFT_REPO_ROOT/$ref" ]; then
+		pass=$((pass + 1))
+	else
+		printf '    FAIL  %s:%s mentions missing %s\n' "$file" "$line" "$ref"
+		fail=$((fail + 1))
+	fi
+done < <(cd "$RIFT_REPO_ROOT" && grep -rnoE '(^|[^A-Za-z0-9_./-])tools/[A-Za-z0-9_./-]+\.sh' \
+	tools deploy mise-tasks Makefile .env.example README.md RELEASING.md docs projects/manual/src/content \
+	2>/dev/null)
+
+print_summary "smoke test"

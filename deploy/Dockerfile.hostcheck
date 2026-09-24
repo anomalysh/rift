@@ -1,4 +1,4 @@
-# Throwaway host mirror for exercising tools/harden.sh.
+# Throwaway host mirror for exercising tools/cmd/host/harden.sh.
 #
 # FROM debian:trixie to match the production VPS (Debian 13) exactly: a green
 # run here means the hardening actually parses and loads against the same

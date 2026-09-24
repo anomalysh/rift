@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# End-to-end test for the setup wizard (tools/setup.sh). It runs the wizard for
+# End-to-end test for the setup wizard (rift-ops config setup). It runs the wizard for
 # real and proves the files it writes are valid -- crucially by feeding each one
 # to the REAL riftd config loader, so the wizard can never emit a .env that
 # fails config.Load. Nothing here touches the VPS or an existing .env.
@@ -18,7 +18,7 @@ usage() {
 	cat >&2 <<EOF
 Usage: tools/e2e-setup.sh [--keep]
 
-Exercises tools/setup.sh non-interactively for every TLS mode and asserts:
+Exercises rift-ops config setup non-interactively for every TLS mode and asserts:
   - each file is written mode 600 with a valid RIFT_TLS_MODE and a >=32-char
     admin token, and PASSES the real riftd config validator (config.Load);
   - production always sets a TLS mode, and an invalid mode is refused;

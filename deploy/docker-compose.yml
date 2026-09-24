@@ -41,7 +41,7 @@ services:
   riftd:
     build:
       # Context is the repo root so the build can reach projects/server/; the same
-      # relative layout exists on the VPS (/opt/rift) after remote-deploy.
+      # relative layout exists on the VPS (/opt/rift) after `rift-ops deploy deploy`.
       context: ..
       dockerfile: deploy/Dockerfile
     environment:
@@ -77,7 +77,7 @@ services:
       # Off by default. Turning either on is only half the job: the ports must
       # also be published from this container and opened on the host firewall.
       # Layer docker-compose.tcp.yml and/or docker-compose.tls.yml (last, one per
-      # enabled feature) to publish them, and run tools/harden.sh with the same
+      # enabled feature) to publish them, and run `rift-ops host harden` with the same
       # vars to open them in nftables.
       RIFT_TCP_ENABLED: ${RIFT_TCP_ENABLED:-false}
       # Must stay 0.0.0.0 inside the container, or Docker's published ports have

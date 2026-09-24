@@ -48,7 +48,7 @@ RUN set -eux; \
 	echo "compiled DNS providers:"; \
 	printf '%s\n' "$modules" | grep '^dns.providers\.'
 
-# OCI image metadata. The publish workflow (and tools/publish-images.sh) inject
+# OCI image metadata. The publish workflow (and `rift-ops release images`) inject
 # real values via --build-arg; the defaults keep a plain `docker build` emitting
 # a valid, if generic, labelled image.
 ARG IMAGE_SOURCE="https://github.com/anomalysh/rift"

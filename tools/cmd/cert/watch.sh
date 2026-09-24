@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tools/lib/common.sh
 . "$SCRIPT_DIR/../../lib/common.sh"
 
-# cert-watch.sh -- warn before a served TLS certificate expires. Silent cert
+# watch.sh -- warn before a served TLS certificate expires. Silent cert
 # expiry is the likeliest future rift outage: renewal runs unattended, and the
 # first sign of a stall is a visitor seeing an expired-cert error. This checks
 # the apex and the gateway hostname over a real TLS handshake and reports the

@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 REMOTE_DIR="/opt/rift"
 
-# rotate-secret.sh -- rotate a rift secret on the live VPS: mint a fresh value,
+# rotate.sh -- rotate a rift secret on the live VPS: mint a fresh value,
 # rewrite exactly one key in the remote .env atomically, and restart the service
 # that reads it. Closes a real incident-response gap (a leaked admin token today
 # means editing .env by hand and hoping). The new secret travels to the box over
@@ -32,7 +32,7 @@ Postgres password rotation is NOT automated: it must ALTER the database role and
 the DSN in lockstep, and a mistake locks riftd out of its own database. Run that
 by hand (ALTER USER ... PASSWORD, then update RIFT_POSTGRES_DSN + POSTGRES_PASSWORD).
 
-Environment: RIFT_VPS_HOST (required); see tools/ssh.sh for auth.
+Environment: RIFT_VPS_HOST (required); see rift-ops ssh ssh --help for auth.
 EOF
 }
 

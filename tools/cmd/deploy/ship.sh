@@ -24,10 +24,10 @@ usage() {
 Usage: rift-ops deploy ship [--from STAGE] [--only STAGE] [--dry-run] [--yes]
 
 Run the deployment pipeline end to end:
-  provision  create the VPS and wait for SSH        (tools/provision.sh)
-  harden     ssh lockdown, firewall, log rotation    (tools/harden.sh --force)
-  deploy     build + start the stack, reload Caddy    (tools/remote-deploy.sh)
-  verify     assert TLS serves and the stack is up    (this script)
+  provision  create the VPS and wait for SSH        (rift-ops provision create)
+  harden     ssh lockdown, firewall, log rotation    (host harden --force, on the VPS)
+  deploy     build + start the stack, reload Caddy    (rift-ops deploy deploy)
+  verify     assert TLS serves and the stack is up    (rift-ops deploy verify)
 
 Stages run in order. Re-running skips stages already recorded complete in the
 state file; --from re-runs from a stage onward, --only runs exactly one.
@@ -41,7 +41,7 @@ Options:
   --yes          Do not prompt before the destructive-ish stages.
 
 Environment: the provider/VPS/TLS variables from your untracked .env, plus
-RIFT_VPS_* for ssh. Provisioning needs a provider token; see tools/provision.sh.
+RIFT_VPS_* for ssh. Provisioning needs a provider token; see rift-ops provision create --help.
 EOF
 }
 

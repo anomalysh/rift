@@ -19,10 +19,10 @@ Deploy the rift stack to the VPS. Idempotent.
      docker-compose.tcp.yml is appended when RIFT_TCP_ENABLED is true in the
      VPS's deploy/.env, and docker-compose.tls.yml when RIFT_TLS_TUNNEL_ENABLED
      is -- publishing exactly the raw-tunnel ports whose feature is on. Open the
-     same ports on the firewall too (tools/harden.sh).
+     same ports on the firewall too (rift-ops host harden).
 
 Your untracked secrets file must already exist on the VPS at
-$REMOTE_DIR/deploy/.env (e.g. tools/scp.sh .env $REMOTE_DIR/deploy/.env). It is
+$REMOTE_DIR/deploy/.env (e.g. rift-ops ssh scp .env $REMOTE_DIR/deploy/.env). It is
 never part of the tarball, so it is preserved across deploys.
 
 Options:
@@ -102,7 +102,7 @@ if [ "$dry_run" != true ]; then
 		log_info "found $REMOTE_DIR/deploy/.env"
 	else
 		log_warn "no $REMOTE_DIR/deploy/.env on the VPS; compose will fail on required vars."
-		log_warn "Create it first, e.g.: tools/scp.sh .env $REMOTE_DIR/deploy/.env"
+		log_warn "Create it first, e.g.: rift-ops ssh scp .env $REMOTE_DIR/deploy/.env"
 	fi
 fi
 
@@ -134,7 +134,7 @@ fi
 # with rollback.sh and rotate.sh so every recreate uses the same overlays.
 
 # Before rebuilding, tag the currently-running riftd image as :rollback so
-# tools/rollback.sh can restore it if this deploy turns out bad. Best-effort: a
+# rollback.sh can restore it if this deploy turns out bad. Best-effort: a
 # first-ever deploy has no image yet, which is fine.
 compose_up="cd '$REMOTE_DIR/deploy' || exit 1
 $RIFT_REMOTE_COMPOSE_PRELUDE

@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/e2e-harness.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# End-to-end test for tools/provision.sh and the Linode provider. Hermetic: it
+# End-to-end test for tools/cmd/provision/provision.sh and the Linode provider. Hermetic: it
 # drives provision.sh against a MOCK Linode API and a throwaway sshd, both in
 # Docker. No real cloud, no token, no cost. Every assertion is made against the
 # mock's observed HTTP traffic (its request log) and real process exit codes --
@@ -32,7 +32,7 @@ usage() {
 	cat >&2 <<EOF
 Usage: tools/e2e-provision.sh [--keep] [--verbose]
 
-Drive tools/provision.sh end to end against a mock Linode API in Docker. Nothing
+Drive tools/cmd/provision/provision.sh end to end against a mock Linode API in Docker. Nothing
 reaches a real cloud; provisioning is exercised with a placeholder token.
 
 Options:

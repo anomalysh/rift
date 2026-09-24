@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# rift-ops backup restore — restore a rift backup produced by tools/backup.sh.
+# rift-ops backup restore — restore a rift backup produced by rift-ops backup backup.
 #
 # Restores the Postgres database (pg_restore --clean --if-exists) and/or the
 # caddy_data volume (issued TLS certificates + ACME account key) from a backup
@@ -30,7 +30,7 @@ usage() {
 	cat >&2 <<EOF
 Usage: rift-ops backup restore --from <backup-dir-or-MANIFEST> [options]
 
-Restore a backup written by tools/backup.sh. Verifies every sha256 in the
+Restore a backup written by rift-ops backup backup. Verifies every sha256 in the
 MANIFEST first and refuses on mismatch.
 
 Required:

@@ -154,6 +154,6 @@ place. The TLS provider credentials (`RIFT_DNS_*`, `RIFT_ACMEDNS_*`,
 | `RIFT_VPS_USER`           | `tools/`           | SSH user (default `root`).                                        |
 | `RIFT_VPS_PORT`           | `tools/`           | SSH port (default `22`).                                          |
 | `RIFT_VPS_PASSWORD`       | `tools/`           | Bootstrap-only SSH password; rotate after provisioning. Secret.   |
-| `RIFT_ADMIN_URL`          | `mint-token.sh`    | Admin API base URL (default `http://127.0.0.1:8082`).             |
+| `RIFT_ADMIN_URL`          | `tools/`           | Admin API base URL (default `http://127.0.0.1:8082`).             |
 | `RIFT_INSTALL_*`          | `install.sh`       | CLI installer overrides — see [Installation](/getting-started/installation/). |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | compose | Throwaway credentials for the **local** dev Postgres container only. |

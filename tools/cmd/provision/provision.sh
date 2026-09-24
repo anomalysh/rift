@@ -12,8 +12,8 @@ PROVIDERS_DIR="$RIFT_TOOLS_DIR/providers"
 # wait until SSH answers, and STOP. Everything after is a separate, idempotent
 # step:
 #   * DNS is NOT touched -- the operator self-hosts theirs.
-#   * Firewall + SSH lockdown belong to tools/harden.sh.
-#   * Deploying the stack belongs to tools/remote-deploy.sh.
+#   * Firewall + SSH lockdown belong to host harden (run on the VPS).
+#   * Deploying the stack belongs to deploy.sh.
 # The last thing this script prints is the exact next commands to run.
 #
 # All cloud specifics live in tools/providers/<name>.sh (see that README). This
@@ -39,9 +39,9 @@ Usage: rift-ops provision create [options]
        rift-ops provision create --list
        rift-ops provision create --destroy <id>
 
-Create a VPS and wait until SSH answers, then hand off to tools/harden.sh and
-tools/remote-deploy.sh. Creates the instance and installs the deploy key only;
-it does not touch DNS, the firewall, or deploy anything.
+Create a VPS and wait until SSH answers, then hand off to 'rift-ops deploy ship
+--from harden'. Creates the instance and installs the deploy key only; it does
+not touch DNS, the firewall, or deploy anything.
 
 Options:
   --provider NAME     Cloud provider (default: \$RIFT_PROVIDER, else $DEFAULT_PROVIDER).
@@ -244,11 +244,10 @@ print_next_steps() {
 
 Instance is reachable. Provisioning stops here by design.
 
-Next steps (each is separate and idempotent):
-  1. Harden the box (firewall + SSH lockdown):
-       RIFT_VPS_HOST=$ipv4 tools/harden.sh
-  2. Deploy the rift stack:
-       RIFT_VPS_HOST=$ipv4 tools/remote-deploy.sh
+Next steps (each stage is separate and idempotent): harden the box (firewall +
+SSH lockdown), deploy the rift stack, and verify it:
+    rift-ops deploy ship --state-file '$state_file' --from harden
+or one stage at a time with --only harden, --only deploy, --only verify.
 
 State written to: $state_file
 EOF
