@@ -162,7 +162,8 @@ func (i *Ingress) handleReady(w http.ResponseWriter, r *http.Request) {
 // Caddy issues a certificate for any SNI this endpoint approves, so approving
 // broadly would turn the server into an open certificate-issuance relay and
 // burn the ACME rate limit. Only a subdomain that is currently tunnelled or
-// explicitly reserved gets a certificate.
+// explicitly reserved gets a certificate, and a custom domain only while its
+// owning token can actually serve it.
 func (i *Ingress) handleTLSAsk(w http.ResponseWriter, r *http.Request) {
 	domain := r.URL.Query().Get(config.QueryParamDomain)
 	if domain == "" {
@@ -185,25 +186,57 @@ func (i *Ingress) handleTLSAsk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sub, ok := core.SubdomainFromHost(domain, i.cfg.Tunnel.BaseDomain)
-	if !ok {
-		// E1: not a subdomain, but a registered BYO custom domain still gets a
-		// certificate so Caddy can terminate TLS for it on demand.
-		if i.domains != nil {
-			if _, err := i.domains.SubdomainFor(r.Context(), domain); err == nil {
-				w.WriteHeader(http.StatusOK)
-				return
-			} else if !errors.Is(err, core.ErrNotFound) {
-				i.logger.Error("tls-ask custom domain lookup failed", slog.Any("error", err))
-				http.Error(w, "lookup failed", http.StatusInternalServerError)
-				return
-			}
+	ctx := r.Context()
+
+	// A name under the base domain is only ever a subdomain. It is never
+	// looked up as a custom domain: the gateway refuses to register one there,
+	// and consulting the table anyway would let a stale or hand-inserted row
+	// mint a certificate for a multi-label name such as a.b.<base>.
+	if core.IsServerHostname(domain, i.cfg.Tunnel.BaseDomain, i.cfg.Gateway.Hostname) {
+		sub, ok := core.SubdomainFromHost(domain, i.cfg.Tunnel.BaseDomain)
+		if !ok {
+			i.logger.Debug("refusing certificate for a multi-label name", slog.String("domain", domain))
+			http.Error(w, "domain is not served by this host", http.StatusForbidden)
+			return
 		}
-		i.logger.Debug("refusing certificate for foreign domain", slog.String("domain", domain))
-		http.Error(w, "domain is not served by this host", http.StatusForbidden)
+		i.askSubdomain(w, r, sub)
 		return
 	}
 
+	// E1: not a subdomain, but a registered BYO custom domain still gets a
+	// certificate so Caddy can terminate TLS for it on demand.
+	cd, err := i.lookupCustomDomain(ctx, domain)
+	switch {
+	case errors.Is(err, core.ErrNotFound):
+		i.logger.Debug("refusing certificate for foreign domain", slog.String("domain", domain))
+		http.Error(w, "domain is not served by this host", http.StatusForbidden)
+		return
+	case err != nil:
+		i.logger.Error("tls-ask custom domain lookup failed", slog.Any("error", err))
+		http.Error(w, "lookup failed", http.StatusInternalServerError)
+		return
+	}
+
+	// The mapping alone is not enough: it names a subdomain, which anyone may
+	// hold once its owner leaves. Issue only while the owning token holds that
+	// subdomain (live) or has it reserved (about to connect).
+	servable, err := i.customDomainServable(ctx, cd, true)
+	if err != nil {
+		i.logger.Error("tls-ask custom domain owner check failed", slog.Any("error", err))
+		http.Error(w, "lookup failed", http.StatusInternalServerError)
+		return
+	}
+	if !servable {
+		i.logger.Debug("refusing certificate for custom domain with no owning tunnel", slog.String("domain", domain))
+		http.Error(w, "no such tunnel", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// askSubdomain answers tls-ask for a tunnel subdomain: approved when it is
+// live on any node or reserved.
+func (i *Ingress) askSubdomain(w http.ResponseWriter, r *http.Request, sub string) {
 	ctx := r.Context()
 	if _, live := i.registry.Lookup(ctx, sub); live {
 		w.WriteHeader(http.StatusOK)
@@ -233,31 +266,115 @@ func (i *Ingress) handleTLSAsk(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "no such tunnel", http.StatusNotFound)
 }
 
-// subdomainForCustomDomain resolves a request Host that is a registered BYO
-// custom domain to the subdomain it routes to (E1). It returns ("", false) when
-// the store is absent, the lookup misses, or errors.
-func (i *Ingress) subdomainForCustomDomain(r *http.Request) (string, bool) {
+// lookupCustomDomain returns the BYO mapping for host (E1), or ErrNotFound
+// when the store is absent, host is not a valid domain, or it is unmapped.
+func (i *Ingress) lookupCustomDomain(ctx context.Context, host string) (*core.CustomDomain, error) {
 	if i.domains == nil {
-		return "", false
+		return nil, core.ErrNotFound
 	}
-	host := core.NormalizeDomain(r.Host)
-	if host == "" {
-		return "", false
+	d := core.NormalizeDomain(host)
+	if d == "" {
+		return nil, core.ErrNotFound
 	}
-	sub, err := i.domains.SubdomainFor(r.Context(), host)
-	if err != nil {
-		if !errors.Is(err, core.ErrNotFound) {
-			i.logger.Error("custom domain lookup failed", slog.String("domain", host), slog.Any("error", err))
+	return i.domains.Lookup(ctx, d)
+}
+
+// customDomainServable reports whether the token that owns a custom-domain
+// mapping currently holds the mapped subdomain, anywhere in the cluster. The
+// tunnel store is the authority across nodes; a session attached here is
+// checked first because it needs no database round trip. With
+// allowReserved, a reservation of the subdomain by the same token also
+// counts (tls-ask pre-issues for reserved names; routing does not).
+func (i *Ingress) customDomainServable(ctx context.Context, cd *core.CustomDomain, allowReserved bool) (bool, error) {
+	if sess, ok := i.registry.Lookup(ctx, cd.Subdomain); ok {
+		return sess.Tunnel().TokenID == cd.TokenID, nil
+	}
+	t, err := i.tunnels.GetBySubdomain(ctx, cd.Subdomain)
+	switch {
+	case err == nil:
+		return t.TokenID == cd.TokenID, nil
+	case !errors.Is(err, core.ErrNotFound):
+		return false, err
+	}
+	if !allowReserved {
+		return false, nil
+	}
+	res, err := i.reservations.Get(ctx, cd.Subdomain)
+	switch {
+	case err == nil:
+		return res.TokenID == cd.TokenID, nil
+	case errors.Is(err, core.ErrNotFound):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+// target is where a public request's Host points.
+type target struct {
+	// sub is the tunnel subdomain to route to. Empty means the Host is one of
+	// this server's own names that no tunnel serves: the base domain, the
+	// gateway hostname, or a multi-label name under the base.
+	sub string
+	// custom is the BYO mapping the Host matched, or nil for a subdomain Host.
+	// A custom-domain request is served only by a tunnel of custom.TokenID.
+	custom *core.CustomDomain
+}
+
+// resolveHost classifies a request Host.
+//
+// public is true when the Host is a name visitors reach tunnels on: the base
+// domain, anything under it, the gateway hostname, or a registered custom
+// domain. It is false for everything else -- IP literals, single-label names
+// such as the `riftd` container name, and unregistered domains -- which are
+// the names Caddy's ask URL, health checks and operators use to reach this
+// process directly.
+//
+// A custom-domain lookup that fails is treated as public with no target, so a
+// database blip answers "not a tunnel" rather than exposing internal routes
+// on a name that may belong to a customer.
+func (i *Ingress) resolveHost(ctx context.Context, rawHost string) (t target, public bool) {
+	host := normalizeHost(rawHost)
+	if host == "" || net.ParseIP(host) != nil || !strings.Contains(host, ".") {
+		return target{}, false
+	}
+	if core.IsServerHostname(host, i.cfg.Tunnel.BaseDomain, i.cfg.Gateway.Hostname) {
+		if i.ownsHostname(host) {
+			return target{}, true
 		}
-		return "", false
+		sub, ok := core.SubdomainFromHost(host, i.cfg.Tunnel.BaseDomain)
+		if !ok {
+			return target{}, true
+		}
+		return target{sub: sub}, true
 	}
-	return sub, true
+	cd, err := i.lookupCustomDomain(ctx, host)
+	switch {
+	case err == nil:
+		return target{sub: cd.Subdomain, custom: cd}, true
+	case errors.Is(err, core.ErrNotFound):
+		return target{}, false
+	default:
+		i.logger.Error("custom domain lookup failed", slog.String("domain", host), slog.Any("error", err))
+		return target{}, true
+	}
+}
+
+// normalizeHost lower-cases a Host header and strips any port, IPv6 brackets
+// and trailing dot.
+func normalizeHost(raw string) string {
+	h := strings.TrimSpace(raw)
+	if host, _, err := net.SplitHostPort(h); err == nil {
+		h = host
+	}
+	h = strings.TrimSuffix(strings.TrimPrefix(h, "["), "]")
+	return strings.ToLower(strings.TrimSuffix(h, "."))
 }
 
 // ownsHostname reports whether domain is a name this deployment serves in its
 // own right, rather than a tunnel subdomain.
 func (i *Ingress) ownsHostname(domain string) bool {
-	if i.cfg.Gateway.Hostname != "" && domain == i.cfg.Gateway.Hostname {
+	if gw := strings.ToLower(i.cfg.Gateway.Hostname); gw != "" && domain == gw {
 		return true
 	}
 	return domain == strings.ToLower(i.cfg.Tunnel.BaseDomain)
@@ -265,16 +382,27 @@ func (i *Ingress) ownsHostname(domain string) bool {
 
 // handlePublic routes a request from the public internet into a tunnel.
 func (i *Ingress) handlePublic(w http.ResponseWriter, r *http.Request) {
-	sub, ok := core.SubdomainFromHost(r.Host, i.cfg.Tunnel.BaseDomain)
-	if !ok {
-		// E1: the Host is not under the base domain; it may be a registered BYO
-		// custom domain that maps to one of our subdomains.
-		sub, ok = i.subdomainForCustomDomain(r)
-	}
-	if !ok {
+	t, _ := i.resolveHost(r.Context(), r.Host)
+	i.servePublic(w, r, t)
+}
+
+// servePublic routes a request whose Host has been resolved to t.
+func (i *Ingress) servePublic(w http.ResponseWriter, r *http.Request, t target) {
+	if t.sub == "" {
 		i.writeGatewayError(w, r, http.StatusNotFound, "not_a_tunnel",
 			"This host does not correspond to a tunnel.")
 		return
+	}
+	sub := t.sub
+	servedName := core.Hostname(sub, i.cfg.Tunnel.BaseDomain)
+	if t.custom != nil {
+		// Never name the backing subdomain for a custom domain; the visitor
+		// asked for the domain, and the subdomain is the owner's business.
+		servedName = t.custom.Domain
+	}
+	notFound := func() {
+		i.writeGatewayError(w, r, http.StatusNotFound, "tunnel_not_found",
+			"No tunnel is currently serving "+servedName+".")
 	}
 
 	// Annotate once, here at the public edge, so the local service behind the
@@ -286,12 +414,32 @@ func (i *Ingress) handlePublic(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	if sess, found := i.registry.Lookup(ctx, sub); found {
+		// E1: a custom domain is served only by its owner's tunnel. Whoever
+		// else now holds the subdomain gets nothing for it.
+		if t.custom != nil && sess.Tunnel().TokenID != t.custom.TokenID {
+			notFound()
+			return
+		}
 		if upgrade {
 			i.proxyUpgrade(w, r, sess, sub)
 		} else {
 			i.proxy(w, r, sess, sub)
 		}
 		return
+	}
+
+	if t.custom != nil {
+		// Not attached here; ask the tunnel store (the cross-node authority)
+		// who holds the subdomain before forwarding anywhere.
+		owned, err := i.customDomainServable(ctx, t.custom, false)
+		if err != nil {
+			i.logger.Error("custom domain owner check failed",
+				slog.String("domain", t.custom.Domain), slog.Any("error", err))
+		}
+		if !owned {
+			notFound()
+			return
+		}
 	}
 
 	nodeURL, remote, err := i.registry.LocatePeer(ctx, sub)
@@ -310,8 +458,7 @@ func (i *Ingress) handlePublic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	i.writeGatewayError(w, r, http.StatusNotFound, "tunnel_not_found",
-		"No tunnel is currently serving "+core.Hostname(sub, i.cfg.Tunnel.BaseDomain)+".")
+	notFound()
 }
 
 // handleInternalProxy serves a request another node forwarded to us. It never

@@ -108,6 +108,12 @@ type Reservation struct {
 // subdomain whose tunnel serves it (E1). The mapping is upserted each time an
 // agent connects with --domain, so it follows the live tunnel across reconnects
 // even when the subdomain is regenerated.
+//
+// The mapping names a subdomain, not a tunnel, and subdomains are reusable:
+// once the owner disconnects anyone may claim the same label. So the mapping
+// is honoured only while the tunnel holding Subdomain belongs to TokenID;
+// routing on Subdomain alone would hand the domain to whoever claims the label
+// next.
 type CustomDomain struct {
 	Domain    string // fully qualified, lower-cased, no trailing dot
 	Subdomain string // the rift subdomain this domain routes to
@@ -163,8 +169,16 @@ type DomainStore interface {
 	// It refreshes the subdomain when the same token reconnects, and returns
 	// ErrDomainOwned when the domain is already held by a different token.
 	Upsert(ctx context.Context, d CustomDomain) error
-	// SubdomainFor returns the subdomain a custom domain maps to, or ErrNotFound.
-	SubdomainFor(ctx context.Context, domain string) (string, error)
+	// Transfer is Upsert for a domain the caller believes is held by
+	// fromTokenID: it succeeds when the domain is unmapped or still owned by
+	// fromTokenID (or already by d.TokenID), and returns ErrDomainOwned when a
+	// third token got there first. The ownership check and the write are one
+	// atomic step, so two agents reclaiming the same abandoned domain cannot
+	// both win.
+	Transfer(ctx context.Context, d CustomDomain, fromTokenID string) error
+	// Lookup returns the mapping for a custom domain, or ErrNotFound. Callers
+	// must check that the tunnel on Subdomain belongs to TokenID before routing.
+	Lookup(ctx context.Context, domain string) (*CustomDomain, error)
 	// List returns every custom-domain mapping.
 	List(ctx context.Context) ([]CustomDomain, error)
 	// Delete removes a mapping. Deleting an absent domain is not an error.

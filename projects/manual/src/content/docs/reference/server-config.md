@@ -116,6 +116,7 @@ configuration fails at boot rather than as a later handshake error. See
 | `RIFT_REQUEST_TIMEOUT`          | `60s`                | no                | Per-request timeout through the tunnel.                                     |
 | `RIFT_MAX_REQUEST_BODY_BYTES`   | `33554432` (32 MiB)  | no                | Max request body. `0` means unlimited.                                      |
 | `RIFT_MAX_TUNNELS_PER_TOKEN`    | `5`                  | no                | Default concurrent-tunnel cap per token (must be ≥1). Overridable per token. |
+| `RIFT_MAX_CUSTOM_DOMAINS_PER_TUNNEL` | `10`            | no                | Max BYO custom domains (`--domain`) one agent connection may register (must be ≥1). A handshake asking for more is rejected with `invalid_domain`. |
 | `RIFT_STREAM_BUFFER_SIZE`       | `32`                 | no                | Per-stream buffer depth (must be ≥1).                                       |
 
 ## Subdomain rules

@@ -40,3 +40,27 @@ func TestNormalizeDomain(t *testing.T) {
 		}
 	}
 }
+
+func TestIsServerHostname(t *testing.T) {
+	const base, gw = "rift.test", "tunnel.example.org"
+	cases := []struct {
+		host string
+		want bool
+	}{
+		{"rift.test", true},           // the apex
+		{"app.rift.test", true},       // a subdomain
+		{"a.b.rift.test", true},       // a multi-label name under the base
+		{"tunnel.example.org", true},  // the gateway hostname, outside the base
+		{"evilrift.test", false},      // shares a suffix but not a label boundary
+		{"app.acme.com", false},       // a genuine custom domain
+		{"rift.test.acme.com", false}, // the base as a prefix is not under it
+	}
+	for _, c := range cases {
+		if got := IsServerHostname(c.host, base, gw); got != c.want {
+			t.Errorf("IsServerHostname(%q) = %v, want %v", c.host, got, c.want)
+		}
+	}
+	if IsServerHostname("anything.example", base, "") {
+		t.Error("an empty gateway hostname must not match")
+	}
+}

@@ -46,16 +46,40 @@ func (s *domainStore) Upsert(ctx context.Context, d core.CustomDomain) error {
 	return nil
 }
 
-func (s *domainStore) SubdomainFor(ctx context.Context, domain string) (string, error) {
-	var sub string
-	err := s.pool.QueryRow(ctx, `SELECT subdomain FROM custom_domains WHERE domain = $1`, domain).Scan(&sub)
+// Transfer moves a domain to d.TokenID provided it is still held by
+// fromTokenID (or already by d.TokenID). The guard sits in the conflict
+// update's WHERE clause, so the ownership check and the write are a single
+// statement: if another token reclaimed the domain first, no row is returned
+// and the caller gets ErrDomainOwned instead of silently stealing it back.
+// created_at is reset because, for the new owner, the mapping is new.
+func (s *domainStore) Transfer(ctx context.Context, d core.CustomDomain, fromTokenID string) error {
+	row := s.pool.QueryRow(ctx,
+		`INSERT INTO custom_domains (`+domainColumns+`) VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (domain) DO UPDATE
+		 SET subdomain = EXCLUDED.subdomain, token_id = EXCLUDED.token_id, created_at = EXCLUDED.created_at
+		 WHERE custom_domains.token_id = $5 OR custom_domains.token_id = EXCLUDED.token_id
+		 RETURNING token_id`,
+		d.Domain, d.Subdomain, d.TokenID, d.CreatedAt, fromTokenID)
+	var owner string
+	if err := row.Scan(&owner); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("domain %s: %w", d.Domain, core.ErrDomainOwned)
+		}
+		return fmt.Errorf("transfer custom domain: %w", err)
+	}
+	return nil
+}
+
+func (s *domainStore) Lookup(ctx context.Context, domain string) (*core.CustomDomain, error) {
+	row := s.pool.QueryRow(ctx, `SELECT `+domainColumns+` FROM custom_domains WHERE domain = $1`, domain)
+	d, err := scanDomain(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", fmt.Errorf("domain %s: %w", domain, core.ErrNotFound)
+			return nil, fmt.Errorf("domain %s: %w", domain, core.ErrNotFound)
 		}
-		return "", fmt.Errorf("get custom domain: %w", err)
+		return nil, fmt.Errorf("get custom domain: %w", err)
 	}
-	return sub, nil
+	return d, nil
 }
 
 func (s *domainStore) List(ctx context.Context) ([]core.CustomDomain, error) {

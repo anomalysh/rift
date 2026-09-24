@@ -13,6 +13,7 @@ import (
 
 	"github.com/anomalysh/rift/projects/server/internal/config"
 	"github.com/anomalysh/rift/projects/server/internal/core"
+	"github.com/anomalysh/rift/projects/server/internal/store/memory"
 )
 
 const adminToken = "rift_admin_super_secret_value"
@@ -157,6 +158,7 @@ type harness struct {
 	tokens       *fakeTokenStore
 	reservations *fakeReservationStore
 	tunnels      *fakeTunnelStore
+	domains      core.DomainStore
 }
 
 func newHarness(t *testing.T) *harness {
@@ -174,8 +176,9 @@ func newHarness(t *testing.T) *harness {
 		tokens:       newFakeTokenStore(),
 		reservations: newFakeReservationStore(),
 		tunnels:      &fakeTunnelStore{},
+		domains:      memory.New().Domains(),
 	}
-	h.handler = New(cfg, h.tokens, h.reservations, h.tunnels, nil)
+	h.handler = New(cfg, h.tokens, h.reservations, h.tunnels, h.domains, nil)
 	return h
 }
 
@@ -198,7 +201,10 @@ func (h *harness) do(t *testing.T, method, target, body string, authorized bool)
 
 func TestUnauthorizedWithoutBearer(t *testing.T) {
 	h := newHarness(t)
-	for _, target := range []string{config.RouteAdminTokens, config.RouteAdminReservations, config.RouteAdminTunnels} {
+	for _, target := range []string{
+		config.RouteAdminTokens, config.RouteAdminReservations, config.RouteAdminTunnels,
+		config.RouteAdminDomains, config.RouteAdminDomains + "/app.acme.com",
+	} {
 		rr := h.do(t, http.MethodGet, target, "", false)
 		if rr.Code != http.StatusUnauthorized {
 			t.Fatalf("%s without bearer: status = %d, want 401", target, rr.Code)
@@ -420,5 +426,59 @@ func assertErrorCode(t *testing.T, rr *httptest.ResponseRecorder, want string) {
 	}
 	if env.Error.Message == "" {
 		t.Fatal("error message is empty")
+	}
+}
+
+func TestListAndDeleteCustomDomains(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, d := range []core.CustomDomain{
+		{Domain: "app.acme.com", Subdomain: "abc", TokenID: "tok1", CreatedAt: created},
+		{Domain: "www.acme.com", Subdomain: "abc", TokenID: "tok1", CreatedAt: created},
+	} {
+		if err := h.domains.Upsert(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rr := h.do(t, http.MethodGet, config.RouteAdminDomains, "", true)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list domains: status = %d, want 200", rr.Code)
+	}
+	var listed struct {
+		Domains []domainView `json:"domains"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(listed.Domains) != 2 || listed.Domains[0].Domain != "app.acme.com" ||
+		listed.Domains[0].Subdomain != "abc" || listed.Domains[0].TokenID != "tok1" ||
+		!listed.Domains[0].CreatedAt.Equal(created) {
+		t.Fatalf("unexpected list: %+v", listed.Domains)
+	}
+
+	// Mixed case and a trailing dot normalize to the stored form.
+	if rr := h.do(t, http.MethodDelete, config.RouteAdminDomains+"/App.Acme.com.", "", true); rr.Code != http.StatusNoContent {
+		t.Fatalf("delete: status = %d, want 204; body=%s", rr.Code, rr.Body.String())
+	}
+	if _, err := h.domains.Lookup(ctx, "app.acme.com"); err == nil {
+		t.Fatal("mapping still present after delete")
+	}
+
+	// Deleting it again, or a domain that never existed, is a 404.
+	if rr := h.do(t, http.MethodDelete, config.RouteAdminDomains+"/app.acme.com", "", true); rr.Code != http.StatusNotFound {
+		t.Fatalf("second delete: status = %d, want 404", rr.Code)
+	}
+	// A malformed name is a 400, not a lookup.
+	if rr := h.do(t, http.MethodDelete, config.RouteAdminDomains+"/not_a_domain", "", true); rr.Code != http.StatusBadRequest {
+		t.Fatalf("invalid domain: status = %d, want 400", rr.Code)
+	}
+	// Only GET on the collection, only DELETE on an item.
+	if rr := h.do(t, http.MethodPost, config.RouteAdminDomains, "{}", true); rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST collection: status = %d, want 405", rr.Code)
+	}
+	if rr := h.do(t, http.MethodGet, config.RouteAdminDomains+"/www.acme.com", "", true); rr.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET item: status = %d, want 405", rr.Code)
 	}
 }

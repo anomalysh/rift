@@ -159,6 +159,40 @@ Response `200 OK`:
 }
 ```
 
+## Custom domains
+
+An agent registers BYO custom domains (`rift http 3000 --domain app.acme.com`)
+at connect time. Each mapping points a domain at a subdomain **and** records the
+token that registered it. The domain is served only while a tunnel of that same
+token holds the subdomain, so a different token that later claims the same
+subdomain never receives the domain's traffic or a certificate for it.
+
+A mapping stays with its token while the token is active. Another token can take
+it over only once the owning token is revoked, expired, or deleted. To evict a
+mapping held by a still-active token (a squatted domain, say), delete it here.
+
+The base domain, any name under it, and the gateway hostname can never be
+registered as custom domains.
+
+### `GET /v1/domains` — list custom-domain mappings
+
+Response `200 OK`, sorted by domain:
+
+```json
+{
+  "domains": [
+    { "domain": "app.acme.com", "subdomain": "myapp", "token_id": "01J...", "created_at": "2026-07-09T12:00:00Z" }
+  ]
+}
+```
+
+### `DELETE /v1/domains/{domain}` — remove a mapping
+
+Response `204 No Content`. The domain in the path is normalized first (lower-cased,
+trailing dot stripped). `400` (`invalid_domain`) when it is not a valid domain
+name, `404` when no mapping exists. A live tunnel keeps running; its agent
+re-registers the domain the next time it connects.
+
 ## Health
 
 ### `GET /healthz`
@@ -183,10 +217,10 @@ certificate for an SNI. riftd replies:
 
 | Status | Meaning                                                                 |
 | ------ | ----------------------------------------------------------------------- |
-| `200`  | Authorized — the name is the gateway hostname, the base domain, a subdomain with a live tunnel or existing tunnel row, or a reserved subdomain. |
+| `200`  | Authorized — the name is the gateway hostname, the base domain, a subdomain with a live tunnel or existing tunnel row, a reserved subdomain, or a registered custom domain whose owning token currently holds (or has reserved) the mapped subdomain. |
 | `400`  | No `domain` query parameter.                                            |
-| `403`  | The name is not served by this host (not under the base domain).        |
-| `404`  | A subdomain under the base domain with no live tunnel, tunnel row, or reservation. |
+| `403`  | The name is not served by this host: neither a single label under the base domain nor a registered custom domain. A multi-label name under the base domain (`a.b.<base>`) is always refused. |
+| `404`  | A subdomain with no live tunnel, tunnel row, or reservation; or a custom domain whose owning token does not hold the mapped subdomain. |
 | `500`  | A store lookup failed.                                                  |
 
 Approving broadly would turn the server into an open certificate-issuance relay,

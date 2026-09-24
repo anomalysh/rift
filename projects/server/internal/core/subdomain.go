@@ -250,6 +250,20 @@ func NormalizeDomain(domain string) string {
 	return d
 }
 
+// IsServerHostname reports whether host (already normalized: lower-case, no
+// port, no trailing dot) is a name this deployment serves in its own right --
+// the base domain, any name under it, or the agent gateway hostname. Such a
+// name is never a BYO custom domain: letting a token register one would let it
+// capture the apex, shadow a subdomain other tokens use, or hijack the gateway.
+func IsServerHostname(host, baseDomain, gatewayHostname string) bool {
+	base := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(baseDomain), "."))
+	if base != "" && (host == base || strings.HasSuffix(host, "."+base)) {
+		return true
+	}
+	gw := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(gatewayHostname), "."))
+	return gw != "" && host == gw
+}
+
 // SubdomainFromHost extracts the tunnel label from a request Host header.
 // It strips any port, matches the base domain suffix case-insensitively, and
 // rejects multi-label prefixes such as "a.b.base.tld".

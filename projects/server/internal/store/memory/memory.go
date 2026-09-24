@@ -269,14 +269,24 @@ func (s *domainStore) Upsert(_ context.Context, d core.CustomDomain) error {
 	return nil
 }
 
-func (s *domainStore) SubdomainFor(_ context.Context, domain string) (string, error) {
+func (s *domainStore) Transfer(_ context.Context, d core.CustomDomain, fromTokenID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.domains[d.Domain]; ok && existing.TokenID != fromTokenID && existing.TokenID != d.TokenID {
+		return fmt.Errorf("memory: domain %q: %w", d.Domain, core.ErrDomainOwned)
+	}
+	s.domains[d.Domain] = d
+	return nil
+}
+
+func (s *domainStore) Lookup(_ context.Context, domain string) (*core.CustomDomain, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	d, ok := s.domains[domain]
 	if !ok {
-		return "", fmt.Errorf("memory: domain %q: %w", domain, core.ErrNotFound)
+		return nil, fmt.Errorf("memory: domain %q: %w", domain, core.ErrNotFound)
 	}
-	return d.Subdomain, nil
+	return &d, nil
 }
 
 func (s *domainStore) List(context.Context) ([]core.CustomDomain, error) {

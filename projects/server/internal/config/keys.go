@@ -112,7 +112,11 @@ const (
 	KeyRequestTimeout      = EnvPrefix + "REQUEST_TIMEOUT"
 	KeyMaxRequestBodyBytes = EnvPrefix + "MAX_REQUEST_BODY_BYTES"
 	KeyMaxTunnelsPerToken  = EnvPrefix + "MAX_TUNNELS_PER_TOKEN"
-	KeyStreamBufferSize    = EnvPrefix + "STREAM_BUFFER_SIZE"
+	// KeyMaxCustomDomainsPerTunnel caps how many BYO custom domains one agent
+	// handshake may register (E1). Each is a database write and, in on-demand
+	// TLS modes, a certificate the server may be asked to issue.
+	KeyMaxCustomDomainsPerTunnel = EnvPrefix + "MAX_CUSTOM_DOMAINS_PER_TUNNEL"
+	KeyStreamBufferSize          = EnvPrefix + "STREAM_BUFFER_SIZE"
 
 	// Subdomain rules.
 	KeySubdomainMinLength   = EnvPrefix + "SUBDOMAIN_MIN_LENGTH"
@@ -145,6 +149,9 @@ const (
 	RouteAdminTokens       = "/v1/tokens"
 	RouteAdminReservations = "/v1/reservations"
 	RouteAdminTunnels      = "/v1/tunnels"
+	// RouteAdminDomains lists BYO custom-domain mappings (E1); DELETE on
+	// RouteAdminDomains/{domain} removes one, e.g. to evict a squatter.
+	RouteAdminDomains = "/v1/domains"
 )
 
 // HTTP header names used across ingress and peer forwarding.

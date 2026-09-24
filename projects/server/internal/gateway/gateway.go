@@ -447,14 +447,32 @@ func (g *Gateway) authorize(ctx context.Context, r *http.Request, hello *tunnelp
 	// the TLS-ask endpoint will authorize a certificate and the ingress can
 	// route the domain to this tunnel.
 	if herr := g.registerDomains(ctx, hello.Domains, tunnel.Subdomain, token.ID); herr != nil {
+		// The subdomain is already claimed in the store. Rejecting the
+		// handshake without releasing it would leave the label occupied (and
+		// counted against the token's tunnel limit) until the reaper noticed
+		// the missing heartbeats. WithoutCancel: a handshake that failed on
+		// its deadline must still clean up.
+		if err := g.tunnels.Release(context.WithoutCancel(ctx), tunnel.ID); err != nil {
+			g.logger.Warn("could not release tunnel after a rejected domain registration",
+				slog.String("tunnel_id", tunnel.ID), slog.Any("error", err))
+		}
 		return nil, nil, herr
 	}
 	return tunnel, token, nil
 }
 
 // registerDomains upserts each requested custom domain against the tunnel's
-// subdomain. It rejects a malformed domain, one that lies under the base domain
-// (that is a subdomain, requested differently), or one owned by another token.
+// subdomain. It rejects too many domains, a malformed domain, one this server
+// serves in its own right, or one owned by another active token.
+//
+// Server-owned names are the base domain itself, anything under it (including
+// multi-label names such as a.b.<base>, which are not valid subdomains), and
+// the gateway hostname. The ingress routes a custom domain before it would
+// answer "not a tunnel", so registering the apex or the gateway hostname would
+// let one token capture the deployment's own front door.
+//
+// Every domain is validated before any is written, so a hello with one bad
+// entry leaves no partial registrations behind.
 func (g *Gateway) registerDomains(ctx context.Context, domains []string, subdomain, tokenID string) *handshakeError {
 	if len(domains) == 0 {
 		return nil
@@ -465,7 +483,14 @@ func (g *Gateway) registerDomains(ctx context.Context, domains []string, subdoma
 			message: "custom domains are not supported by this server",
 		}
 	}
-	now := time.Now()
+	if limit := g.cfg.Tunnel.CustomDomainLimit(); len(domains) > limit {
+		return &handshakeError{
+			code:    tunnelproto.ErrCodeInvalidDomain,
+			message: fmt.Sprintf("a tunnel may register at most %d custom domains, got %d", limit, len(domains)),
+		}
+	}
+
+	normalized := make([]string, 0, len(domains))
 	for _, raw := range domains {
 		d := core.NormalizeDomain(raw)
 		if d == "" {
@@ -474,15 +499,22 @@ func (g *Gateway) registerDomains(ctx context.Context, domains []string, subdoma
 				message: fmt.Sprintf("invalid custom domain %q", raw),
 			}
 		}
-		if _, ok := core.SubdomainFromHost(d, g.cfg.Tunnel.BaseDomain); ok {
+		if core.IsServerHostname(d, g.cfg.Tunnel.BaseDomain, g.cfg.Gateway.Hostname) {
 			return &handshakeError{
 				code:    tunnelproto.ErrCodeInvalidDomain,
-				message: fmt.Sprintf("%q is under this server's base domain; request it as a subdomain instead", d),
+				message: fmt.Sprintf("%q is this server's own domain or lies under it; request a subdomain instead", d),
 			}
 		}
-		err := g.domains.Upsert(ctx, core.CustomDomain{
-			Domain: d, Subdomain: subdomain, TokenID: tokenID, CreatedAt: now,
-		})
+		normalized = append(normalized, d)
+	}
+
+	now := time.Now()
+	for _, d := range normalized {
+		mapping := core.CustomDomain{Domain: d, Subdomain: subdomain, TokenID: tokenID, CreatedAt: now}
+		err := g.domains.Upsert(ctx, mapping)
+		if errors.Is(err, core.ErrDomainOwned) {
+			err = g.reclaimAbandonedDomain(ctx, mapping, now)
+		}
 		switch {
 		case errors.Is(err, core.ErrDomainOwned):
 			return &handshakeError{
@@ -494,6 +526,38 @@ func (g *Gateway) registerDomains(ctx context.Context, domains []string, subdoma
 			return &handshakeError{code: tunnelproto.ErrCodeInternal, message: "could not register custom domain"}
 		}
 	}
+	return nil
+}
+
+// reclaimAbandonedDomain lets a token take over a custom domain whose owning
+// token can no longer use it (revoked, expired, or deleted). Without this a
+// mapping would outlive its owner forever and squat the domain against the
+// customer who actually controls its DNS. It returns ErrDomainOwned when the
+// current owner is still active, or when another token reclaimed it first.
+func (g *Gateway) reclaimAbandonedDomain(ctx context.Context, mapping core.CustomDomain, now time.Time) error {
+	existing, err := g.domains.Lookup(ctx, mapping.Domain)
+	if errors.Is(err, core.ErrNotFound) {
+		// Deleted between the upsert and now; the transfer below recreates it.
+		existing = &core.CustomDomain{}
+	} else if err != nil {
+		return err
+	}
+	if existing.TokenID != "" {
+		owner, err := g.tokens.FindByID(ctx, existing.TokenID)
+		switch {
+		case err == nil && owner.Active(now):
+			return fmt.Errorf("domain %s: %w", mapping.Domain, core.ErrDomainOwned)
+		case err != nil && !errors.Is(err, core.ErrNotFound):
+			return err
+		}
+	}
+	if err := g.domains.Transfer(ctx, mapping, existing.TokenID); err != nil {
+		return err
+	}
+	g.logger.Info("custom domain reclaimed from an inactive token",
+		slog.String("domain", mapping.Domain),
+		slog.String("previous_token_id", existing.TokenID),
+		slog.String("token_id", mapping.TokenID))
 	return nil
 }
 

@@ -80,7 +80,10 @@ const (
 	DefaultRequestTimeout      = 60 * time.Second
 	DefaultMaxRequestBodyBytes = int64(32 << 20) // 32 MiB
 	DefaultMaxTunnelsPerToken  = 5
-	DefaultStreamBufferSize    = 32
+	// Ten custom domains covers apex + www for a handful of sites; a hello
+	// asking for more is a mistake or an attempt to mint certificates in bulk.
+	DefaultMaxCustomDomainsPerTunnel = 10
+	DefaultStreamBufferSize          = 32
 
 	DefaultSubdomainMinLength = 3
 	DefaultSubdomainMaxLength = 63

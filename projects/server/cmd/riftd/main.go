@@ -135,7 +135,7 @@ func run() error {
 			name: "admin",
 			srv: &http.Server{
 				Addr:              cfg.Admin.Addr,
-				Handler:           adminapi.New(cfg, db.Tokens(), db.Reservations(), db.Tunnels(), logger),
+				Handler:           adminapi.New(cfg, db.Tokens(), db.Reservations(), db.Tunnels(), db.Domains(), logger),
 				ReadHeaderTimeout: cfg.Ingress.ReadTimeout,
 				WriteTimeout:      cfg.Ingress.ReadTimeout,
 			},

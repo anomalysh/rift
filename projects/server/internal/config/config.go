@@ -268,6 +268,19 @@ type Tunnel struct {
 	MaxRequestBodyBytes int64
 	MaxTunnelsPerToken  int
 	StreamBufferSize    int
+	// MaxCustomDomainsPerTunnel bounds the custom domains one handshake may
+	// register. Read it through CustomDomainLimit, which supplies the default
+	// for a zero value.
+	MaxCustomDomainsPerTunnel int
+}
+
+// CustomDomainLimit returns the per-handshake custom-domain cap, falling back
+// to the default when unset (a Config built by hand rather than by Load).
+func (t Tunnel) CustomDomainLimit() int {
+	if t.MaxCustomDomainsPerTunnel > 0 {
+		return t.MaxCustomDomainsPerTunnel
+	}
+	return DefaultMaxCustomDomainsPerTunnel
 }
 
 // PublicURL renders the browser-visible URL for a subdomain.
@@ -372,6 +385,8 @@ func Load() (*Config, error) {
 			MaxRequestBodyBytes: l.integer64(KeyMaxRequestBodyBytes, DefaultMaxRequestBodyBytes),
 			MaxTunnelsPerToken:  l.atLeast(KeyMaxTunnelsPerToken, l.integer(KeyMaxTunnelsPerToken, DefaultMaxTunnelsPerToken), 1),
 			StreamBufferSize:    l.atLeast(KeyStreamBufferSize, l.integer(KeyStreamBufferSize, DefaultStreamBufferSize), 1),
+			MaxCustomDomainsPerTunnel: l.atLeast(KeyMaxCustomDomainsPerTunnel,
+				l.integer(KeyMaxCustomDomainsPerTunnel, DefaultMaxCustomDomainsPerTunnel), 1),
 		},
 	}
 
