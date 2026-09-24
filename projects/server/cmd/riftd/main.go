@@ -169,7 +169,6 @@ func run() error {
 
 	var wg sync.WaitGroup
 	for _, ns := range servers {
-		ns := ns
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -188,7 +187,9 @@ func run() error {
 		slog.Bool("redis", cfg.Redis.Enabled),
 		slog.Bool("admin", cfg.Admin.Enabled),
 		slog.Bool("tcp", cfg.TCP.Enabled),
-		slog.Bool("tls_tunnel", cfg.TLSTunnel.Enabled))
+		slog.Bool("tls_tunnel", cfg.TLSTunnel.Enabled),
+		slog.Bool("udp", cfg.UDP.Enabled),
+		slog.Bool("grpc", cfg.GRPC.Enabled))
 
 	select {
 	case err := <-errCh:

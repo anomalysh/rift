@@ -7,8 +7,8 @@ import (
 )
 
 // TunnelConn is a full-duplex byte stream carrying a connection upgrade
-// (WebSocket and other Upgrade-based protocols, and raw TCP/TLS tunnels)
-// through a tunnel. Read yields bytes coming from the local service; Write
+// (WebSocket and other Upgrade-based protocols), a raw tcp/tls/grpc
+// connection, or a udp flow through a tunnel. Read yields bytes coming from the local service; Write
 // sends bytes to it.
 type TunnelConn interface {
 	io.ReadWriteCloser
@@ -21,8 +21,8 @@ type TunnelConn interface {
 
 // RawOpener is an optional capability of a Session: opening a raw full-duplex
 // byte stream to the agent's local service, with no application handshake. It
-// backs tcp and tls tunnels. The tls listener uses it after resolving a session
-// by ClientHello SNI.
+// backs tcp, tls, grpc and udp tunnels; the shared tls and grpc listeners use
+// it after resolving a session by ClientHello SNI or h2c :authority.
 type RawOpener interface {
 	OpenRaw(ctx context.Context) (TunnelConn, error)
 }
