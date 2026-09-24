@@ -116,6 +116,21 @@ var DefaultSubdomainBlocklist = []string{
 	"rift", "tunnel", "localhost",
 }
 
+// PublishedAdminTokens and PublishedPeerSecrets are credentials written in
+// plain text in this repository's own tooling: the docker-compose development
+// fallback and the e2e harness. Anyone can read them, so production refuses to
+// boot with one even though each passes the length check. They are not
+// defaults -- nothing falls back to them -- only a denylist.
+var (
+	PublishedAdminTokens = []string{
+		"dev-admin-token-change-me-please",           // deploy/docker-compose.yml fallback
+		"e2e-admin-token-not-a-secret-0000000000000", // tools/e2e.sh
+	}
+	PublishedPeerSecrets = []string{
+		"e2e-peer-secret-not-a-secret-000000000000", // tools/e2e.sh
+	}
+)
+
 // Environment names.
 const (
 	EnvDevelopment = "development"

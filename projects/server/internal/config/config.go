@@ -604,6 +604,8 @@ func (c *Config) validate(l *loader) {
 		const minPeerSecretLen = 32
 		if len(c.Cluster.PeerSecret) < minPeerSecretLen {
 			l.fail(KeyPeerSecret, fmt.Errorf("is required when %s is true and must be at least %d characters", KeyRedisEnabled, minPeerSecretLen))
+		} else if c.Production() && isPublished(c.Cluster.PeerSecret, PublishedPeerSecrets) {
+			l.fail(KeyPeerSecret, fmt.Errorf("is a value published in rift's own dev/test tooling; generate a fresh secret for %s", EnvProduction))
 		}
 	}
 
@@ -612,6 +614,48 @@ func (c *Config) validate(l *loader) {
 		const minAdminTokenLen = 32
 		if len(c.Admin.Token) < minAdminTokenLen {
 			l.fail(KeyAdminToken, fmt.Errorf("must be at least %d characters in %s", minAdminTokenLen, EnvProduction))
+		} else if isPublished(c.Admin.Token, PublishedAdminTokens) {
+			// The docker-compose development fallback is exactly 32
+			// characters, so the length check alone would wave it through
+			// when an operator flips RIFT_ENV without setting a token.
+			l.fail(KeyAdminToken, fmt.Errorf("is a value published in rift's own dev/test tooling; generate a fresh token for %s", EnvProduction))
 		}
 	}
+
+	c.validateTrustedProxies(l)
+}
+
+// validateTrustedProxies rejects entries the ingress could not parse (it would
+// otherwise drop them silently, leaving the operator believing a proxy is
+// trusted when it is not), and warns in production when the list is empty.
+func (c *Config) validateTrustedProxies(l *loader) {
+	for _, e := range c.Ingress.TrustedProxyIPs {
+		if _, _, err := net.ParseCIDR(e); err == nil {
+			continue
+		}
+		if net.ParseIP(e) != nil {
+			continue
+		}
+		l.fail(KeyIngressTrustedProxyIPs, fmt.Errorf("expected IP addresses or CIDR blocks, got %q", e))
+	}
+
+	// Behind Caddy, riftd's socket peer is always Caddy. With no trusted
+	// proxy every visitor therefore looks like Caddy's address, and features
+	// keyed on the visitor's address quietly stop working. That is legal (a
+	// deployment without a proxy in front needs no list), so it is a warning.
+	if c.Production() && len(c.Ingress.TrustedProxyIPs) == 0 {
+		l.warn(KeyIngressTrustedProxyIPs, "is empty, so X-Forwarded-For is never believed; behind a reverse proxy "+
+			"(Caddy) every visitor then appears as the proxy's address, tunnel IP allow/deny rules cannot tell "+
+			"visitors apart, and per-IP rate limits share one bucket. Set it to the proxy's address or subnet")
+	}
+}
+
+// isPublished reports whether secret is one of the published values.
+func isPublished(secret string, published []string) bool {
+	for _, p := range published {
+		if secret == p {
+			return true
+		}
+	}
+	return false
 }

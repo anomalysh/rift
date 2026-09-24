@@ -196,3 +196,99 @@ func TestSubdomainBlocklistDeduplicates(t *testing.T) {
 		t.Fatal("expected both the duplicated default and the new label to be blocked")
 	}
 }
+
+// The docker-compose development admin token is exactly 32 characters, so it
+// passes the production length check; production must refuse it by value.
+func TestProductionRejectsPublishedSecrets(t *testing.T) {
+	setMinimalEnv(t)
+	t.Setenv(KeyEnv, EnvProduction)
+	t.Setenv(KeyTLSMode, TLSModeDNS01)
+	t.Setenv(KeyACMEDNSProvider, "rfc2136")
+	t.Setenv(KeyIngressTrustedProxyIPs, "172.16.0.0/12")
+
+	for _, tok := range PublishedAdminTokens {
+		t.Setenv(KeyAdminToken, tok)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), KeyAdminToken) {
+			t.Errorf("published admin token %q: err = %v, want a failure naming %s", tok, err, KeyAdminToken)
+		}
+	}
+	t.Setenv(KeyAdminToken, strings.Repeat("a", 40))
+
+	t.Setenv(KeyRedisEnabled, "true")
+	t.Setenv(KeyNodeAdvertiseURL, "http://10.0.0.4:8080")
+	for _, sec := range PublishedPeerSecrets {
+		t.Setenv(KeyPeerSecret, sec)
+		if _, err := Load(); err == nil || !strings.Contains(err.Error(), KeyPeerSecret) {
+			t.Errorf("published peer secret %q: err = %v, want a failure naming %s", sec, err, KeyPeerSecret)
+		}
+	}
+	t.Setenv(KeyPeerSecret, strings.Repeat("s", 40))
+	if _, err := Load(); err != nil {
+		t.Fatalf("fresh secrets in production: %v", err)
+	}
+
+	// Development keeps working with the compose fallback.
+	t.Setenv(KeyEnv, EnvDevelopment)
+	t.Setenv(KeyAdminToken, PublishedAdminTokens[0])
+	if _, err := Load(); err != nil {
+		t.Fatalf("development with the compose fallback token: %v", err)
+	}
+}
+
+func TestTrustedProxyListIsValidatedAndWarnedAbout(t *testing.T) {
+	setMinimalEnv(t)
+	t.Setenv(KeyEnv, EnvProduction)
+	t.Setenv(KeyTLSMode, TLSModeDNS01)
+	t.Setenv(KeyACMEDNSProvider, "rfc2136")
+
+	// Empty in production: boots, but says why IP rules will not work.
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	warned := false
+	for _, w := range cfg.Warnings {
+		if strings.Contains(w, KeyIngressTrustedProxyIPs) {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("expected a warning naming %s, got %v", KeyIngressTrustedProxyIPs, cfg.Warnings)
+	}
+
+	// Set: no warning.
+	t.Setenv(KeyIngressTrustedProxyIPs, "10.0.0.2, 172.16.0.0/12")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	for _, w := range cfg.Warnings {
+		if strings.Contains(w, KeyIngressTrustedProxyIPs) {
+			t.Fatalf("unexpected warning with a trusted proxy set: %s", w)
+		}
+	}
+
+	// An entry the ingress could not parse is a boot failure, not a silent drop.
+	t.Setenv(KeyIngressTrustedProxyIPs, "caddy")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), KeyIngressTrustedProxyIPs) {
+		t.Fatalf("unparseable trusted proxy: err = %v, want a failure naming %s", err, KeyIngressTrustedProxyIPs)
+	}
+}
+
+func TestMaxCustomDomainsPerTunnel(t *testing.T) {
+	setMinimalEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.Tunnel.CustomDomainLimit(); got != DefaultMaxCustomDomainsPerTunnel {
+		t.Fatalf("default limit = %d, want %d", got, DefaultMaxCustomDomainsPerTunnel)
+	}
+	t.Setenv(KeyMaxCustomDomainsPerTunnel, "0")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), KeyMaxCustomDomainsPerTunnel) {
+		t.Fatalf("a zero limit: err = %v, want a failure naming %s", err, KeyMaxCustomDomainsPerTunnel)
+	}
+	if got := (Tunnel{}).CustomDomainLimit(); got != DefaultMaxCustomDomainsPerTunnel {
+		t.Fatalf("hand-built zero value limit = %d, want the default", got)
+	}
+}
