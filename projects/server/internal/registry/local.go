@@ -40,6 +40,14 @@ func (l *Local) Register(_ context.Context, s core.Session) (core.Session, error
 // replacement when its own read loop finally notices the socket is gone. The
 // identity check is what makes a slow disconnect harmless.
 func (l *Local) Unregister(_ context.Context, s core.Session) error {
+	l.unregister(s)
+	return nil
+}
+
+// unregister is Unregister, reporting whether s was the holder and so was
+// removed. The check and the removal share one critical section: checking
+// first and removing later would let a reconnect slip in between.
+func (l *Local) unregister(s core.Session) bool {
 	sub := s.Tunnel().Subdomain
 
 	l.mu.Lock()
@@ -47,8 +55,9 @@ func (l *Local) Unregister(_ context.Context, s core.Session) error {
 
 	if cur, ok := l.sessions[sub]; ok && cur == s {
 		delete(l.sessions, sub)
+		return true
 	}
-	return nil
+	return false
 }
 
 // Lookup returns the session attached to this node for subdomain.
@@ -70,8 +79,7 @@ func (l *Local) InvalidatePeer(context.Context, string, string) error {
 	return nil
 }
 
-// Subdomains snapshots the attached subdomains. Used by the Redis lease
-// refresher and by diagnostics.
+// Subdomains snapshots the attached subdomains, for the Redis lease refresher.
 func (l *Local) Subdomains() []string {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -79,18 +87,6 @@ func (l *Local) Subdomains() []string {
 	out := make([]string, 0, len(l.sessions))
 	for sub := range l.sessions {
 		out = append(out, sub)
-	}
-	return out
-}
-
-// Sessions snapshots the attached sessions, for graceful shutdown.
-func (l *Local) Sessions() []core.Session {
-	l.mu.RLock()
-	defer l.mu.RUnlock()
-
-	out := make([]core.Session, 0, len(l.sessions))
-	for _, s := range l.sessions {
-		out = append(out, s)
 	}
 	return out
 }
