@@ -178,6 +178,12 @@ export class RequestStream implements Stream {
           start: (controller) => {
             this.bodyController = controller;
           },
+          // fetch cancels the body it is sending when the exchange fails or is
+          // aborted; enqueue() or close() on a cancelled stream throws, so
+          // stop feeding it rather than let a late REQ_BODY throw.
+          cancel: () => {
+            this.bodyClosed = true;
+          },
         },
         {
           highWaterMark: MAX_STREAM_BUFFER_BYTES,
@@ -192,7 +198,13 @@ export class RequestStream implements Stream {
       }
       this.bodyStream = null;
     }
-    void this.run();
+    this.run().catch((err: unknown) => {
+      // Last line of defence: an unexpected throw (a traffic hook, the sink)
+      // fails this one stream instead of escaping as an unhandled rejection,
+      // which would take the whole agent down.
+      this.abortLocal(ResetCode.INTERNAL, errorMessage(err));
+      this.finish();
+    });
   }
 
   /** Feed a REQ_BODY chunk into the upstream request body. */
@@ -387,7 +399,9 @@ export class RequestStream implements Stream {
         if (done) {
           return;
         }
-        if (this.aborted) {
+        if (this.aborted || !this.deps.sink.isOpen()) {
+          // Nobody is left to receive the rest: stop pulling the upstream body
+          // rather than draining it into the void.
           await reader.cancel();
           return;
         }
@@ -433,8 +447,10 @@ export class RequestStream implements Stream {
     const resHead: ResponseHead = { status: res.status, headers: res.headers };
     this.deps.sink.sendJson(FrameType.RES_HEAD, this.streamId, resHead);
     this.headSent = true;
-    if (res.body.length > 0) {
-      this.deps.sink.send(FrameType.RES_BODY, this.streamId, res.body);
+    // A mock body can exceed one frame (a project file is not bound by argv
+    // limits); an oversized frame would throw instead of being sent.
+    for (const part of payloadSlices(res.body)) {
+      this.deps.sink.send(FrameType.RES_BODY, this.streamId, part);
     }
     this.deps.sink.send(FrameType.RES_END, this.streamId, EMPTY_BYTES);
   }

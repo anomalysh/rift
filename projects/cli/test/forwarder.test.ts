@@ -1,10 +1,20 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { gunzipSync, gzipSync } from "node:zlib";
 
-import { FrameType, MAX_STREAM_BUFFER_BYTES } from "../src/constants.ts";
+import {
+  FrameType,
+  MAX_PAYLOAD_BYTES,
+  MAX_STREAM_BUFFER_BYTES,
+} from "../src/constants.ts";
 import { buildUpstreamUrl, RequestStream } from "../src/forwarder.ts";
-import type { RequestHead, ResponseHead } from "../src/protocol.ts";
+import {
+  encodeFrame,
+  encodeJsonFrame,
+  type RequestHead,
+  type ResponseHead,
+} from "../src/protocol.ts";
 import type { FrameSink } from "../src/stream.ts";
+import { buildTrafficPolicy, TrafficController } from "../src/traffic.ts";
 
 /** A body long enough that gzip is meaningfully smaller than the plaintext. */
 const GZIP_PLAINTEXT = "the quick brown fox ".repeat(500);
@@ -136,18 +146,28 @@ afterAll(() => {
   httpsUpstream.stop(true);
 });
 
-/** Collects the frames the stream would have written to the socket. */
+/**
+ * Collects the frames the stream would have written to the socket. Each frame
+ * is really encoded first, so one the wire could not carry (an oversized
+ * payload) throws here exactly as it would in the client.
+ */
 class RecordingSink implements FrameSink {
   readonly heads: ResponseHead[] = [];
   readonly body: number[] = [];
+  bodyFrames = 0;
   ended = false;
   reset: unknown = null;
 
-  send(type: number, _id: bigint, payload: Uint8Array): void {
-    if (type === FrameType.RES_BODY) this.body.push(...payload);
+  send(type: number, id: bigint, payload: Uint8Array): void {
+    encodeFrame(type, id, payload);
+    if (type === FrameType.RES_BODY) {
+      this.bodyFrames++;
+      for (const b of payload) this.body.push(b);
+    }
     if (type === FrameType.RES_END) this.ended = true;
   }
-  sendJson(type: number, _id: bigint, payload: unknown): void {
+  sendJson(type: number, id: bigint, payload: unknown): void {
+    encodeJsonFrame(type, id, payload);
     if (type === FrameType.RES_HEAD) this.heads.push(payload as ResponseHead);
     if (type === FrameType.RESET) this.reset = payload;
   }
@@ -166,12 +186,17 @@ const noopLogger = {
   error: () => {},
 } as unknown as ConstructorParameters<typeof RequestStream>[2]["logger"];
 
-function makeStream(head: RequestHead): {
+function makeStream(
+  head: RequestHead,
+  traffic?: TrafficController,
+): {
   stream: RequestStream;
   sink: RecordingSink;
   done: Promise<void>;
+  isDone: () => boolean;
 } {
   const sink = new RecordingSink();
+  let finished = false;
   let resolve: () => void = () => {};
   const done = new Promise<void>((r) => {
     resolve = r;
@@ -180,9 +205,13 @@ function makeStream(head: RequestHead): {
     target: { host: "127.0.0.1", port: upstreamPort },
     sink,
     logger: noopLogger,
-    onDone: () => resolve(),
+    onDone: () => {
+      finished = true;
+      resolve();
+    },
+    ...(traffic !== undefined ? { traffic } : {}),
   });
-  return { stream, sink, done };
+  return { stream, sink, done, isDone: () => finished };
 }
 
 function head(overrides: Partial<RequestHead> = {}): RequestHead {
@@ -485,8 +514,14 @@ describe("request body backlog cap", () => {
       head({ method: "POST", path: "/slow", has_body: true, headers: {} }),
     );
     const chunk = new Uint8Array(1 << 20);
-    // All pushed within one tick: fetch has had no chance to consume any.
-    for (let i = 0; i <= MAX_STREAM_BUFFER_BYTES / chunk.length; i++) {
+    // Pushed within one tick, so fetch can consume at most what it had
+    // already asked for. Keep pushing until the cap trips (it does so
+    // synchronously) instead of assuming exactly how much fetch pulled.
+    for (
+      let i = 0;
+      i <= (2 * MAX_STREAM_BUFFER_BYTES) / chunk.length && sink.reset === null;
+      i++
+    ) {
       stream.pushBody(chunk);
     }
     await done;
@@ -511,5 +546,72 @@ describe("prototype-named response headers", () => {
       "p",
     ]);
     expect(h?.["x-upstream"]).toEqual(["yes"]);
+  });
+});
+
+// Regression: a mock body larger than one frame was sent as a single RES_BODY,
+// which encodeFrame refuses -- the throw escaped RequestStream.run() as an
+// unhandled rejection and took the whole agent down.
+describe("synthetic responses", () => {
+  test("a mock body larger than one frame is split across RES_BODY frames", async () => {
+    const big = "x".repeat(MAX_PAYLOAD_BYTES + 10);
+    const built = buildTrafficPolicy({ respond: [`/big=${big}`] });
+    if (!("policy" in built) || built.policy === undefined) {
+      throw new Error("expected a traffic policy");
+    }
+    const { sink, done } = makeStream(
+      head({ path: "/big" }),
+      new TrafficController(built.policy),
+    );
+    await done;
+    expect(sink.reset).toBeNull();
+    expect(sink.heads[0]?.status).toBe(200);
+    expect(sink.bodyFrames).toBe(2);
+    expect(sink.body.length).toBe(big.length);
+    expect(sink.ended).toBe(true);
+  });
+
+  test("an unexpected throw resets the one stream instead of escaping", async () => {
+    const throwing = {
+      synthesize: () => {
+        throw new Error("hook exploded");
+      },
+    } as unknown as TrafficController;
+    const { sink, done } = makeStream(head({ path: "/x" }), throwing);
+    await done;
+    expect(JSON.stringify(sink.reset)).toContain("hook exploded");
+  });
+});
+
+// Regression: once fetch cancelled the request body stream (the exchange
+// failed or was answered), a late REQ_BODY or REQ_END called enqueue()/close()
+// on the cancelled stream, which throws out of the client's message handler.
+describe("request body after fetch cancels it", () => {
+  test("late REQ_BODY and REQ_END are dropped, not thrown", async () => {
+    const realFetch = globalThis.fetch;
+    let cancelled: () => void = () => {};
+    const bodyCancelled = new Promise<void>((r) => {
+      cancelled = r;
+    });
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      const body = init?.body;
+      if (!(body instanceof ReadableStream)) throw new Error("expected a body");
+      await body.cancel();
+      cancelled();
+      // Hold the response open: the stream stays live while the body is gone.
+      return new Response(new ReadableStream({ start() {} }));
+    }) as typeof fetch;
+    try {
+      const { stream, done } = makeStream(
+        head({ method: "POST", path: "/cancel", has_body: true }),
+      );
+      await bodyCancelled;
+      expect(() => stream.pushBody(new Uint8Array([1, 2, 3]))).not.toThrow();
+      expect(() => stream.endBody()).not.toThrow();
+      stream.reset("canceled");
+      await done;
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 });
