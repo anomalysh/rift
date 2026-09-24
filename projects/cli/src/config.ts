@@ -100,6 +100,17 @@ export function isLoopbackHost(host: string): boolean {
 }
 
 /**
+ * `host:port` as it appears in a URL authority or a Host header. An IPv6
+ * literal must be bracketed there ("[::1]:3000"), or its own colons swallow the
+ * port; a host already given in brackets is left as is.
+ */
+export function formatAuthority(host: string, port: number): string {
+  const bracketed =
+    host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  return `${bracketed}:${port}`;
+}
+
+/**
  * Why the gateway URL must not be dialed, or null if it may. The token travels
  * in the first frame, so a cleartext `ws://` connection hands it to anyone on
  * the path. Plain ws:// is therefore only accepted for a loopback gateway (a

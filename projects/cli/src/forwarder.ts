@@ -2,6 +2,7 @@
 // RequestStream issues a streaming fetch to the local service and streams the
 // response back as RES_HEAD / RES_BODY* / RES_END frames, or a RESET on error.
 
+import { formatAuthority } from "./config.ts";
 import {
   DRAIN_POLL_INTERVAL_MS,
   FrameType,
@@ -71,10 +72,7 @@ export function buildUpstreamUrl(
   path: string,
 ): URL {
   const scheme = tls ? "https" : "http";
-  // A bare IPv6 literal must be bracketed to form an authority.
-  const authority =
-    host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
-  const base = new URL(`${scheme}://${authority}:${port}/`);
+  const base = new URL(`${scheme}://${formatAuthority(host, port)}/`);
   const problem = requestTargetProblem("GET", path === "*" ? "/" : path);
   if (problem !== null) {
     throw new Error(`refusing request target: ${problem}`);

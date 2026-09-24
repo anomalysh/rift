@@ -11,6 +11,7 @@
 
 import { Backoff } from "./backoff.ts";
 import {
+  formatAuthority,
   gatewayTransportProblem,
   isLoopbackHost,
   type ResolvedConfig,
@@ -407,10 +408,11 @@ export class TunnelClient {
     // http and https both proxy HTTP over the tunnel; the scheme shown reflects
     // the local upstream, so https reads `https://host:port`. A raw tunnel
     // (tcp/tls) has no scheme and is shown as a bare host:port.
+    const authority = formatAuthority(this.config.host, this.port);
     const localAddr =
       this.protocol === "http" || this.protocol === "https"
-        ? `${this.protocol}://${this.config.host}:${this.port}`
-        : `${this.config.host}:${this.port}`;
+        ? `${this.protocol}://${authority}`
+        : authority;
     if (!this.established) {
       this.established = true;
       const session: SessionInfo = {

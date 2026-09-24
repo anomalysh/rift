@@ -19,6 +19,7 @@
 //     BACKPRESSURE_THRESHOLD_BYTES, reading from the local socket is paused.
 
 import type { Socket } from "bun";
+import { formatAuthority } from "./config.ts";
 import {
   DRAIN_POLL_INTERVAL_MS,
   FrameType,
@@ -491,7 +492,11 @@ export class UpgradeStream implements Stream {
 
   /** Reconstruct the raw HTTP upgrade request, pointing Host at the local target. */
   private buildUpgradeRequest(): Uint8Array {
-    const hostValue = `${this.deps.target.host}:${this.deps.target.port}`;
+    // Bracketed for an IPv6 target: "Host: ::1:3000" is not a valid Host.
+    const hostValue = formatAuthority(
+      this.deps.target.host,
+      this.deps.target.port,
+    );
     const lines: string[] = [`${this.head.method} ${this.head.path} HTTP/1.1`];
     let hostSet = false;
     for (const [name, values] of Object.entries(this.head.headers)) {

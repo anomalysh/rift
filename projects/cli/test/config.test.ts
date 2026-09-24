@@ -15,6 +15,7 @@ import type { FlagConfig } from "../src/args.ts";
 import {
   ConfigError,
   configFilePath,
+  formatAuthority,
   gatewayTransportProblem,
   isLoopbackHost,
   loadConfigFile,
@@ -428,5 +429,16 @@ describe("isLoopbackHost", () => {
     ]) {
       expect(isLoopbackHost(h)).toBe(false);
     }
+  });
+});
+
+// Regression: an IPv6 upstream was spliced in as "::1:3000" -- an invalid Host
+// header on a replayed upgrade request and a misleading "forwarding" line.
+describe("formatAuthority", () => {
+  test("brackets a bare IPv6 literal and leaves everything else alone", () => {
+    expect(formatAuthority("::1", 3000)).toBe("[::1]:3000");
+    expect(formatAuthority("[::1]", 3000)).toBe("[::1]:3000");
+    expect(formatAuthority("127.0.0.1", 3000)).toBe("127.0.0.1:3000");
+    expect(formatAuthority("localhost", 80)).toBe("localhost:80");
   });
 });
