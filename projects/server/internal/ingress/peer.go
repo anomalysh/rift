@@ -1,12 +1,16 @@
 package ingress
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -66,10 +70,31 @@ func (i *Ingress) forwardToPeer(w http.ResponseWriter, r *http.Request, nodeURL,
 	i.relayPeerResponse(w, r, resp, sub)
 }
 
+// errInvalidPeerURL means a routing lease named something other than a plain
+// http(s) base URL. Leases come from Redis; forwarding the peer secret and a
+// visitor's request to whatever a corrupted or hostile entry names would leak
+// both, so such a lease is treated exactly like an unreachable node.
+var errInvalidPeerURL = errors.New("ingress: peer lease is not an http(s) URL")
+
+// validPeerURL reports whether nodeURL is an absolute http or https URL with a
+// host and nothing a node advertise URL never carries (credentials, a query,
+// a fragment).
+func validPeerURL(nodeURL string) bool {
+	u, err := url.Parse(nodeURL)
+	if err != nil {
+		return false
+	}
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" &&
+		u.User == nil && u.RawQuery == "" && u.Fragment == "" && !u.ForceQuery
+}
+
 // doPeerForward performs one forward attempt. A non-nil error is a transport
-// failure (the node is unreachable); an HTTP error status comes back as a
-// normal response for the caller to relay.
+// failure (the node is unreachable, or its lease is unusable); an HTTP error
+// status comes back as a normal response for the caller to relay.
 func (i *Ingress) doPeerForward(r *http.Request, nodeURL, sub string) (*http.Response, error) {
+	if !validPeerURL(nodeURL) {
+		return nil, fmt.Errorf("%w: %q", errInvalidPeerURL, nodeURL)
+	}
 	target := strings.TrimSuffix(nodeURL, "/") + config.RouteInternalProxy
 
 	outbound, err := http.NewRequestWithContext(r.Context(), r.Method, target, r.Body)
@@ -91,6 +116,9 @@ func (i *Ingress) doPeerForward(r *http.Request, nodeURL, sub string) (*http.Res
 	outbound.Header.Set(config.HeaderRiftForwardedURI, r.URL.RequestURI())
 	outbound.Header.Set(config.HeaderRiftPeerToken, i.cfg.Cluster.PeerSecret)
 	outbound.Header.Set(config.HeaderRiftProtoVersion, strconv.Itoa(tunnelproto.Version))
+	// The receiving node's socket peer is this node, not the visitor, so the
+	// address its IP policy and rate limit must judge travels explicitly.
+	outbound.Header.Set(config.HeaderRiftClientIP, i.clientIP(r))
 
 	return i.peers.Do(outbound)
 }
@@ -136,30 +164,107 @@ func authenticatePeer(r *http.Request, secret string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(secret)) == 1
 }
 
-// clientIP resolves the public client's address.
-//
-// X-Forwarded-For is trivially spoofable, so it is honoured only when the
-// immediate peer is a configured trusted proxy. Otherwise the socket address
-// wins, even though it will be the reverse proxy's own address.
+// clientIPKey is the request-context key holding the resolved client address.
+type clientIPKey struct{}
+
+// withClientIP pins the resolved client address to the request, so every
+// later consumer (policy, rate limit, X-Real-IP, the agent's RemoteAddr)
+// agrees on it and nothing re-derives it from headers a later hop may carry.
+func withClientIP(r *http.Request, ip string) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), clientIPKey{}, ip))
+}
+
+// clientIP returns the public client's address: the value pinned by
+// withClientIP when there is one, otherwise resolveClientIP.
 func (i *Ingress) clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
+	if ip, ok := r.Context().Value(clientIPKey{}).(string); ok && ip != "" {
+		return ip
 	}
+	return i.resolveClientIP(r)
+}
+
+// resolveClientIP works out the public client's address from the socket and,
+// when the socket peer is a trusted proxy, the forwarding headers.
+//
+// X-Forwarded-For is trivially spoofable: each proxy APPENDS the address it
+// received the request from, so only entries added by proxies we trust are
+// believable, and those are the right-most ones. The chain is therefore walked
+// right to left, skipping trusted proxies, and the first untrusted address is
+// the client. Taking the left-most entry instead would return whatever the
+// client wrote into the header before the first proxy appended to it.
+//
+// An entry that is not an IP address means the trusted part of the chain
+// ended in something no proxy would write; the nearest address we can vouch
+// for (the last trusted hop) is returned rather than attacker-chosen text, so
+// such requests share one rate-limit bucket instead of minting fresh ones.
+//
+// X-Real-IP is consulted only when the socket peer is trusted and sent no
+// X-Forwarded-For at all.
+func (i *Ingress) resolveClientIP(r *http.Request) string {
+	host := socketIP(r)
 	if !i.isTrustedProxy(host) {
 		return host
 	}
-	if xff := r.Header.Get(config.HeaderForwardedFor); xff != "" {
-		// The left-most entry is the original client, per convention. Entries
-		// to its left cannot exist; entries to its right were added by proxies.
-		if first := strings.TrimSpace(strings.Split(xff, ",")[0]); first != "" {
-			return first
+	entries := forwardedForEntries(r.Header)
+	if len(entries) == 0 {
+		if real := parseIPEntry(r.Header.Get(config.HeaderRealIP)); real != "" {
+			return real
 		}
+		return host
 	}
-	if real := r.Header.Get(config.HeaderRealIP); real != "" {
-		return strings.TrimSpace(real)
+	nearest := host
+	for k := len(entries) - 1; k >= 0; k-- {
+		ip := parseIPEntry(entries[k])
+		if ip == "" {
+			return nearest
+		}
+		if !i.isTrustedProxy(ip) {
+			return ip
+		}
+		nearest = ip
+	}
+	// Every hop is a trusted proxy: the request originated at one of them.
+	return nearest
+}
+
+// socketIP is the immediate peer's address without its port.
+func socketIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
 	}
 	return host
+}
+
+// forwardedForEntries flattens every X-Forwarded-For header line into its
+// comma-separated entries, in order. RFC 9110 lets a proxy send the list as
+// repeated lines as well as one comma-joined line; both mean the same chain.
+func forwardedForEntries(h http.Header) []string {
+	var out []string
+	for _, line := range h.Values(config.HeaderForwardedFor) {
+		for _, e := range strings.Split(line, ",") {
+			if e = strings.TrimSpace(e); e != "" {
+				out = append(out, e)
+			}
+		}
+	}
+	return out
+}
+
+// parseIPEntry parses one forwarding-header entry, tolerating the host:port
+// and [v6]:port forms some proxies write, and returns the canonical address or
+// "" when it is not an IP.
+func parseIPEntry(e string) string {
+	e = strings.TrimSpace(e)
+	if ip := net.ParseIP(e); ip != nil {
+		return ip.String()
+	}
+	if host, _, err := net.SplitHostPort(e); err == nil {
+		if ip := net.ParseIP(host); ip != nil {
+			return ip.String()
+		}
+	}
+	return ""
 }
 
 func (i *Ingress) isTrustedProxy(host string) bool {

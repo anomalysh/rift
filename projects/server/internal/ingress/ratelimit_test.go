@@ -5,6 +5,23 @@ import (
 	"time"
 )
 
+// Per-IP limits key an IPv6 client by its /64, since one subscriber routinely
+// holds a whole /64 and could otherwise mint a fresh bucket per request.
+func TestRateLimitClientKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"203.0.113.9":            "203.0.113.9",
+		"::ffff:203.0.113.9":     "203.0.113.9",
+		"2001:db8:1:2:aaaa::1":   "2001:db8:1:2::/64",
+		"2001:db8:1:2:ffff::abc": "2001:db8:1:2::/64",
+		"2001:db8:1:3::1":        "2001:db8:1:3::/64",
+		"not-an-ip":              "not-an-ip",
+	} {
+		if got := rateLimitClientKey(in); got != want {
+			t.Errorf("rateLimitClientKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestRateLimiterBurstThenRefill(t *testing.T) {
 	now := time.Unix(0, 0)
 	rl := newRateLimiter()

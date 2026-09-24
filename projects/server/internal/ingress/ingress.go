@@ -92,7 +92,11 @@ func New(
 			// No client timeout: a tunnelled response may legitimately stream
 			// for a long time. The per-request context carries the deadline.
 			Transport: &http.Transport{
-				Proxy:                 http.ProxyFromEnvironment,
+				// Never an environment HTTP proxy: node-to-node hops carry the
+				// peer secret and visitors' requests, and belong on the
+				// cluster's private network, not relayed through whatever
+				// HTTP_PROXY the process happened to inherit.
+				Proxy:                 nil,
 				MaxIdleConnsPerHost:   32,
 				IdleConnTimeout:       90 * time.Second,
 				ResponseHeaderTimeout: cfg.Tunnel.RequestTimeout,
@@ -405,6 +409,13 @@ func (i *Ingress) servePublic(w http.ResponseWriter, r *http.Request, t target) 
 			"No tunnel is currently serving "+servedName+".")
 	}
 
+	// Resolve the client once, here at the public edge, and pin it to the
+	// request so the policy, rate limit and peer hop all use the same value.
+	// A client-supplied copy of the peer-hop client header is dropped first:
+	// it is believed only from an authenticated peer.
+	r.Header.Del(config.HeaderRiftClientIP)
+	r = withClientIP(r, i.resolveClientIP(r))
+
 	// Annotate once, here at the public edge, so the local service behind the
 	// tunnel learns who actually connected. This must not happen again on the
 	// internal peer hop (handleInternalProxy), or a forwarding node's own
@@ -488,6 +499,22 @@ func (i *Ingress) handleInternalProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing "+config.HeaderRiftSubdomain, http.StatusBadRequest)
 		return
 	}
+
+	// The socket peer is the forwarding node, so the visitor's address comes
+	// from the edge's stamp -- trustworthy because the hop is authenticated.
+	// A peer that predates the stamp still set X-Real-IP at its edge; failing
+	// both, the forwarding node's own address is all there is.
+	clientIP := parseIPEntry(r.Header.Get(config.HeaderRiftClientIP))
+	if clientIP == "" {
+		clientIP = parseIPEntry(r.Header.Get(config.HeaderRealIP))
+	}
+	if clientIP == "" {
+		clientIP = socketIP(r)
+	}
+	r.Header.Del(config.HeaderRiftClientIP)
+	r.Header.Set(config.HeaderRealIP, clientIP)
+	r = withClientIP(r, clientIP)
+
 	sess, found := i.registry.Lookup(r.Context(), sub)
 	if !found {
 		// The lease was stale. Telling the peer plainly beats a 404 that it
@@ -520,16 +547,32 @@ func (i *Ingress) handleInternalProxy(w http.ResponseWriter, r *http.Request) {
 // annotateForwarded adds the standard reverse-proxy headers describing the
 // public client, so the local service sees the caller rather than the gateway.
 //
-// X-Forwarded-For is preserved when an upstream (Caddy) already built the
-// chain — its left-most entry is the real client — and only synthesised when
-// rift is itself the first proxy. X-Real-IP always carries the resolved client
-// address, which honours the trusted-proxy allowlist and so is the value to
-// trust. Proto and Host are filled only if absent, leaving an upstream's values
-// intact.
+// X-Forwarded-For follows the usual proxy convention (nginx's
+// $proxy_add_x_forwarded_for, Go's httputil.ReverseProxy): when the immediate
+// sender is a trusted proxy its chain is kept and the sender's address is
+// appended, so a service that walks the chain right to left, as clientIP
+// does, finds the client. When the sender is NOT trusted, whatever chain it
+// sent is discarded and replaced with its socket address: preserving it would
+// hand the service a client-written "original client" to believe.
+//
+// X-Real-IP always carries the resolved client address, which honours the
+// trusted-proxy allowlist and so is the value to trust. Proto and Host are
+// filled only if absent, leaving an upstream's values intact.
 func (i *Ingress) annotateForwarded(r *http.Request) {
 	clientIP := i.clientIP(r)
-	if r.Header.Get(config.HeaderForwardedFor) == "" {
-		r.Header.Set(config.HeaderForwardedFor, clientIP)
+	sender := socketIP(r)
+	if i.isTrustedProxy(sender) {
+		chain := strings.Join(forwardedForEntries(r.Header), ", ")
+		if chain == "" && clientIP != sender {
+			// The proxy named the client only in X-Real-IP; keep that fact.
+			chain = clientIP
+		}
+		if chain != "" {
+			chain += ", "
+		}
+		r.Header.Set(config.HeaderForwardedFor, chain+sender)
+	} else {
+		r.Header.Set(config.HeaderForwardedFor, sender)
 	}
 	r.Header.Set(config.HeaderRealIP, clientIP)
 	if r.Header.Get(config.HeaderForwardedProto) == "" {

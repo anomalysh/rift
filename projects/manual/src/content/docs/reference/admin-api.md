@@ -236,5 +236,11 @@ POST /internal/proxy    (header X-Rift-Subdomain, authenticated by the peer secr
 Serves a request another node forwarded when Redis routing is enabled. It is
 `404` when Redis is disabled, `403` without a valid peer token, and `503` when
 the lease was stale and no local session holds the subdomain. It never forwards
-onward, so a stale lease cannot create a routing loop. See
+onward, so a stale lease cannot create a routing loop.
+
+The forwarding node resolves the visitor's address at its edge and sends it in
+`X-Rift-Client-Ip`; the receiving node applies the tunnel's IP rules and per-IP
+rate limit to that address, not to the forwarding node's. The header is believed
+only on a peer-authenticated hop: a copy sent by a visitor is stripped at the
+edge, and it is removed before the request reaches the agent. See
 [Multi-node with Redis](/guides/multi-node/).

@@ -174,5 +174,12 @@ const (
 	// it, which the receiver treats as compatible. It lets a future breaking
 	// change gate a mixed-version cluster cleanly.
 	HeaderRiftProtoVersion = "X-Rift-Proto-Version"
-	BearerPrefix           = "Bearer "
+	// HeaderRiftClientIP carries the public client's address, as resolved at
+	// the edge node, across a node-to-node hop. The receiving node sees only
+	// the forwarding node's socket address, so without this its IP policy and
+	// per-IP rate limit would judge the peer instead of the visitor. It is
+	// believed only on a peer-authenticated hop; a copy arriving from the
+	// public internet is stripped at the edge.
+	HeaderRiftClientIP = "X-Rift-Client-Ip"
+	BearerPrefix       = "Bearer "
 )

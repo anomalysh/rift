@@ -41,7 +41,7 @@ API is enabled). `RIFT_TLS_MODE` additionally has no default in production.
 | `RIFT_INGRESS_WRITE_TIMEOUT`    | `0`                | no       | Write deadline. `0` disables it, so long streamed responses are not cut off. |
 | `RIFT_INGRESS_IDLE_TIMEOUT`     | `120s`             | no       | Idle-connection timeout.                                                 |
 | `RIFT_INGRESS_MAX_HEADER_BYTES` | `1048576` (1 MiB)  | no       | Maximum request header size.                                            |
-| `RIFT_INGRESS_TRUSTED_PROXY_IPS`| (empty)            | no       | Comma-separated peers whose `X-Forwarded-For` is trusted. Empty trusts nobody and uses the socket peer. In production this is Caddy. |
+| `RIFT_INGRESS_TRUSTED_PROXY_IPS`| (empty)            | no       | Comma-separated IPs/CIDRs of proxies whose `X-Forwarded-For` is trusted. Empty trusts nobody and uses the socket peer. In production this is Caddy: behind Caddy with this empty, every visitor appears as Caddy's address, so tunnel IP allow/deny rules and per-IP rate limits cannot tell visitors apart (riftd warns at boot in production). The client is the right-most `X-Forwarded-For` entry that is not itself a trusted proxy. The tunnelled service receives `X-Real-IP` set to that client, and `X-Forwarded-For` with the sending proxy appended (or, from an untrusted sender, replaced by the sender's address). |
 
 ## Gateway (agent WebSocket listener)
 
