@@ -18,11 +18,14 @@ import { isLogLevel } from "./logger.ts";
 /** Flag values that feed configuration resolution (see config.ts). */
 export interface FlagConfig {
   token?: string;
+  /** Read the token from this file instead of argv (see index.ts). */
+  tokenFile?: string;
   server?: string;
   host?: string;
   logLevel?: LogLevel;
   insecure?: boolean;
   upstreamInsecure?: boolean;
+  allowInsecureTransport?: boolean;
   // Visitor-access policy (A2-A5). Repeatable flags accumulate; the rest are
   // single-valued. Raw strings here; buildPolicy validates and hashes them.
   basicAuth?: string[];
@@ -39,6 +42,7 @@ export interface FlagConfig {
   setResponseHeader?: string[];
   delResponseHeader?: string[];
   cors?: boolean;
+  corsOrigin?: string[];
   respond?: string[];
   redirect?: string[];
   route?: string[];
@@ -71,6 +75,7 @@ function isShell(v: string): v is Shell {
 /** Run flags that take a value; the rest are booleans. */
 const VALUE_FLAGS = new Set([
   "--token",
+  "--token-file",
   "--server",
   "--host",
   "--log-level",
@@ -86,6 +91,7 @@ const VALUE_FLAGS = new Set([
   "--del-request-header",
   "--set-response-header",
   "--del-response-header",
+  "--cors-origin",
   "--respond",
   "--redirect",
   "--route",
@@ -143,6 +149,10 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     }
     if (arg === "--upstream-insecure") {
       flags.upstreamInsecure = true;
+      continue;
+    }
+    if (arg === "--allow-insecure-transport") {
+      flags.allowInsecureTransport = true;
       continue;
     }
     if (arg === "--once") {
@@ -206,6 +216,13 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       };
     }
     return { kind: "set-config", updates };
+  }
+
+  if (flags.token !== undefined && flags.tokenFile !== undefined) {
+    return {
+      kind: "error",
+      message: "--token and --token-file are mutually exclusive",
+    };
   }
 
   // `rift start [name...]` opens named tunnels from the project config (D3).
@@ -285,6 +302,12 @@ function applyValueFlag(
     case "--token":
       flags.token = value;
       return null;
+    case "--token-file":
+      if (value === "") {
+        return "flag --token-file requires a non-empty path";
+      }
+      flags.tokenFile = value;
+      return null;
     case "--server":
       flags.server = value;
       return null;
@@ -327,6 +350,9 @@ function applyValueFlag(
     case "--del-response-header":
       flags.delResponseHeader = [...(flags.delResponseHeader ?? []), value];
       return null;
+    case "--cors-origin":
+      flags.corsOrigin = [...(flags.corsOrigin ?? []), value];
+      return null;
     case "--respond":
       flags.respond = [...(flags.respond ?? []), value];
       return null;
@@ -358,6 +384,8 @@ function applySetFlag(
   }
   switch (name) {
     case "--set-token":
+      // "-" means "read the token from stdin" (resolved in index.ts), so the
+      // secret need not appear in argv, `ps`, or shell history.
       updates.token = value;
       return null;
     case "--set-server":

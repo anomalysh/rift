@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
 
 import { parseArgs } from "../src/args.ts";
+import { CLI_SPEC } from "../src/cli-spec.ts";
 import {
+  PROJECT_FORBIDDEN_KEYS,
+  PROJECT_KEYS,
   parseProjectConfig,
   selectTunnels,
   tunnelToArgv,
@@ -75,12 +78,12 @@ describe("tunnelToArgv", () => {
       domain: "app.acme.com",
     });
     if ("error" in r) throw new Error(r.error);
-    // The subdomain follows the port; boolean flags have no value; arrays repeat.
+    // The subdomain follows the port; boolean flags have no value; values are
+    // single --flag=value tokens; arrays repeat.
     expect(r.argv.slice(0, 3)).toEqual(["http", "3000", "myweb"]);
     expect(r.argv).toContain("--cors");
-    expect(r.argv).toContain("--basic-auth");
-    expect(r.argv).toContain("u:p");
-    expect(r.argv).toContain("--domain");
+    expect(r.argv).toContain("--basic-auth=u:p");
+    expect(r.argv).toContain("--domain=app.acme.com");
 
     const parsed = parseArgs(r.argv);
     expect(parsed.kind).toBe("run");
@@ -103,10 +106,88 @@ describe("tunnelToArgv", () => {
     expect(tunnelToArgv("bad", { port: 3.5 })).toHaveProperty("error");
   });
 
-  test("an unknown flag key surfaces through parseArgs validation", () => {
+  test("an unknown key is rejected", () => {
     const r = tunnelToArgv("web", { port: 3000, bogusflag: "x" });
+    expect(r).toHaveProperty("error");
+    if ("error" in r) expect(r.error).toContain("bogusflag");
+  });
+});
+
+// Regression: a cloned repository's rift.yml used to be able to set any flag,
+// and flags beat env/config -- so `server: ws://attacker/` made `rift start`
+// hand the user's token to the attacker.
+describe("project files cannot redirect or weaken the token's path", () => {
+  for (const [key, value] of [
+    ["server", "ws://attacker.example/tunnel"],
+    ["token", "rift_stolen"],
+    ["token-file", "/etc/passwd"],
+    ["insecure", true],
+    ["upstream-insecure", true],
+    ["allow-insecure-transport", true],
+  ] as const) {
+    test(`"${key}" is refused with an explanation`, () => {
+      const r = tunnelToArgv("web", { port: 3000, [key]: value });
+      expect(r).toHaveProperty("error");
+      if ("error" in r) {
+        expect(r.error).toContain(key);
+        expect(r.error).toContain("project file");
+      }
+    });
+  }
+
+  test("set-* keys are not project keys", () => {
+    expect(
+      tunnelToArgv("web", { port: 3000, "set-server": "ws://x" }),
+    ).toHaveProperty("error");
+  });
+
+  test("host is allowed only on loopback", () => {
+    for (const ok of ["127.0.0.1", "localhost", "::1", "127.0.0.2"]) {
+      const r = tunnelToArgv("web", { port: 3000, host: ok });
+      if ("error" in r) throw new Error(r.error);
+      expect(r.argv).toContain(`--host=${ok}`);
+    }
+    for (const bad of [
+      "192.168.1.1",
+      "10.0.0.1",
+      "example.com",
+      "169.254.169.254",
+    ]) {
+      const r = tunnelToArgv("web", { port: 3000, host: bad });
+      expect(r).toHaveProperty("error");
+    }
+  });
+
+  test("no value can smuggle a flag through a positional or boolean key", () => {
+    // A subdomain or proto that looks like a flag would otherwise be parsed as one.
+    expect(
+      tunnelToArgv("web", { port: 3000, subdomain: "--server=ws://evil" }),
+    ).toHaveProperty("error");
+    expect(
+      tunnelToArgv("web", { port: 3000, proto: "--server=ws://evil" }),
+    ).toHaveProperty("error");
+    // A boolean flag given a string must not emit that string as its own arg.
+    expect(
+      tunnelToArgv("web", { port: 3000, cors: "--insecure" }),
+    ).toHaveProperty("error");
+    // A value flag's value stays glued to its flag.
+    const r = tunnelToArgv("web", { port: 3000, ttl: "--server=ws://evil" });
     if ("error" in r) throw new Error(r.error);
     const parsed = parseArgs(r.argv);
-    expect(parsed.kind).toBe("error");
+    if (parsed.kind === "run") {
+      expect(parsed.flags.server).toBeUndefined();
+      expect(parsed.flags.ttl).toBe("--server=ws://evil");
+    }
+  });
+
+  test("every run flag is classified as allowed or forbidden", () => {
+    // A new CLI flag must be consciously placed in one list or the other.
+    for (const o of CLI_SPEC.options) {
+      if (o.kind !== "run") continue;
+      const key = o.long.slice(2);
+      expect(PROJECT_KEYS.has(key) || PROJECT_FORBIDDEN_KEYS.has(key)).toBe(
+        true,
+      );
+    }
   });
 });

@@ -7,8 +7,11 @@ import { TunnelClient } from "./client.ts";
 import {
   ConfigError,
   configFilePath,
+  gatewayTransportProblem,
   loadConfigFile,
+  type PartialConfig,
   type ResolvedConfig,
+  readTokenFile,
   resolveConfig,
   writeConfigValues,
 } from "./config.ts";
@@ -63,19 +66,55 @@ async function clientOptionsFor(
   };
 }
 
+/**
+ * `--set-token -` reads the token from stdin, so it never appears in argv (and
+ * so in `ps` output or shell history). Surrounding whitespace is trimmed.
+ */
+async function resolveStdinToken(
+  updates: PartialConfig,
+): Promise<PartialConfig> {
+  if (updates.token !== "-") {
+    return updates;
+  }
+  const token = (await Bun.stdin.text()).trim();
+  if (token === "") {
+    throw new ConfigError("--set-token -: no token on standard input");
+  }
+  return { ...updates, token };
+}
+
 function fail(message: string, code: number): never {
   process.stderr.write(message.endsWith("\n") ? message : `${message}\n`);
   process.exit(code);
 }
 
-function loadConfig(
-  flags: Parameters<typeof resolveConfig>[0]["flags"],
-): ResolvedConfig {
+function loadConfig(flags: FlagConfig): ResolvedConfig {
   const env = process.env;
   const configPath = configFilePath(env);
   try {
+    // --token-file is read here, not in the pure resolveConfig: it is a flag
+    // layer value that merely lives outside argv.
+    const resolvedFlags: FlagConfig =
+      flags.tokenFile !== undefined
+        ? { ...flags, token: readTokenFile(flags.tokenFile) }
+        : flags;
     const file = loadConfigFile(env);
-    return resolveConfig({ flags, env, file, configPath });
+    const config = resolveConfig({
+      flags: resolvedFlags,
+      env,
+      file,
+      configPath,
+    });
+    // Refuse a cleartext gateway before anything is dialed (the hello carries
+    // the token); the client re-checks for embedders that skip this path.
+    const transport = gatewayTransportProblem(
+      config.server,
+      config.allowInsecureTransport,
+    );
+    if (transport !== null) {
+      throw new ConfigError(transport);
+    }
+    return config;
   } catch (err) {
     if (err instanceof ConfigError) {
       fail(err.message, EXIT.ERROR);
@@ -109,7 +148,8 @@ async function main(): Promise<void> {
       break;
     case "set-config": {
       try {
-        const { path, keys } = writeConfigValues(process.env, parsed.updates);
+        const updates = await resolveStdinToken(parsed.updates);
+        const { path, keys } = writeConfigValues(process.env, updates);
         // Never echo the values themselves; the token is a secret.
         process.stdout.write(`rift: saved ${keys.join(", ")} to ${path}\n`);
         process.exit(EXIT.OK);

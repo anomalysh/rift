@@ -146,6 +146,9 @@ export const ENV = {
   SERVER: "RIFT_SERVER",
   HOST: "RIFT_HOST",
   LOG_LEVEL: "RIFT_LOG_LEVEL",
+  // Opt-in to dial a non-loopback gateway over cleartext ws:// (see
+  // --allow-insecure-transport). Truthy values: 1, true, yes.
+  ALLOW_INSECURE_TRANSPORT: "RIFT_ALLOW_INSECURE_TRANSPORT",
   XDG_CONFIG_HOME: "XDG_CONFIG_HOME",
   HOME: "HOME",
   // Colour opt-out for the interactive TUI. Either the cross-tool NO_COLOR
@@ -220,3 +223,44 @@ export const DRAIN_POLL_INTERVAL_MS = 5;
  * never terminates its headers must not grow this without limit.
  */
 export const MAX_UPGRADE_HEAD_BYTES = 64 * 1024;
+
+/**
+ * Upper bound on client->service bytes the agent holds for one stream when the
+ * local side cannot keep up: the pre-connect buffer and socket write queue of an
+ * upgraded/raw stream, and the unread part of a proxied request body. The wire
+ * protocol has no agent->gateway window, so the gateway keeps sending REQ_BODY
+ * at link speed; without a cap a slow local reader would grow agent memory
+ * without limit. Past the cap the stream is reset with `payload_too_large`
+ * rather than silently dropping bytes. It is twice the gateway's default
+ * request-body cap (32 MiB), so a full-size upload to a slow upstream never
+ * trips it.
+ */
+export const MAX_STREAM_BUFFER_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Application heartbeat bounds. The gateway supplies the ping interval in
+ * hello_ok; it is clamped to [MIN_INTERVAL_MS, MAX_INTERVAL_MS] so a bogus value
+ * can neither spin the agent nor disable liveness checking. DEFAULT_INTERVAL_MS
+ * applies when the gateway sends no usable value. If no frame at all arrives for
+ * DEAD_AFTER_INTERVALS intervals, the connection is presumed half-open (laptop
+ * sleep, NAT mapping expiry) and torn down so the normal reconnect path runs.
+ */
+export const HEARTBEAT = {
+  MIN_INTERVAL_MS: 1_000,
+  MAX_INTERVAL_MS: 5 * 60_000,
+  DEFAULT_INTERVAL_MS: 30_000,
+  DEAD_AFTER_INTERVALS: 3,
+} as const;
+
+/**
+ * bcrypt parameters for basic-auth hashes. The gateway verifies with Go's
+ * golang.org/x/crypto/bcrypt and uses the raw password bytes, whereas Bun
+ * pre-hashes a password longer than 72 bytes -- so such a password would hash
+ * fine here and then never verify. It is rejected up front instead. The gateway
+ * pays the bcrypt cost on every visitor request and accepts at most cost 12, so
+ * the cost is pinned rather than left to Bun's default.
+ */
+export const BCRYPT = {
+  COST: 10,
+  MAX_PASSWORD_BYTES: 72,
+} as const;

@@ -74,10 +74,39 @@ export function createStyle(enabled: boolean): Style {
 // control is emitted by the Dashboard separately and never measured here.
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching the ANSI ESC (0x1b) is the whole point of stripping SGR codes.
 const ANSI_SGR = /\x1b\[[0-9;]*m/g;
+// The same pattern anchored at a position (sticky), for scanning in place.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching the ANSI ESC (0x1b) is the whole point of stripping SGR codes.
+const SGR_AT = /\x1b\[[0-9;]*m/y;
 
 /** Strip SGR colour codes, leaving the printable text. */
 export function stripAnsi(s: string): string {
   return s.replace(ANSI_SGR, "");
+}
+
+// Any escape sequence a terminal would act on: CSI (ESC [ ... final), OSC /
+// DCS / SOS / PM / APC strings (ESC ] ... BEL or ST), and two-byte ESC forms.
+// The 8-bit C1 introducers (0x9b CSI, 0x9d OSC, ...) are caught by the
+// control-character pass below, which also removes a dangling ESC.
+const TERMINAL_ESCAPE =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matching escape sequences is the whole point.
+  /\x1b(?:\[[0-?]*[ -/]*[@-~]|[\]PX^_][^\x07\x1b]*(?:\x07|\x1b\\)?|[ -~])/g;
+const LINE_BREAKS = /[\t\n\r]/g;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the whole point.
+const CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/g;
+
+/**
+ * Make an untrusted string safe to print. Strings the gateway sends (tunnel URL,
+ * error and shutdown messages, close reasons) reach the terminal, and an
+ * embedded escape sequence could retitle the window, rewrite earlier output,
+ * forge a URL, or on some terminals worse. Escape sequences are removed, line
+ * breaks and tabs become spaces (so one message stays one line), and every
+ * remaining C0, DEL, and C1 control character is dropped.
+ */
+export function sanitizeForTerminal(s: string): string {
+  return s
+    .replace(TERMINAL_ESCAPE, "")
+    .replace(LINE_BREAKS, " ")
+    .replace(CONTROL_CHARS, "");
 }
 
 /**
@@ -108,18 +137,18 @@ export function truncateVisible(s: string, max: number): string {
   let i = 0;
   while (i < s.length) {
     if (s[i] === "\x1b") {
-      const start = i;
-      i++;
-      if (s[i] === "[") {
+      // Only our own SGR colour codes are copied through (zero-width). Any
+      // other escape -- cursor movement, OSC title/hyperlink -- is not
+      // something content may carry, so its ESC is dropped and the rest prints
+      // as inert text.
+      SGR_AT.lastIndex = i;
+      const sgr = SGR_AT.exec(s);
+      if (sgr !== null) {
+        out += sgr[0];
+        i += sgr[0].length;
+      } else {
         i++;
-        while (i < s.length && !/[a-zA-Z]/.test(s[i] ?? "")) {
-          i++;
-        }
-        if (i < s.length) {
-          i++; // include the terminating letter
-        }
       }
-      out += s.slice(start, i);
       continue;
     }
     if (count >= limit) {

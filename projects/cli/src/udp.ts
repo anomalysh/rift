@@ -5,7 +5,13 @@
 // service->client datagrams back onto the stream. The gateway does the mirror.
 
 import type { udp } from "bun";
-import { FrameType, ResetCode, type ResetCodeValue } from "./constants.ts";
+import {
+  BACKPRESSURE_THRESHOLD_BYTES,
+  FrameType,
+  MAX_STREAM_BUFFER_BYTES,
+  ResetCode,
+  type ResetCodeValue,
+} from "./constants.ts";
 import type { ForwardTarget, FrameSink, Stream } from "./forwarder.ts";
 import type { Logger } from "./logger.ts";
 import type { StreamReset } from "./protocol.ts";
@@ -74,6 +80,9 @@ export class UdpStream implements Stream {
   private readonly deframer = new Deframer();
   // Datagrams that arrived before the socket finished connecting.
   private pending: Uint8Array[] = [];
+  private pendingBytes = 0;
+  // Replies dropped because the gateway link was backed up (logged once).
+  private droppedReplies = 0;
 
   constructor(
     private readonly streamId: bigint,
@@ -100,6 +109,7 @@ export class UdpStream implements Stream {
         this.socket.send(dgram);
       }
       this.pending = [];
+      this.pendingBytes = 0;
     } catch (err) {
       this.onError(err);
     }
@@ -114,9 +124,13 @@ export class UdpStream implements Stream {
     try {
       datagrams = this.deframer.push(chunk);
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       this.deps.logger.warn(
-        `udp framing error on stream ${this.streamId}: ${err instanceof Error ? err.message : String(err)}`,
+        `udp framing error on stream ${this.streamId}: ${message}`,
       );
+      // The gateway still considers the flow open; tell it why it is gone
+      // before tearing down locally, or its side lingers until a timeout.
+      this.sendReset(ResetCode.INTERNAL, message);
       this.reset(ResetCode.INTERNAL);
       return;
     }
@@ -144,9 +158,24 @@ export class UdpStream implements Stream {
   private sendToService(dgram: Uint8Array): void {
     if (this.socket === null) {
       this.pending.push(dgram);
+      this.pendingBytes += dgram.length;
+      if (this.pendingBytes > MAX_STREAM_BUFFER_BYTES) {
+        this.deps.logger.warn(
+          `udp flow ${this.streamId}: pre-connect backlog exceeded ${MAX_STREAM_BUFFER_BYTES} bytes`,
+        );
+        this.sendReset(ResetCode.PAYLOAD_TOO_LARGE, "pre-connect backlog full");
+        this.reset(ResetCode.PAYLOAD_TOO_LARGE);
+      }
       return;
     }
-    this.socket.send(dgram);
+    // A UDP send is all-or-nothing per datagram: false means the kernel had no
+    // room and dropped it, which is ordinary UDP loss rather than a truncated
+    // stream, so it is not retried.
+    if (!this.socket.send(dgram)) {
+      this.deps.logger.debug(
+        `udp flow ${this.streamId}: local send buffer full, datagram dropped`,
+      );
+    }
   }
 
   /** A datagram came back from the local service: frame it onto the stream. */
@@ -156,6 +185,18 @@ export class UdpStream implements Stream {
     }
     if (data.length > MAX_DATAGRAM) {
       this.deps.logger.warn(`dropping oversized udp reply (${data.length} B)`);
+      return;
+    }
+    // A UDP socket cannot be paused, so while the gateway link is backed up the
+    // reply is dropped -- the loss UDP applications already tolerate -- rather
+    // than piling every datagram into the WebSocket send buffer.
+    if (this.deps.sink.bufferedAmount() > BACKPRESSURE_THRESHOLD_BYTES) {
+      if (this.droppedReplies === 0) {
+        this.deps.logger.warn(
+          `udp flow ${this.streamId}: gateway link backed up, dropping replies`,
+        );
+      }
+      this.droppedReplies++;
       return;
     }
     this.deps.sink.send(FrameType.RES_BODY, this.streamId, frameDatagram(data));

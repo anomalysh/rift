@@ -127,11 +127,16 @@ export const CLI_SPEC: CliSpec = {
     "`rift start [name...]` opens one or more named tunnels declared in a " +
       "rift.yml (or .yaml/.toml/.json) file in the working directory, running " +
       "each concurrently. With no names, every declared tunnel is opened.",
+    "A project file travels with a repository, so it may only describe tunnel " +
+      "shape (protocol, port, subdomain, access and traffic policy, domains). " +
+      "The token, the gateway URL, TLS-verification and transport opt-outs, and " +
+      "a non-loopback --host are refused there; they come only from your own " +
+      "config file, environment, or command line.",
   ],
   synopsis: [
     "rift <protocol> <port> [subdomain] [options]",
     "rift start [name...]",
-    "rift --set-token <token> | --set-server <url> | --set-host <host> | --set-log-level <level>",
+    "rift --set-token <token|-> | --set-server <url> | --set-host <host> | --set-log-level <level>",
     "rift completions <bash|zsh|fish>",
     "rift man",
     "rift --version | -v",
@@ -184,15 +189,22 @@ export const CLI_SPEC: CliSpec = {
       long: "--token",
       takesValue: true,
       placeholder: "token",
-      help: "gateway auth token",
+      help: "gateway auth token (shows in ps and shell history; prefer --token-file)",
       kind: "run",
       env: ENV.TOKEN,
+    },
+    {
+      long: "--token-file",
+      takesValue: true,
+      placeholder: "path",
+      help: "read the gateway auth token from a file (surrounding whitespace trimmed)",
+      kind: "run",
     },
     {
       long: "--server",
       takesValue: true,
       placeholder: "url",
-      help: "gateway ws/wss URL",
+      help: "gateway wss:// URL (ws:// only to a loopback gateway)",
       kind: "run",
       env: ENV.SERVER,
     },
@@ -226,6 +238,13 @@ export const CLI_SPEC: CliSpec = {
       takesValue: false,
       help: "skip verification of the local HTTPS upstream's certificate",
       kind: "run",
+    },
+    {
+      long: "--allow-insecure-transport",
+      takesValue: false,
+      help: "allow a cleartext ws:// gateway that is not on loopback (sends the token unencrypted)",
+      kind: "run",
+      env: ENV.ALLOW_INSECURE_TRANSPORT,
     },
     {
       long: "--basic-auth",
@@ -306,7 +325,14 @@ export const CLI_SPEC: CliSpec = {
     {
       long: "--cors",
       takesValue: false,
-      help: "answer CORS preflights and add CORS headers to responses",
+      help: "answer CORS preflights and add CORS headers (Allow-Origin *, no credentials)",
+      kind: "run",
+    },
+    {
+      long: "--cors-origin",
+      takesValue: true,
+      placeholder: "origin",
+      help: "allow credentialed CORS from this origin, e.g. https://app.example (repeatable; implies --cors)",
       kind: "run",
     },
     {
@@ -354,7 +380,7 @@ export const CLI_SPEC: CliSpec = {
       long: "--set-token",
       takesValue: true,
       placeholder: "token",
-      help: "persist token to the config file and exit",
+      help: 'persist token to the config file and exit ("-" reads it from stdin)',
       kind: "persist",
     },
     {
@@ -406,12 +432,20 @@ export const CLI_SPEC: CliSpec = {
       cmd: "rift --set-server wss://gw.example.com",
       desc: "save a default gateway to the config file",
     },
+    {
+      cmd: "rift --set-token - < token.txt",
+      desc: "save the token from stdin, keeping it out of argv",
+    },
   ],
   env: [
     { name: ENV.TOKEN, help: "gateway auth token (see --token)" },
-    { name: ENV.SERVER, help: "gateway ws/wss URL (see --server)" },
+    { name: ENV.SERVER, help: "gateway wss:// URL (see --server)" },
     { name: ENV.HOST, help: "local host to forward to (see --host)" },
     { name: ENV.LOG_LEVEL, help: "log verbosity (see --log-level)" },
+    {
+      name: ENV.ALLOW_INSECURE_TRANSPORT,
+      help: "set to 1 to allow a non-loopback ws:// gateway (see --allow-insecure-transport)",
+    },
     {
       name: ENV.XDG_CONFIG_HOME,
       help: "base directory for the config file; falls back to $HOME/.config",

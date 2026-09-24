@@ -12,7 +12,7 @@
 // this module is purely local and never leaves the agent.
 
 import type { FlagConfig } from "./args.ts";
-import type { HeaderMap } from "./protocol.ts";
+import { type HeaderMap, newHeaderMap } from "./protocol.ts";
 
 /** A response the agent produces itself, bypassing the upstream fetch. */
 export interface SyntheticResponse {
@@ -48,6 +48,13 @@ export interface TrafficPolicy {
   readonly setResponseHeaders: readonly SetHeader[];
   readonly delResponseHeaders: readonly string[];
   readonly cors: boolean;
+  /**
+   * Origins trusted with credentialed CORS (normalized `scheme://host[:port]`).
+   * Only these get their Origin echoed with Allow-Credentials; every other
+   * origin sees `Access-Control-Allow-Origin: *`, which browsers refuse to
+   * combine with credentials.
+   */
+  readonly corsOrigins: readonly string[];
   readonly mocks: readonly MockRule[];
   readonly redirects: readonly RedirectRule[];
   readonly routes: readonly Route[];
@@ -122,6 +129,34 @@ function parseRespond(raw: string): MockRule | { error: string } {
       ? "application/json"
       : "text/plain; charset=utf-8",
   };
+}
+
+// Parse a --cors-origin value into its normalized serialization. Only a bare
+// origin is accepted: no path, query, fragment, credentials, wildcard, or the
+// opaque "null" origin (sandboxed iframes, file://), which any page can forge.
+function parseCorsOrigin(raw: string): string | { error: string } {
+  const bad = {
+    error: `invalid --cors-origin ${JSON.stringify(raw)}: expected an origin such as https://app.example.com`,
+  };
+  const trimmed = raw.trim();
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return bad;
+  }
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.pathname !== "/" ||
+    url.search !== "" ||
+    url.hash !== "" ||
+    trimmed.replace(/\/$/, "").toLowerCase() !== url.origin.toLowerCase()
+  ) {
+    return bad;
+  }
+  return url.origin;
 }
 
 // Parse "<path>=<location>" or "<path>=<status>:<location>" (status default 302).
@@ -219,6 +254,12 @@ export function buildTrafficPolicy(
     if ("error" in r) return { error: r.error };
     redirects.push(r);
   }
+  const corsOrigins: string[] = [];
+  for (const raw of flags.corsOrigin ?? []) {
+    const o = parseCorsOrigin(raw);
+    if (typeof o !== "string") return { error: o.error };
+    corsOrigins.push(o);
+  }
   const routes: Route[] = [];
   for (const raw of flags.route ?? []) {
     const r = parseRoute(raw);
@@ -247,7 +288,9 @@ export function buildTrafficPolicy(
     delRequestHeaders,
     setResponseHeaders,
     delResponseHeaders,
-    cors: flags.cors === true,
+    // An allowlisted origin is meaningless without CORS, so it implies it.
+    cors: flags.cors === true || corsOrigins.length > 0,
+    corsOrigins,
     mocks,
     redirects,
     routes,
@@ -319,7 +362,7 @@ export class TrafficController {
         return {
           status: r.status,
           headers: this.decorateResponse(
-            { location: [r.location] },
+            Object.assign(newHeaderMap(), { location: [r.location] }),
             reqHeaders,
           ),
           body: new Uint8Array(0),
@@ -333,10 +376,10 @@ export class TrafficController {
       return {
         status: m.status,
         headers: this.decorateResponse(
-          {
+          Object.assign(newHeaderMap(), {
             "content-type": [m.contentType],
             "content-length": [String(body.length)],
-          },
+          }),
           reqHeaders,
         ),
         body,
@@ -357,14 +400,17 @@ export class TrafficController {
    * CORS decoration applied. The upstream map is not mutated.
    */
   decorateResponse(headers: HeaderMap, reqHeaders: HeaderMap): HeaderMap {
-    const out: HeaderMap = { ...headers };
+    // Prototype-less copy: header names are network input (see newHeaderMap).
+    const out: HeaderMap = Object.assign(newHeaderMap(), headers);
     for (const name of this.policy.delResponseHeaders) {
       delete out[name.toLowerCase()];
     }
     for (const { name, value } of this.policy.setResponseHeaders) {
       out[name.toLowerCase()] = [value];
     }
-    if (this.policy.cors) applyCorsResponse(out, reqHeaders);
+    if (this.policy.cors) {
+      applyCorsResponse(out, reqHeaders, this.policy.corsOrigins);
+    }
     return out;
   }
 
@@ -405,11 +451,11 @@ export class TrafficController {
     return {
       status: 503,
       headers: this.decorateResponse(
-        {
+        Object.assign(newHeaderMap(), {
           "content-type": ["text/plain; charset=utf-8"],
           "content-length": [String(body.length)],
           "retry-after": [String(Math.ceil(BREAKER_COOLDOWN_MS / 1000))],
-        },
+        }),
         reqHeaders,
       ),
       body,
@@ -417,7 +463,7 @@ export class TrafficController {
   }
 
   private preflight(reqHeaders: HeaderMap): SyntheticResponse {
-    const headers: HeaderMap = {
+    const headers: HeaderMap = Object.assign(newHeaderMap(), {
       "access-control-allow-methods": [
         firstHeader(reqHeaders, "access-control-request-method") ??
           "GET, POST, PUT, PATCH, DELETE, OPTIONS",
@@ -427,8 +473,8 @@ export class TrafficController {
       ],
       "access-control-max-age": ["86400"],
       "content-length": ["0"],
-    };
-    applyCorsResponse(headers, reqHeaders);
+    });
+    applyCorsResponse(headers, reqHeaders, this.policy.corsOrigins);
     return { status: 204, headers, body: new Uint8Array(0) };
   }
 }
@@ -447,22 +493,40 @@ function stripQuery(path: string): string {
 }
 
 function firstHeader(headers: HeaderMap, name: string): string | null {
-  const v = headers[name.toLowerCase()];
-  return v?.[0] ?? null;
+  const key = name.toLowerCase();
+  // hasOwn: a name like "constructor" must not resolve to an Object builtin.
+  if (!Object.hasOwn(headers, key)) return null;
+  return headers[key]?.[0] ?? null;
 }
 
 /**
- * Add the CORS headers an actual (non-preflight) response needs. The request's
- * Origin is echoed back so credentialed requests work; without an Origin the
- * response is same-origin and a wildcard is harmless. Vary: Origin keeps caches
- * from serving one origin's response to another.
+ * Add the CORS headers a response (actual or preflight) needs.
+ *
+ * By default the grant is `Access-Control-Allow-Origin: *` with no
+ * credentials: any site may read public responses, but a browser will neither
+ * attach cookies or HTTP auth nor expose a credentialed response. Echoing an
+ * arbitrary Origin together with `Allow-Credentials: true` would let every web
+ * page a visitor opens read the tunnel with their cookies or cached Basic auth
+ * -- a bypass of --basic-auth and of cookie sessions. Credentials are granted
+ * only to an origin the user allowlisted with --cors-origin. Whenever the
+ * answer depends on the Origin, Vary: Origin keeps caches from serving one
+ * origin's response to another.
  */
-function applyCorsResponse(out: HeaderMap, reqHeaders: HeaderMap): void {
+function applyCorsResponse(
+  out: HeaderMap,
+  reqHeaders: HeaderMap,
+  trusted: readonly string[],
+): void {
   const origin = firstHeader(reqHeaders, "origin");
-  out["access-control-allow-origin"] = [origin ?? "*"];
-  if (origin !== null) {
+  if (origin !== null && trusted.includes(origin)) {
+    out["access-control-allow-origin"] = [origin];
     out["access-control-allow-credentials"] = ["true"];
-    const existingVary = out.vary?.[0];
+  } else {
+    out["access-control-allow-origin"] = ["*"];
+    delete out["access-control-allow-credentials"];
+  }
+  if (trusted.length > 0) {
+    const existingVary = firstHeader(out, "vary");
     out.vary = [existingVary ? `${existingVary}, Origin` : "Origin"];
   }
 }

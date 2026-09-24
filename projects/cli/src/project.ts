@@ -8,12 +8,23 @@
 // `rift start web api` opens the named tunnels (or all of them when no name is
 // given). Each entry is translated into the exact argv `rift <proto> <port>
 // [sub] [flags]` would use, then run through the normal parseArgs, so every
-// flag is validated and mapped in one place and the config can express anything
-// the CLI can.
+// flag is validated and mapped in one place.
+//
+// A project file is not the user's own configuration: it arrives with a cloned
+// repository, and `rift start` in that checkout runs it with the user's token.
+// Because flags beat env and the config file, an unrestricted rift.yml could
+// set `server: ws://attacker/` and receive the token, disable TLS verification,
+// or point the tunnel at a LAN host (`host: 192.168.1.1`) and publish the
+// router's admin page. So only tunnel-shape keys are accepted (PROJECT_KEYS);
+// credentials and gateway transport settings are refused with an explanation,
+// and `host` is accepted only when it names this machine.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { CLI_SPEC } from "./cli-spec.ts";
+import { isLoopbackHost } from "./config.ts";
+import { ENV, SUPPORTED_PROTOCOLS } from "./constants.ts";
 import { isRecord } from "./protocol.ts";
 
 /** Config file names tried in order in the working directory. */
@@ -26,6 +37,60 @@ export const PROJECT_CONFIG_NAMES = [
 
 /** Keys handled positionally; every other key becomes a `--flag`. */
 const POSITIONAL_KEYS = new Set(["proto", "protocol", "port", "subdomain"]);
+
+/**
+ * Flag keys a project file may set: the shape of the tunnel, its visitor
+ * policy, and its traffic policy. `host` is here but further restricted to
+ * loopback (see tunnelToArgv).
+ */
+export const PROJECT_KEYS: ReadonlySet<string> = new Set([
+  "host",
+  "log-level",
+  "basic-auth",
+  "allow-ip",
+  "deny-ip",
+  "rate-limit",
+  "ttl",
+  "once",
+  "max-requests",
+  "set-request-header",
+  "del-request-header",
+  "set-response-header",
+  "del-response-header",
+  "cors",
+  "cors-origin",
+  "respond",
+  "redirect",
+  "route",
+  "breaker",
+  "breaker-threshold",
+  "domain",
+]);
+
+/**
+ * Keys refused in a project file, each with where the setting belongs instead.
+ * These decide where the token goes and how it is protected in transit.
+ */
+export const PROJECT_FORBIDDEN_KEYS: ReadonlyMap<string, string> = new Map([
+  ["token", `use --token-file, ${ENV.TOKEN}, or rift --set-token`],
+  ["token-file", `use --token-file, ${ENV.TOKEN}, or rift --set-token`],
+  ["server", `use ${ENV.SERVER} or rift --set-server`],
+  ["insecure", "pass --insecure yourself"],
+  ["upstream-insecure", "pass --upstream-insecure yourself"],
+  [
+    "allow-insecure-transport",
+    `set ${ENV.ALLOW_INSECURE_TRANSPORT}=1 yourself`,
+  ],
+]);
+
+/** Spec lookup for a flag key (without dashes). */
+function specOption(key: string): { takesValue: boolean } | undefined {
+  return CLI_SPEC.options.find((o) => o.long === `--${key}`);
+}
+
+function isSupportedProtocol(v: string): boolean {
+  return (SUPPORTED_PROTOCOLS as readonly string[]).includes(v);
+}
 
 export interface ProjectConfig {
   /** The tunnels map, name -> raw entry (validated lazily per selection). */
@@ -97,7 +162,11 @@ export function selectTunnels(
 /**
  * Translate one named tunnel entry into the argv `rift` would take on the
  * command line, so parseArgs can validate and map it. Returns an error string
- * for a structurally invalid entry.
+ * for a structurally invalid entry or a key a project file may not set.
+ *
+ * Every value is emitted as a single `--flag=value` token and positionals are
+ * validated first, so no string in the file can itself be parsed as a flag
+ * (e.g. `subdomain: "--server=ws://evil"` or `cors: "--insecure"`).
  */
 export function tunnelToArgv(
   name: string,
@@ -107,8 +176,10 @@ export function tunnelToArgv(
     return { error: `tunnel "${name}" must be a mapping` };
   }
   const proto = entry.proto ?? entry.protocol ?? "http";
-  if (typeof proto !== "string") {
-    return { error: `tunnel "${name}": proto must be a string` };
+  if (typeof proto !== "string" || !isSupportedProtocol(proto)) {
+    return {
+      error: `tunnel "${name}": proto must be one of ${SUPPORTED_PROTOCOLS.join(", ")}`,
+    };
   }
   const port = entry.port;
   if (typeof port !== "number" || !Number.isInteger(port)) {
@@ -120,6 +191,9 @@ export function tunnelToArgv(
     if (typeof entry.subdomain !== "string") {
       return { error: `tunnel "${name}": subdomain must be a string` };
     }
+    if (entry.subdomain.startsWith("-")) {
+      return { error: `tunnel "${name}": subdomain must not start with "-"` };
+    }
     if (entry.subdomain !== "") {
       argv.push(entry.subdomain);
     }
@@ -129,32 +203,57 @@ export function tunnelToArgv(
     if (POSITIONAL_KEYS.has(key)) {
       continue;
     }
+    const forbidden = PROJECT_FORBIDDEN_KEYS.get(key);
+    if (forbidden !== undefined) {
+      return {
+        error:
+          `tunnel "${name}": "${key}" cannot be set in a project file -- a checked-in ` +
+          "rift.yml must not redirect or weaken where your token goes; " +
+          `${forbidden}`,
+      };
+    }
+    const option = specOption(key);
+    if (!PROJECT_KEYS.has(key) || option === undefined) {
+      return { error: `tunnel "${name}": unknown key "${key}"` };
+    }
     const flag = `--${key}`;
-    if (typeof value === "boolean") {
+    if (!option.takesValue) {
+      if (typeof value !== "boolean") {
+        return { error: `tunnel "${name}": ${key} must be true or false` };
+      }
       if (value) {
         argv.push(flag);
       }
       continue;
     }
-    if (Array.isArray(value)) {
-      for (const v of value) {
-        argv.push(flag, scalarToString(v));
+    const values = Array.isArray(value) ? value : [value];
+    for (const v of values) {
+      const str = scalarToString(v);
+      if (str === null) {
+        return {
+          error: `tunnel "${name}": ${key} must be a string, number, or list of them`,
+        };
       }
-      continue;
+      if (key === "host" && !isLoopbackHost(str)) {
+        return {
+          error:
+            `tunnel "${name}": host ${JSON.stringify(str)} is not this machine; a project ` +
+            "file may only forward to loopback (127.0.0.1, ::1, localhost). To expose " +
+            `another host, pass --host or set ${ENV.HOST} yourself`,
+        };
+      }
+      argv.push(`${flag}=${str}`);
     }
-    argv.push(flag, scalarToString(value));
   }
   return { argv };
 }
 
-function scalarToString(v: unknown): string {
+function scalarToString(v: unknown): string | null {
   if (typeof v === "string") {
     return v;
   }
   if (typeof v === "number" || typeof v === "boolean") {
     return String(v);
   }
-  // A non-scalar (nested mapping/array-of-arrays) is passed through as its
-  // string form; parseArgs then rejects it with a flag-specific message.
-  return String(v);
+  return null;
 }

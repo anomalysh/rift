@@ -15,7 +15,9 @@ import {
   encodeFrame,
   type Frame,
   FrameError,
+  headerMapProblem,
   isKnownFrameType,
+  requestTargetProblem,
 } from "../src/protocol.ts";
 
 const utf8 = new TextEncoder();
@@ -272,5 +274,104 @@ describe("asRequestHead", () => {
 
   test("still rejects a head missing a required field", () => {
     expect(asRequestHead({ ...httpHead, has_body: undefined })).toBeNull();
+  });
+});
+
+// Regression (SSRF / request smuggling): the path, method, and headers of a
+// REQ_HEAD are spliced into a local URL or a raw request line, so an HTTP head
+// must be validated before any stream is created from it.
+describe("asRequestHead validates HTTP heads", () => {
+  const httpHead = {
+    method: "GET",
+    path: "/x",
+    headers: { "x-a": ["1"] },
+    host: "app.example.com",
+    scheme: "https",
+    remote_addr: "203.0.113.7:5000",
+    has_body: false,
+  };
+
+  for (const path of [
+    "@169.254.169.254/latest/meta-data",
+    "1/x",
+    "//evil.example/x",
+    "/\\evil.example",
+    "",
+    "x",
+    "/a b",
+    "/a\r\nHost: evil",
+    "/a\x00",
+    "/a\x7f",
+  ]) {
+    test(`rejects path ${JSON.stringify(path)}`, () => {
+      expect(asRequestHead({ ...httpHead, path })).toBeNull();
+    });
+  }
+
+  test("accepts '*' for OPTIONS only", () => {
+    expect(
+      asRequestHead({ ...httpHead, method: "OPTIONS", path: "*" }),
+    ).not.toBeNull();
+    expect(asRequestHead({ ...httpHead, path: "*" })).toBeNull();
+  });
+
+  test("accepts query strings and percent-encoding", () => {
+    expect(
+      asRequestHead({ ...httpHead, path: "/a%20b/c?q=1&r=%2F#frag" }),
+    ).not.toBeNull();
+  });
+
+  test("rejects a method that is not an RFC 7230 token", () => {
+    expect(
+      asRequestHead({ ...httpHead, method: "GET /x HTTP/1.1\r\n" }),
+    ).toBeNull();
+    expect(asRequestHead({ ...httpHead, method: "" })).toBeNull();
+  });
+
+  test("rejects CR/LF/NUL in header values and non-token names", () => {
+    expect(
+      asRequestHead({ ...httpHead, headers: { "x-a": ["1\r\nEvil: 2"] } }),
+    ).toBeNull();
+    expect(
+      asRequestHead({ ...httpHead, headers: { "x-a": ["1\x002"] } }),
+    ).toBeNull();
+    expect(
+      asRequestHead({ ...httpHead, headers: { "x a": ["1"] } }),
+    ).toBeNull();
+  });
+
+  test("an upgrade head is validated like any HTTP head", () => {
+    expect(
+      asRequestHead({ ...httpHead, upgrade: true, path: "@evil/x" }),
+    ).toBeNull();
+  });
+
+  test("a raw head is not subject to HTTP validation", () => {
+    expect(
+      asRequestHead({ ...httpHead, method: "", path: "", raw: true }),
+    ).not.toBeNull();
+  });
+
+  test("headers come back on a prototype-less map", () => {
+    const h = asRequestHead(
+      JSON.parse(
+        '{"method":"GET","path":"/","host":"h","scheme":"https",' +
+          '"remote_addr":"r","has_body":false,"headers":{"__proto__":["p"]}}',
+      ),
+    );
+    expect(h).not.toBeNull();
+    expect(Object.getPrototypeOf(h?.headers)).toBeNull();
+    const headers = h?.headers ?? {};
+    expect(Object.hasOwn(headers, "constructor")).toBe(false);
+    expect(
+      Object.getOwnPropertyDescriptor(headers, "__proto__")?.value,
+    ).toEqual(["p"]);
+  });
+});
+
+describe("requestTargetProblem / headerMapProblem", () => {
+  test("report null for a safe head", () => {
+    expect(requestTargetProblem("PATCH", "/x?y=1")).toBeNull();
+    expect(headerMapProblem({ "content-type": ['a/b; q="x"'] })).toBeNull();
   });
 });

@@ -135,6 +135,16 @@ export function decodeFrame(buf: Uint8Array): Frame {
 /** Header maps preserve repeated headers; names are lowercased. */
 export type HeaderMap = Record<string, string[]>;
 
+/**
+ * An empty header map with no prototype. Header names come from the network,
+ * and indexing a plain `{}` with "constructor" or "__proto__" yields an Object
+ * builtin rather than undefined (and assigning "__proto__" rewires the
+ * prototype), which breaks the append-or-create pattern every builder uses.
+ */
+export function newHeaderMap(): HeaderMap {
+  return Object.create(null) as HeaderMap;
+}
+
 export interface Hello {
   protocol_version: number;
   token: string;
@@ -326,6 +336,77 @@ export function asShutdown(v: unknown): Shutdown | null {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Request-head validation. The gateway is a remote peer: everything in a
+// REQ_HEAD is untrusted input that the agent splices into a local URL or a raw
+// HTTP/1.1 request line. Left unchecked, a path of "@169.254.169.254/x" turns
+// `http://127.0.0.1:3000` + path into userinfo and retargets the fetch at an
+// arbitrary host, "1/x" changes the port, and a CR/LF in a method or header
+// smuggles extra request lines to the local service.
+// ---------------------------------------------------------------------------
+
+// RFC 7230 §3.2.6 token: the grammar of both a method and a header field name.
+const HTTP_TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+// Characters never legal in an origin-form request target: C0 controls, space,
+// DEL, and backslash (which WHATWG URL parsing treats as "/", so "/\evil" would
+// become the authority "evil").
+// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point.
+const UNSAFE_TARGET_CHARS = /[\x00-\x20\x7f\\]/;
+// Field values may not carry a line break or NUL (RFC 7230 §3.2); everything
+// else, including obs-text, is passed through as the gateway sent it.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: rejecting control characters is the point.
+const UNSAFE_FIELD_VALUE_CHARS = /[\r\n\x00]/;
+
+/** True for an RFC 7230 token (a method or a header field name). */
+export function isHttpToken(s: string): boolean {
+  return HTTP_TOKEN.test(s);
+}
+
+/**
+ * Why a method + request target cannot be forwarded, or null if it is safe.
+ * Only origin-form ("/path?query") is accepted, plus asterisk-form ("*") for
+ * OPTIONS; absolute-form and authority-form never reach an agent, and a target
+ * starting with "//" would parse as a scheme-relative URL naming another host.
+ */
+export function requestTargetProblem(
+  method: string,
+  path: string,
+): string | null {
+  if (!isHttpToken(method)) {
+    return "method is not an HTTP token";
+  }
+  if (path === "*") {
+    return method === "OPTIONS"
+      ? null
+      : "asterisk-form target is only valid for OPTIONS";
+  }
+  if (!path.startsWith("/")) {
+    return "request target must start with '/'";
+  }
+  if (path.startsWith("//")) {
+    return "request target must not start with '//'";
+  }
+  if (UNSAFE_TARGET_CHARS.test(path)) {
+    return "request target contains a control character, space, or backslash";
+  }
+  return null;
+}
+
+/** Why a header map cannot be forwarded verbatim, or null if it is safe. */
+export function headerMapProblem(headers: HeaderMap): string | null {
+  for (const [name, values] of Object.entries(headers)) {
+    if (!isHttpToken(name)) {
+      return `header name ${JSON.stringify(name)} is not an HTTP token`;
+    }
+    for (const value of values) {
+      if (UNSAFE_FIELD_VALUE_CHARS.test(value)) {
+        return `header ${name} contains CR, LF, or NUL`;
+      }
+    }
+  }
+  return null;
+}
+
 export function asRequestHead(v: unknown): RequestHead | null {
   if (
     isRecord(v) &&
@@ -343,10 +424,22 @@ export function asRequestHead(v: unknown): RequestHead | null {
     // a populated (non-null) object here.
     let headers: HeaderMap;
     if (v.headers === null || v.headers === undefined) {
-      headers = {};
+      headers = newHeaderMap();
     } else if (isHeaderMap(v.headers)) {
-      headers = v.headers;
+      // Copy onto a prototype-less map so a lookup of a name the peer did not
+      // send ("constructor", "__proto__") is undefined, not an Object builtin.
+      headers = Object.assign(newHeaderMap(), v.headers);
     } else {
+      return null;
+    }
+    const raw = v.raw === true;
+    // A raw (tcp/tls/udp) head carries no HTTP semantics and is never spliced
+    // into a URL or request line; an HTTP or upgrade head is, so validate it.
+    if (
+      !raw &&
+      (requestTargetProblem(v.method, v.path) !== null ||
+        headerMapProblem(headers) !== null)
+    ) {
       return null;
     }
     return {
@@ -359,7 +452,7 @@ export function asRequestHead(v: unknown): RequestHead | null {
       has_body: v.has_body,
       // `upgrade` and `raw` are omitempty on the wire; absent means false.
       upgrade: v.upgrade === true,
-      raw: v.raw === true,
+      raw,
     };
   }
   return null;

@@ -274,3 +274,42 @@ describe("custom domains (E1)", () => {
     expect(parsed.flags.domain).toEqual(["app.acme.com", "www.acme.com"]);
   });
 });
+
+describe("keeping the token out of argv", () => {
+  test("--token-file records the path", () => {
+    const parsed = parseArgs(["http", "3000", "--token-file", "/run/rift.tok"]);
+    expect(parsed.kind).toBe("run");
+    if (parsed.kind === "run") {
+      expect(parsed.flags.tokenFile).toBe("/run/rift.tok");
+      expect(parsed.flags.token).toBeUndefined();
+    }
+  });
+
+  test("--token and --token-file together are a usage error", () => {
+    const parsed = parseArgs([
+      "http",
+      "3000",
+      "--token",
+      "t",
+      "--token-file=/x",
+    ]);
+    expect(parsed.kind).toBe("error");
+  });
+
+  test("--set-token - is accepted (read from stdin by the entrypoint)", () => {
+    expect(parseArgs(["--set-token", "-"])).toEqual({
+      kind: "set-config",
+      updates: { token: "-" },
+    });
+  });
+});
+
+describe("--allow-insecure-transport", () => {
+  test("is a boolean flag", () => {
+    const parsed = parseArgs(["http", "3000", "--allow-insecure-transport"]);
+    expect(parsed.kind).toBe("run");
+    if (parsed.kind === "run") {
+      expect(parsed.flags.allowInsecureTransport).toBe(true);
+    }
+  });
+});

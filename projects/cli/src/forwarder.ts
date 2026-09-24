@@ -8,15 +8,18 @@ import {
   FrameType,
   HOP_BY_HOP_HEADERS,
   MAX_PAYLOAD_BYTES,
+  MAX_STREAM_BUFFER_BYTES,
   ResetCode,
   type ResetCodeValue,
 } from "./constants.ts";
 import type { Logger } from "./logger.ts";
-import type {
-  HeaderMap,
-  RequestHead,
-  ResponseHead,
-  StreamReset,
+import {
+  type HeaderMap,
+  newHeaderMap,
+  type RequestHead,
+  type ResponseHead,
+  requestTargetProblem,
+  type StreamReset,
 } from "./protocol.ts";
 import type { SyntheticResponse, TrafficController } from "./traffic.ts";
 
@@ -77,6 +80,52 @@ interface FetchInit extends RequestInit {
   tls?: BunFetchRequestInitTLS;
 }
 
+/**
+ * Methods whose fetch() may not carry a body. The Fetch standard forbids one on
+ * GET and HEAD and Bun's fetch also throws for OPTIONS, which would turn an
+ * otherwise-valid request into a 502. RFC 9110 gives such a body no defined
+ * semantics, so it is drained and dropped instead.
+ */
+const BODYLESS_METHODS: ReadonlySet<string> = new Set([
+  "GET",
+  "HEAD",
+  "OPTIONS",
+]);
+
+/**
+ * The local URL a request is fetched from. The target is parsed against a base
+ * built only from the configured host and port, then the result's scheme and
+ * authority are asserted unchanged: the path comes from the gateway, and a
+ * target that re-parsed into another host or port (userinfo, "//host",
+ * backslash tricks) must never reach fetch. asRequestHead already rejects such
+ * paths; this is the independent second check at the point of use.
+ */
+export function buildUpstreamUrl(
+  host: string,
+  port: number,
+  tls: boolean,
+  path: string,
+): URL {
+  const scheme = tls ? "https" : "http";
+  // A bare IPv6 literal must be bracketed to form an authority.
+  const authority =
+    host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
+  const base = new URL(`${scheme}://${authority}:${port}/`);
+  const problem = requestTargetProblem("GET", path === "*" ? "/" : path);
+  if (problem !== null) {
+    throw new Error(`refusing request target: ${problem}`);
+  }
+  // fetch cannot express asterisk-form ("OPTIONS *"); "/" is the closest
+  // server-wide target it can send.
+  const url = new URL(path === "*" ? "/" : path, base);
+  if (url.protocol !== base.protocol || url.host !== base.host) {
+    throw new Error(
+      `refusing request target: it resolves outside ${base.host}`,
+    );
+  }
+  return url;
+}
+
 function isHopByHop(name: string): boolean {
   return HOP_BY_HOP_HEADERS.has(name) || name.startsWith("proxy-");
 }
@@ -113,7 +162,7 @@ function buildRequestHeaders(source: HeaderMap): Headers {
 
 /** Convert response headers to a HeaderMap, stripping hop-by-hop headers. */
 function responseHeaderMap(headers: Headers): HeaderMap {
-  const out: HeaderMap = {};
+  const out = newHeaderMap();
   headers.forEach((value, name) => {
     const lower = name.toLowerCase();
     // set-cookie must not be comma-joined; collected separately below.
@@ -143,6 +192,8 @@ export class RequestStream implements Stream {
   private bodyController: ReadableStreamDefaultController<Uint8Array> | null =
     null;
   private readonly bodyStream: ReadableStream<Uint8Array> | null;
+  /** A body on a method fetch cannot send it with; drained and discarded. */
+  private readonly dropBody: boolean;
   private aborted = false;
   private finished = false;
   private bodyClosed = false;
@@ -153,13 +204,28 @@ export class RequestStream implements Stream {
     private readonly head: RequestHead,
     private readonly deps: RequestStreamDeps,
   ) {
-    if (head.has_body) {
-      this.bodyStream = new ReadableStream<Uint8Array>({
-        start: (controller) => {
-          this.bodyController = controller;
+    this.dropBody =
+      head.has_body && BODYLESS_METHODS.has(head.method.toUpperCase());
+    if (head.has_body && !this.dropBody) {
+      // Queue by byte length so desiredSize tracks how much of the body fetch
+      // has not consumed yet; pushBody resets the stream past the cap.
+      this.bodyStream = new ReadableStream<Uint8Array>(
+        {
+          start: (controller) => {
+            this.bodyController = controller;
+          },
         },
-      });
+        {
+          highWaterMark: MAX_STREAM_BUFFER_BYTES,
+          size: (chunk) => chunk?.byteLength ?? 0,
+        },
+      );
     } else {
+      if (this.dropBody) {
+        this.deps.logger.debug(
+          `dropping request body on ${head.method} stream ${streamId}: fetch cannot send one`,
+        );
+      }
       this.bodyStream = null;
     }
     void this.run();
@@ -167,8 +233,18 @@ export class RequestStream implements Stream {
 
   /** Feed a REQ_BODY chunk into the upstream request body. */
   pushBody(chunk: Uint8Array): void {
-    if (this.bodyController !== null && !this.bodyClosed && !this.aborted) {
-      this.bodyController.enqueue(chunk);
+    if (this.bodyController === null || this.bodyClosed || this.aborted) {
+      // Includes a dropped GET/HEAD/OPTIONS body: the bytes are discarded.
+      return;
+    }
+    this.bodyController.enqueue(chunk);
+    // The gateway cannot be asked to slow down, so a local service reading
+    // slower than the public client uploads backs bytes up here. Bound it.
+    if ((this.bodyController.desiredSize ?? 0) < 0) {
+      this.abortLocal(
+        ResetCode.PAYLOAD_TOO_LARGE,
+        `request body backlog exceeded ${MAX_STREAM_BUFFER_BYTES} bytes`,
+      );
     }
   }
 
@@ -188,6 +264,19 @@ export class RequestStream implements Stream {
     this.aborted = true;
     this.failBody(`stream reset: ${code}`);
     this.controller.abort();
+  }
+
+  /** Abort the exchange from this side, telling the gateway why. */
+  private abortLocal(code: ResetCodeValue, message: string): void {
+    if (this.aborted) {
+      return;
+    }
+    this.deps.logger.warn(`resetting stream ${this.streamId}: ${message}`);
+    this.sendReset(code, message);
+    this.aborted = true;
+    this.failBody(message);
+    this.controller.abort();
+    this.finish();
   }
 
   private async run(): Promise<void> {
@@ -223,11 +312,24 @@ export class RequestStream implements Stream {
       return;
     }
 
-    const scheme = tls === true ? "https" : "http";
-    const url = `${scheme}://${host}:${port}${this.head.path}`;
-    const headers = buildRequestHeaders(this.head.headers);
-    // T1: rewrite outbound request headers before the fetch.
-    traffic?.decorateRequest(headers);
+    let url: URL;
+    let headers: Headers;
+    try {
+      url = buildUpstreamUrl(host, port, tls === true, this.head.path);
+      headers = buildRequestHeaders(this.head.headers);
+      // T1: rewrite outbound request headers before the fetch.
+      traffic?.decorateRequest(headers);
+    } catch (err) {
+      // An unforwardable head (see buildUpstreamUrl) or a header value the
+      // Headers class rejects: fail this one stream, never the agent.
+      const message = err instanceof Error ? err.message : String(err);
+      this.deps.logger.warn(
+        `cannot forward stream ${this.streamId}: ${message}`,
+      );
+      this.sendReset(ResetCode.INTERNAL, message);
+      this.finish();
+      return;
+    }
     const init: FetchInit = {
       method: this.head.method,
       headers,

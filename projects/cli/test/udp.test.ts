@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
-import { Deframer, frameDatagram, MAX_DATAGRAM } from "../src/udp.ts";
+import { FrameType } from "../src/constants.ts";
+import type { FrameSink } from "../src/forwarder.ts";
+import {
+  Deframer,
+  frameDatagram,
+  MAX_DATAGRAM,
+  UdpStream,
+} from "../src/udp.ts";
 
 function bytes(...v: number[]): Uint8Array {
   return new Uint8Array(v);
@@ -55,5 +62,40 @@ describe("Deframer", () => {
     // 0xFFFF = 65535 > MAX_DATAGRAM (65507).
     expect(() => d.push(bytes(0xff, 0xff))).toThrow(/exceeds maximum/);
     expect(MAX_DATAGRAM).toBe(65507);
+  });
+});
+
+// Regression: a framing error tore the flow down locally without telling the
+// gateway, whose side of the stream then lingered until a timeout.
+describe("UdpStream framing error", () => {
+  test("sends RESET to the gateway before tearing down", () => {
+    const resets: unknown[] = [];
+    let done = false;
+    const sink: FrameSink = {
+      send: () => {},
+      sendJson: (type, _id, payload) => {
+        if (type === FrameType.RESET) resets.push(payload);
+      },
+      bufferedAmount: () => 0,
+      isOpen: () => true,
+    };
+    const stream = new UdpStream(5n, {
+      target: { host: "127.0.0.1", port: 9 },
+      sink,
+      logger: {
+        debug: () => {},
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+        banner: () => {},
+      },
+      onDone: () => {
+        done = true;
+      },
+    });
+    stream.pushBody(bytes(0xff, 0xff)); // length 65535 > MAX_DATAGRAM
+    expect(done).toBe(true);
+    expect(resets).toHaveLength(1);
+    expect(JSON.stringify(resets[0])).toContain("internal");
   });
 });

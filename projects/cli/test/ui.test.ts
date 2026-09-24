@@ -12,6 +12,7 @@ import {
   padEndVisible,
   renderPanel,
   type SessionInfo,
+  sanitizeForTerminal,
   stripAnsi,
   truncateVisible,
   visibleWidth,
@@ -246,5 +247,44 @@ describe("formatPlainBanner", () => {
     expect(banner).toContain(SESSION.forwardTo);
     expect(banner).toContain(SESSION.gateway);
     expect(banner).toContain(SESSION.tunnelId);
+  });
+});
+
+// Regression: gateway-controlled strings (tunnel URL, error/shutdown messages,
+// close reasons) reached the terminal verbatim, so an embedded escape could
+// retitle the window, rewrite earlier output, or forge the displayed URL.
+describe("sanitizeForTerminal", () => {
+  test("strips CSI, OSC, and two-byte escape sequences", () => {
+    expect(sanitizeForTerminal("a\x1b[2J\x1b[31mb\x1b[0m")).toBe("ab");
+    expect(sanitizeForTerminal("x\x1b]0;pwned\x07y")).toBe("xy");
+    expect(
+      sanitizeForTerminal("x\x1b]8;;https://evil\x1b\\link\x1b]8;;\x1b\\"),
+    ).toBe("xlink");
+    expect(sanitizeForTerminal("a\x1bcb")).toBe("ab"); // RIS (full reset)
+  });
+
+  test("drops C0, DEL, and C1 controls; line breaks become spaces", () => {
+    expect(sanitizeForTerminal("a\x00b\x07c\x7fd\x9b2Je\x85f")).toBe(
+      "abcd2Jef",
+    );
+    expect(sanitizeForTerminal("line1\r\nline2\tend")).toBe("line1  line2 end");
+    expect(sanitizeForTerminal("dangling\x1b")).toBe("dangling");
+  });
+
+  test("leaves ordinary text, including non-ASCII, untouched", () => {
+    const s = "https://myapp.rift.example — tünnel ✓";
+    expect(sanitizeForTerminal(s)).toBe(s);
+  });
+});
+
+describe("truncateVisible only passes SGR escapes through", () => {
+  test("a non-SGR escape is not copied into the output", () => {
+    const out = truncateVisible("\x1b]0;title\x07abcdefgh", 4);
+    expect(out).not.toContain("\x1b");
+  });
+
+  test("SGR colour still passes through intact", () => {
+    const out = truncateVisible(colored.cyan("abcdefgh"), 4);
+    expect(out.startsWith("\x1b[36m")).toBe(true);
   });
 });

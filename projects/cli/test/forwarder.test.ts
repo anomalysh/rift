@@ -1,8 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { gunzipSync, gzipSync } from "node:zlib";
 
-import { FrameType } from "../src/constants.ts";
-import { type FrameSink, RequestStream } from "../src/forwarder.ts";
+import { FrameType, MAX_STREAM_BUFFER_BYTES } from "../src/constants.ts";
+import {
+  buildUpstreamUrl,
+  type FrameSink,
+  RequestStream,
+} from "../src/forwarder.ts";
 import type { RequestHead, ResponseHead } from "../src/protocol.ts";
 
 /** A body long enough that gzip is meaningfully smaller than the plaintext. */
@@ -45,6 +49,12 @@ const upstream = Bun.serve({
           "content-length": String(GZIP_BODY.length),
         },
       });
+    }
+    if (url.pathname === "/proto-headers") {
+      const h = new Headers({ "x-upstream": "yes" });
+      h.append("constructor", "c");
+      h.append("__proto__", "p");
+      return new Response("ok", { headers: h });
     }
     return new Response("upstream-ok", { headers: { "x-upstream": "yes" } });
   },
@@ -390,5 +400,119 @@ describe("forwarder request framing", () => {
     expect(sink.heads).toHaveLength(0);
     expect(sink.reset).not.toBeNull();
     expect(JSON.stringify(sink.reset)).toContain("upstream_error");
+  });
+});
+
+// Regression (SSRF): the local URL used to be built by string concatenation,
+// `http://127.0.0.1:3000` + path, so a gateway-supplied path could become
+// userinfo ("@169.254.169.254/x") or change the port ("1/x").
+describe("buildUpstreamUrl keeps every request on the configured target", () => {
+  test("an origin-form path stays on host:port", () => {
+    const url = buildUpstreamUrl("127.0.0.1", 3000, false, "/a/b?c=d");
+    expect(url.href).toBe("http://127.0.0.1:3000/a/b?c=d");
+  });
+
+  test("asterisk-form maps to the server root", () => {
+    expect(buildUpstreamUrl("127.0.0.1", 3000, false, "*").href).toBe(
+      "http://127.0.0.1:3000/",
+    );
+  });
+
+  test("an IPv6 host is bracketed", () => {
+    expect(buildUpstreamUrl("::1", 8443, true, "/").href).toBe(
+      "https://[::1]:8443/",
+    );
+  });
+
+  for (const evil of [
+    "@169.254.169.254/latest/meta-data",
+    "1/x",
+    "//evil.example/x",
+    "/\\evil.example/x",
+    "\\\\evil.example/x",
+    "http://evil.example/x",
+    "/x y",
+    "/x\r\nHost: evil",
+  ]) {
+    test(`refuses ${JSON.stringify(evil)}`, () => {
+      expect(() => buildUpstreamUrl("127.0.0.1", 3000, false, evil)).toThrow(
+        /refusing request target/,
+      );
+    });
+  }
+
+  test("a RequestStream with such a path resets without fetching", async () => {
+    const before = seen.length;
+    const { sink, done } = makeStream(
+      head({ path: `@127.0.0.1:${upstreamPort}/pwned` }),
+    );
+    await done;
+    expect(JSON.stringify(sink.reset)).toContain("internal");
+    expect(sink.heads).toHaveLength(0);
+    expect(seen.length).toBe(before);
+  });
+});
+
+// Regression: a GET/HEAD/OPTIONS carrying a body made Bun's fetch throw, and
+// the visitor got a 502. The body is now drained and the request forwarded.
+describe("bodies on methods fetch cannot send", () => {
+  for (const method of ["GET", "OPTIONS"]) {
+    test(`${method} with a body is forwarded without it`, async () => {
+      const { stream, sink, done } = makeStream(
+        head({
+          method,
+          path: "/with-body",
+          has_body: true,
+          headers: { "content-length": ["3"] },
+        }),
+      );
+      stream.pushBody(new TextEncoder().encode("abc"));
+      stream.endBody();
+      await done;
+      expect(sink.reset).toBeNull();
+      expect(sink.heads[0]?.status).toBe(200);
+      const got = seen.at(-1);
+      expect(got?.method).toBe(method);
+      expect(got?.body).toBe("");
+      expect(got?.contentLength).toBeNull();
+    });
+  }
+});
+
+// Flow control: request-body chunks used to be enqueued into an unbounded
+// stream, so an upstream that reads slower than the client uploads grew agent
+// memory without limit.
+describe("request body backlog cap", () => {
+  test("a backlog past the cap resets with payload_too_large", async () => {
+    const { stream, sink, done } = makeStream(
+      head({ method: "POST", path: "/slow", has_body: true, headers: {} }),
+    );
+    const chunk = new Uint8Array(1 << 20);
+    // All pushed within one tick: fetch has had no chance to consume any.
+    for (let i = 0; i <= MAX_STREAM_BUFFER_BYTES / chunk.length; i++) {
+      stream.pushBody(chunk);
+    }
+    await done;
+    expect(JSON.stringify(sink.reset)).toContain("payload_too_large");
+  });
+});
+
+// Regression: response headers were collected into a plain {}, so a header
+// named "constructor" or "__proto__" resolved to an Object builtin and the
+// response failed.
+describe("prototype-named response headers", () => {
+  test("constructor / __proto__ headers are relayed, not fatal", async () => {
+    const { sink, done } = makeStream(head({ path: "/proto-headers" }));
+    await done;
+    expect(sink.reset).toBeNull();
+    const h = sink.heads[0]?.headers ?? {};
+    // Own properties, not the Object builtins those names would otherwise hit.
+    expect(Object.getOwnPropertyDescriptor(h, "constructor")?.value).toEqual([
+      "c",
+    ]);
+    expect(Object.getOwnPropertyDescriptor(h, "__proto__")?.value).toEqual([
+      "p",
+    ]);
+    expect(h?.["x-upstream"]).toEqual(["yes"]);
   });
 });
