@@ -392,16 +392,28 @@ export function requestTargetProblem(
   return null;
 }
 
+/** Why one header field cannot be sent verbatim, or null if it is safe. */
+export function headerFieldProblem(
+  name: string,
+  values: readonly string[],
+): string | null {
+  if (!isHttpToken(name)) {
+    return `header name ${JSON.stringify(name)} is not an HTTP token`;
+  }
+  for (const value of values) {
+    if (UNSAFE_FIELD_VALUE_CHARS.test(value)) {
+      return `header ${name} contains CR, LF, or NUL`;
+    }
+  }
+  return null;
+}
+
 /** Why a header map cannot be forwarded verbatim, or null if it is safe. */
 export function headerMapProblem(headers: HeaderMap): string | null {
   for (const [name, values] of Object.entries(headers)) {
-    if (!isHttpToken(name)) {
-      return `header name ${JSON.stringify(name)} is not an HTTP token`;
-    }
-    for (const value of values) {
-      if (UNSAFE_FIELD_VALUE_CHARS.test(value)) {
-        return `header ${name} contains CR, LF, or NUL`;
-      }
+    const problem = headerFieldProblem(name, values);
+    if (problem !== null) {
+      return problem;
     }
   }
   return null;

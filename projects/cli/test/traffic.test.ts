@@ -61,6 +61,29 @@ describe("buildTrafficPolicy", () => {
     );
   });
 
+  // Regression: an invalid header name was accepted here and then made
+  // Headers.set throw on every forwarded request (each one reset), and a CR/LF
+  // in a response-header value was relayed to the gateway verbatim.
+  test("header rules must name a valid field with a safe value", () => {
+    for (const flags of [
+      { setRequestHeader: ["X Bad: 1"] },
+      { setResponseHeader: ["X-Ok: a\r\nSet-Cookie: pwned=1"] },
+      { setResponseHeader: ["X-Ok: a\u0000b"] },
+      { delRequestHeader: ["bad header"] },
+      { delResponseHeader: [""] },
+    ]) {
+      const r = buildTrafficPolicy(flags);
+      expect(r).toHaveProperty("error");
+      if ("error" in r) expect(r.error).toStartWith("invalid --");
+    }
+    const ok = policyOrThrow({
+      setRequestHeader: ["X-A: 1"],
+      delResponseHeader: [" server "],
+    });
+    expect(ok.setRequestHeaders).toEqual([{ name: "X-A", value: "1" }]);
+    expect(ok.delResponseHeaders).toEqual(["server"]);
+  });
+
   test("routes are ordered longest-prefix first", () => {
     const p = policyOrThrow({ route: ["/=3000", "/api/v2=5000", "/api=4000"] });
     expect(p.routes.map((r) => r.prefix)).toEqual(["/api/v2", "/api", "/"]);

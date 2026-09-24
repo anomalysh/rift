@@ -12,7 +12,11 @@
 // this module is purely local and never leaves the agent.
 
 import type { FlagConfig } from "./args.ts";
-import { type HeaderMap, newHeaderMap } from "./protocol.ts";
+import {
+  type HeaderMap,
+  headerFieldProblem,
+  newHeaderMap,
+} from "./protocol.ts";
 
 /** A response the agent produces itself, bypassing the upstream fetch. */
 export interface SyntheticResponse {
@@ -66,6 +70,39 @@ const BREAKER_COOLDOWN_MS = 10_000;
 const DEFAULT_BREAKER_THRESHOLD = 5;
 
 const TEXT = new TextEncoder();
+
+/**
+ * Parse a --set-*-header value, "Name: value" (or "Name=value"). The field is
+ * validated here, once, rather than failing every request: an invalid name
+ * makes Headers.set throw on each forwarded request, and a CR/LF in a value
+ * would be relayed to the gateway as a response header.
+ */
+function parseSetHeader(
+  flag: string,
+  raw: string,
+): SetHeader | { error: string } {
+  const h = splitHeaderAssign(raw);
+  if (h === null) {
+    return {
+      error: `invalid ${flag} ${JSON.stringify(raw)}: expected "Name: value"`,
+    };
+  }
+  const problem = headerFieldProblem(h.name, [h.value]);
+  if (problem !== null) {
+    return { error: `invalid ${flag} ${JSON.stringify(raw)}: ${problem}` };
+  }
+  return h;
+}
+
+/** Parse a --del-*-header value: a header name, which must be an HTTP token. */
+function parseDelHeader(flag: string, raw: string): string | { error: string } {
+  const name = raw.trim();
+  const problem = headerFieldProblem(name, []);
+  if (problem !== null) {
+    return { error: `invalid ${flag} ${JSON.stringify(raw)}: ${problem}` };
+  }
+  return name;
+}
 
 /** Split "Name: value" (or "Name=value") into a trimmed name and value. */
 function splitHeaderAssign(raw: string): SetHeader | null {
@@ -221,26 +258,28 @@ export function buildTrafficPolicy(
 ): { policy?: TrafficPolicy } | { error: string } {
   const setRequestHeaders: SetHeader[] = [];
   for (const raw of flags.setRequestHeader ?? []) {
-    const h = splitHeaderAssign(raw);
-    if (h === null)
-      return {
-        error: `invalid --set-request-header ${JSON.stringify(raw)}: expected "Name: value"`,
-      };
+    const h = parseSetHeader("--set-request-header", raw);
+    if ("error" in h) return h;
     setRequestHeaders.push(h);
   }
   const setResponseHeaders: SetHeader[] = [];
   for (const raw of flags.setResponseHeader ?? []) {
-    const h = splitHeaderAssign(raw);
-    if (h === null)
-      return {
-        error: `invalid --set-response-header ${JSON.stringify(raw)}: expected "Name: value"`,
-      };
+    const h = parseSetHeader("--set-response-header", raw);
+    if ("error" in h) return h;
     setResponseHeaders.push(h);
   }
-  const delRequestHeaders = (flags.delRequestHeader ?? []).map((n) => n.trim());
-  const delResponseHeaders = (flags.delResponseHeader ?? []).map((n) =>
-    n.trim(),
-  );
+  const delRequestHeaders: string[] = [];
+  for (const raw of flags.delRequestHeader ?? []) {
+    const n = parseDelHeader("--del-request-header", raw);
+    if (typeof n !== "string") return n;
+    delRequestHeaders.push(n);
+  }
+  const delResponseHeaders: string[] = [];
+  for (const raw of flags.delResponseHeader ?? []) {
+    const n = parseDelHeader("--del-response-header", raw);
+    if (typeof n !== "string") return n;
+    delResponseHeaders.push(n);
+  }
 
   const mocks: MockRule[] = [];
   for (const raw of flags.respond ?? []) {
