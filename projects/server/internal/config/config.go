@@ -210,11 +210,15 @@ type TLSTunnel struct {
 
 // Port returns the public port a tls tunnel is advertised on, falling back to
 // the port in ListenAddr.
-func (t TLSTunnel) Port() int {
-	if t.AdvertisePort > 0 {
-		return t.AdvertisePort
+func (t TLSTunnel) Port() int { return advertisedPort(t.AdvertisePort, t.ListenAddr) }
+
+// advertisedPort is advertise when set, otherwise the numeric port of
+// listenAddr, or 0 when that has none (validateListener refuses 0 at boot).
+func advertisedPort(advertise int, listenAddr string) int {
+	if advertise > 0 {
+		return advertise
 	}
-	if _, p, err := net.SplitHostPort(t.ListenAddr); err == nil {
+	if _, p, err := net.SplitHostPort(listenAddr); err == nil {
 		if n, err := strconv.Atoi(p); err == nil {
 			return n
 		}
@@ -237,17 +241,7 @@ type GRPC struct {
 
 // Port returns the public port a grpc tunnel is advertised on, falling back to
 // the port in ListenAddr.
-func (g GRPC) Port() int {
-	if g.AdvertisePort > 0 {
-		return g.AdvertisePort
-	}
-	if _, p, err := net.SplitHostPort(g.ListenAddr); err == nil {
-		if n, err := strconv.Atoi(p); err == nil {
-			return n
-		}
-	}
-	return 0
-}
+func (g GRPC) Port() int { return advertisedPort(g.AdvertisePort, g.ListenAddr) }
 
 // Tunnel holds the behavioural knobs of the tunnelling layer.
 type Tunnel struct {
@@ -302,6 +296,7 @@ func Load() (*Config, error) {
 		Ingress: Ingress{
 			Addr:            l.str(KeyIngressAddr, DefaultIngressAddr),
 			ReadTimeout:     l.duration(KeyIngressReadTimeout, DefaultIngressReadTimeout),
+			WriteTimeout:    l.optionalDuration(KeyIngressWriteTimeout, DefaultIngressWriteTimeout),
 			IdleTimeout:     l.duration(KeyIngressIdleTimeout, DefaultIngressIdleTimeout),
 			MaxHeaderBytes:  l.integer(KeyIngressMaxHeaderBytes, DefaultIngressMaxHeaderBytes),
 			TrustedProxyIPs: l.csv(KeyIngressTrustedProxyIPs, nil),
@@ -390,10 +385,6 @@ func Load() (*Config, error) {
 		},
 	}
 
-	// Write timeout of 0 disables the deadline, which is what we want for
-	// long-lived streamed responses, so it bypasses the positive-duration check.
-	cfg.Ingress.WriteTimeout = optionalDuration(l, KeyIngressWriteTimeout, DefaultIngressWriteTimeout)
-
 	cfg.Log.Level = parseLogLevel(l, l.str(KeyLogLevel, DefaultLogLevel))
 
 	// A stable node ID lets a restarted process reclaim the tunnel rows it
@@ -434,24 +425,6 @@ func Load() (*Config, error) {
 	}
 	cfg.Warnings = l.warns
 	return cfg, nil
-}
-
-// optionalDuration parses a duration that may legitimately be zero.
-func optionalDuration(l *loader, key string, def time.Duration) time.Duration {
-	v, ok := lookup(key)
-	if !ok {
-		return def
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		l.fail(key, fmt.Errorf("expected a duration such as 30s, got %q", v))
-		return def
-	}
-	if d < 0 {
-		l.fail(key, fmt.Errorf("must not be negative, got %q", v))
-		return def
-	}
-	return d
 }
 
 func parseLogLevel(l *loader, s string) slog.Level {
@@ -518,6 +491,27 @@ func (c *Config) validateTLS(l *loader) {
 	}
 }
 
+// validatePortRange checks a public port window: every port a real one (port 0
+// would bind an ephemeral port and advertise ":0") and the window not inverted.
+func validatePortRange(l *loader, minKey, maxKey string, lo, hi int) {
+	if lo < 1 || hi > 65535 {
+		l.fail(minKey, fmt.Errorf("port range %d-%d must fall within 1-65535", lo, hi))
+	} else if lo > hi {
+		l.fail(minKey, fmt.Errorf("must not exceed %s: got %d > %d", maxKey, lo, hi))
+	}
+}
+
+// validateListener checks a dedicated tunnel listener's address and that the
+// public port it is advertised on (see advertisedPort) is a real one.
+func validateListener(l *loader, addrKey, advertiseKey, addr string, port int) {
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		l.fail(addrKey, fmt.Errorf("expected host:port such as :8443, got %q", addr))
+	}
+	if port < 1 || port > 65535 {
+		l.fail(addrKey, fmt.Errorf("could not determine a valid advertise port (set %s)", advertiseKey))
+	}
+}
+
 func (c *Config) validate(l *loader) {
 	c.validateTLS(l)
 
@@ -567,21 +561,21 @@ func (c *Config) validate(l *loader) {
 		l.fail(KeyMaxRequestBodyBytes, fmt.Errorf("must be >= 0 (0 means unlimited), got %d", c.Tunnel.MaxRequestBodyBytes))
 	}
 
+	// Each raw-tunnel family is checked the same way when enabled. UDP and
+	// gRPC were once not checked at all: an inverted UDP range panicked the
+	// gateway at boot (its port pool is sized max-min+1), and a gRPC listen
+	// address without a numeric port advertised every tunnel on port 0.
 	if c.TCP.Enabled {
-		if c.TCP.PortMin < 1 || c.TCP.PortMax > 65535 {
-			l.fail(KeyTCPPortMin, fmt.Errorf("port range %d-%d must fall within 1-65535", c.TCP.PortMin, c.TCP.PortMax))
-		} else if c.TCP.PortMin > c.TCP.PortMax {
-			l.fail(KeyTCPPortMin, fmt.Errorf("must not exceed %s: got %d > %d", KeyTCPPortMax, c.TCP.PortMin, c.TCP.PortMax))
-		}
+		validatePortRange(l, KeyTCPPortMin, KeyTCPPortMax, c.TCP.PortMin, c.TCP.PortMax)
 	}
-
+	if c.UDP.Enabled {
+		validatePortRange(l, KeyUDPPortMin, KeyUDPPortMax, c.UDP.PortMin, c.UDP.PortMax)
+	}
 	if c.TLSTunnel.Enabled {
-		if _, _, err := net.SplitHostPort(c.TLSTunnel.ListenAddr); err != nil {
-			l.fail(KeyTLSTunnelListenAddr, fmt.Errorf("expected host:port such as :8443, got %q", c.TLSTunnel.ListenAddr))
-		}
-		if p := c.TLSTunnel.Port(); p < 1 || p > 65535 {
-			l.fail(KeyTLSTunnelListenAddr, fmt.Errorf("could not determine a valid advertise port (set %s)", KeyTLSTunnelAdvertisePort))
-		}
+		validateListener(l, KeyTLSTunnelListenAddr, KeyTLSTunnelAdvertisePort, c.TLSTunnel.ListenAddr, c.TLSTunnel.Port())
+	}
+	if c.GRPC.Enabled {
+		validateListener(l, KeyGRPCListenAddr, KeyGRPCAdvertisePort, c.GRPC.ListenAddr, c.GRPC.Port())
 	}
 
 	if !strings.HasPrefix(c.Gateway.Path, "/") {
