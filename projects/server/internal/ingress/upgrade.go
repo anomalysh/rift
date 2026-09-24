@@ -64,18 +64,7 @@ func (i *Ingress) proxyUpgrade(w http.ResponseWriter, r *http.Request, sess core
 	if tconn == nil {
 		// The service answered without switching protocols; relay it verbatim.
 		cancel()
-		defer func() { _ = resp.Body.Close() }()
-		header := w.Header()
-		for k, vs := range resp.Header {
-			for _, v := range vs {
-				header.Add(k, v)
-			}
-		}
-		w.WriteHeader(resp.StatusCode)
-		if err := streamBody(w, resp.Body); err != nil {
-			i.logger.Debug("declined-upgrade response ended early",
-				slog.String("subdomain", sub), slog.Any("error", err))
-		}
+		i.relayResponse(w, resp, sub, "declined upgrade")
 		return
 	}
 	cancel()

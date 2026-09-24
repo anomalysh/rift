@@ -53,7 +53,7 @@ func (i *Ingress) forwardToPeer(w http.ResponseWriter, r *http.Request, nodeURL,
 			if next, ok, lerr := i.registry.LocatePeer(r.Context(), sub); lerr == nil && ok && next != nodeURL {
 				if resp2, err2 := i.doPeerForward(r, next, sub); err2 == nil {
 					i.breaker.recordSuccess(next)
-					i.relayPeerResponse(w, r, resp2, sub)
+					i.relayResponse(w, resp2, sub, "peer")
 					return
 				}
 				i.breaker.recordFailure(next)
@@ -67,7 +67,7 @@ func (i *Ingress) forwardToPeer(w http.ResponseWriter, r *http.Request, nodeURL,
 	}
 
 	i.breaker.recordSuccess(nodeURL)
-	i.relayPeerResponse(w, r, resp, sub)
+	i.relayResponse(w, resp, sub, "peer")
 }
 
 // errInvalidPeerURL means a routing lease named something other than a plain
@@ -121,22 +121,6 @@ func (i *Ingress) doPeerForward(r *http.Request, nodeURL, sub string) (*http.Res
 	outbound.Header.Set(config.HeaderRiftClientIP, i.clientIP(r))
 
 	return i.peers.Do(outbound)
-}
-
-func (i *Ingress) relayPeerResponse(w http.ResponseWriter, _ *http.Request, resp *http.Response, sub string) {
-	defer func() { _ = resp.Body.Close() }()
-
-	header := w.Header()
-	for k, vs := range resp.Header {
-		for _, v := range vs {
-			header.Add(k, v)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	if err := streamBody(w, resp.Body); err != nil {
-		i.logger.Debug("peer response stream ended early",
-			slog.String("subdomain", sub), slog.Any("error", err))
-	}
 }
 
 // canRetryForward reports whether a failed forward may be repeated against a

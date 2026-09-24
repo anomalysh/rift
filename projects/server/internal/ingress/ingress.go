@@ -648,6 +648,14 @@ func (i *Ingress) proxy(w http.ResponseWriter, r *http.Request, sess core.Sessio
 		i.writeRoundTripError(w, r, sub, err)
 		return
 	}
+	i.relayResponse(w, resp, sub, "tunnel")
+}
+
+// relayResponse writes resp to the public client -- headers, status, then the
+// body streamed with flushes -- and closes its body. It is the one relay for a
+// tunnel response, a declined upgrade and a peer node's response. source
+// names which, for the log.
+func (i *Ingress) relayResponse(w http.ResponseWriter, resp *http.Response, sub, source string) {
 	defer func() { _ = resp.Body.Close() }()
 
 	header := w.Header()
@@ -660,7 +668,7 @@ func (i *Ingress) proxy(w http.ResponseWriter, r *http.Request, sess core.Sessio
 
 	if err := streamBody(w, resp.Body); err != nil {
 		// Headers are already on the wire; there is no status left to send.
-		i.logger.Debug("response stream ended early",
+		i.logger.Debug("response stream ended early", slog.String("source", source),
 			slog.String("subdomain", sub), slog.Any("error", err))
 	}
 }
