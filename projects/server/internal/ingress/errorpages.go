@@ -1,6 +1,7 @@
 package ingress
 
 import (
+	"html"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -70,6 +71,12 @@ func loadErrorPages(dir string, logger *slog.Logger) *errorPages {
 // render returns the HTML body for a status with the placeholders substituted,
 // or ("", false) when no template covers it (the caller then serves the
 // built-in body). Placeholders: {{status}}, {{code}}, {{message}}.
+//
+// Every substituted value is HTML-escaped, quotes included. The message can
+// carry request-derived text -- "No tunnel is currently serving <host>" embeds
+// a label taken from the Host header, and Go's server admits characters such
+// as ' and ( there -- and an operator's template may place a placeholder
+// inside an attribute, where an unescaped quote would end it.
 func (e *errorPages) render(status int, code, message string) (string, bool) {
 	tmpl, ok := e.byStatus[status]
 	if !ok {
@@ -79,9 +86,9 @@ func (e *errorPages) render(status int, code, message string) (string, bool) {
 		tmpl = e.fallback
 	}
 	r := strings.NewReplacer(
-		"{{status}}", strconv.Itoa(status),
-		"{{code}}", code,
-		"{{message}}", message,
+		"{{status}}", html.EscapeString(strconv.Itoa(status)),
+		"{{code}}", html.EscapeString(code),
+		"{{message}}", html.EscapeString(message),
 	)
 	return r.Replace(tmpl), true
 }

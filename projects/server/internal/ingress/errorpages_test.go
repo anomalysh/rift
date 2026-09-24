@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/anomalysh/rift/projects/server/internal/config"
+	"github.com/anomalysh/rift/projects/server/internal/registry"
 )
 
 func writeFile(t *testing.T, dir, name, body string) {
@@ -104,5 +105,31 @@ func TestWriteGatewayErrorServesBrandedPage(t *testing.T) {
 	i.writeGatewayError(w, r, http.StatusBadGateway, "tunnel_unavailable", "down")
 	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
 		t.Fatalf("uncovered status content-type = %q, want text/plain", ct)
+	}
+}
+
+// The tunnel_not_found message embeds a label from the Host header, and a
+// template may put {{message}} in an attribute, so every value is escaped.
+func TestErrorPageEscapesHostDerivedMessage(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "404.html", `<a title="{{message}}" data-code='{{code}}'>{{status}}</a>`)
+	cfg := &config.Config{
+		Ingress: config.Ingress{ErrorPageDir: dir},
+		Tunnel:  config.Tunnel{BaseDomain: "rift.test", PublicScheme: "https"},
+	}
+	i := New(cfg, discardLogger(), registry.NewLocal(), nil, nil, nil)
+
+	r := httptest.NewRequest(http.MethodGet, "http://placeholder/", nil)
+	r.Host = `x'"><script>alert(1)</script>.rift.test`
+	w := httptest.NewRecorder()
+	i.Handler().ServeHTTP(w, r)
+
+	body := w.Body.String()
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
+	}
+	want := `<a title="No tunnel is currently serving x&#39;&#34;&gt;&lt;script&gt;alert(1)&lt;/script&gt;.rift.test." data-code='tunnel_not_found'>404</a>`
+	if body != want {
+		t.Fatalf("host-derived text was not escaped:\n got %q\nwant %q", body, want)
 	}
 }

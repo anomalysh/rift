@@ -746,8 +746,8 @@ func (i *Ingress) writeGatewayError(w http.ResponseWriter, r *http.Request, stat
 		return
 	}
 	// T4: a branded HTML page, if one is configured for this status. The
-	// substituted values (status, code, message) are all server-controlled
-	// constants, so there is no untrusted markup to escape.
+	// message is NOT always a constant -- tunnel_not_found names the requested
+	// host, which comes from the client -- so render escapes every value.
 	if i.errorPages != nil {
 		if body, ok := i.errorPages.render(status, code, message); ok {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
