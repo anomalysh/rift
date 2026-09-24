@@ -249,3 +249,36 @@ describe("gateway strings are sanitized before display", () => {
     expect(msg).toContain("bad token");
   });
 });
+
+// Regression: Bun exits the process when an event listener throws, so any bug
+// while handling one gateway frame took down every tunnel. The frame handler is
+// now fenced: the error is logged and the connection carries on.
+describe("frame handling is fenced", () => {
+  test("a throw while handling one frame is logged, not fatal", async () => {
+    onHello = (ws) => {
+      ws.sendBinary(encodeControl(ControlType.PONG, { ts: 1 }));
+      ws.sendBinary(helloOk({ heartbeat_interval_ms: 60_000 }));
+    };
+    const logger = captureLogger();
+    logger.debug = (m: string) => {
+      if (m === "pong") throw new Error("debug sink exploded");
+    };
+    const client = new TunnelClient({
+      config: config(),
+      protocol: "http",
+      port: 3000,
+      logger,
+    });
+    const run = client.run();
+    try {
+      // The frame after the one that threw is still processed.
+      await waitFor(() => logger.sessions.length > 0, 2000);
+      expect(logger.lines.some((l) => l.includes("debug sink exploded"))).toBe(
+        true,
+      );
+    } finally {
+      client.stop();
+      await run;
+    }
+  });
+});

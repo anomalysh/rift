@@ -50,7 +50,7 @@ import {
   type Hello,
   isKnownFrameType,
 } from "./protocol.ts";
-import type { FrameSink, Stream } from "./stream.ts";
+import { type FrameSink, type Stream, sendStreamReset } from "./stream.ts";
 import type { TrafficController } from "./traffic.ts";
 import { UdpStream } from "./udp.ts";
 import {
@@ -242,7 +242,16 @@ export class TunnelClient {
     ws.addEventListener("message", (event) => {
       if (this.ws !== ws) return;
       this.lastInboundAt = Date.now();
-      this.onMessage(event);
+      try {
+        this.onMessage(event);
+      } catch (err) {
+        // Bun exits the process on a throw out of an event listener, so a bug
+        // in handling one frame would drop every stream on every tunnel. Keep
+        // the connection and say so loudly instead.
+        this.logger.error(
+          `internal error handling a gateway frame: ${errorMessage(err)}`,
+        );
+      }
     });
     ws.addEventListener("error", () => {
       // Detail arrives via the following close event; log for visibility.
@@ -524,10 +533,12 @@ export class TunnelClient {
     const head = asRequestHead(parsed);
     if (head === null) {
       this.logger.warn(`dropping malformed REQ_HEAD on stream ${streamId}`);
-      this.sink.sendJson(FrameType.RESET, streamId, {
-        code: ResetCode.INTERNAL,
-        message: "malformed request head",
-      });
+      sendStreamReset(
+        this.sink,
+        streamId,
+        ResetCode.INTERNAL,
+        "malformed request head",
+      );
       return;
     }
     // Stream IDs are unique per connection; a collision means a protocol bug.
