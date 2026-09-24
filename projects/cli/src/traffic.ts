@@ -17,6 +17,7 @@ import {
   headerFieldProblem,
   newHeaderMap,
 } from "./protocol.ts";
+import { EMPTY_BYTES } from "./stream.ts";
 
 /** A response the agent produces itself, bypassing the upstream fetch. */
 export interface SyntheticResponse {
@@ -401,10 +402,10 @@ export class TrafficController {
         return {
           status: r.status,
           headers: this.decorateResponse(
-            Object.assign(newHeaderMap(), { location: [r.location] }),
+            newHeaderMap({ location: [r.location] }),
             reqHeaders,
           ),
-          body: new Uint8Array(0),
+          body: EMPTY_BYTES,
         };
       }
     }
@@ -415,7 +416,7 @@ export class TrafficController {
       return {
         status: m.status,
         headers: this.decorateResponse(
-          Object.assign(newHeaderMap(), {
+          newHeaderMap({
             "content-type": [m.contentType],
             "content-length": [String(body.length)],
           }),
@@ -440,7 +441,7 @@ export class TrafficController {
    */
   decorateResponse(headers: HeaderMap, reqHeaders: HeaderMap): HeaderMap {
     // Prototype-less copy: header names are network input (see newHeaderMap).
-    const out: HeaderMap = Object.assign(newHeaderMap(), headers);
+    const out = newHeaderMap(headers);
     for (const name of this.policy.delResponseHeaders) {
       delete out[name.toLowerCase()];
     }
@@ -490,7 +491,7 @@ export class TrafficController {
     return {
       status: 503,
       headers: this.decorateResponse(
-        Object.assign(newHeaderMap(), {
+        newHeaderMap({
           "content-type": ["text/plain; charset=utf-8"],
           "content-length": [String(body.length)],
           "retry-after": [String(Math.ceil(BREAKER_COOLDOWN_MS / 1000))],
@@ -502,7 +503,7 @@ export class TrafficController {
   }
 
   private preflight(reqHeaders: HeaderMap): SyntheticResponse {
-    const headers: HeaderMap = Object.assign(newHeaderMap(), {
+    const headers = newHeaderMap({
       "access-control-allow-methods": [
         firstHeader(reqHeaders, "access-control-request-method") ??
           "GET, POST, PUT, PATCH, DELETE, OPTIONS",
@@ -514,7 +515,7 @@ export class TrafficController {
       "content-length": ["0"],
     });
     applyCorsResponse(headers, reqHeaders, this.policy.corsOrigins);
-    return { status: 204, headers, body: new Uint8Array(0) };
+    return { status: 204, headers, body: EMPTY_BYTES };
   }
 }
 

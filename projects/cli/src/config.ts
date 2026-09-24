@@ -225,19 +225,26 @@ export function configFilePath(
   return join(base, CONFIG_DIR_NAME, CONFIG_FILE_NAME);
 }
 
-/** Validate parsed config-file JSON into a PartialConfig. Throws on bad shape. */
-export function parseConfigFile(text: string, path: string): PartialConfig {
+/** Parse config-file text as a JSON object. Throws ConfigError otherwise. */
+function parseConfigObject(
+  text: string,
+  path: string,
+): Record<string, unknown> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch (err) {
-    throw new ConfigError(
-      `invalid JSON in ${path}: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    throw new ConfigError(`invalid JSON in ${path}: ${errorMessage(err)}`);
   }
   if (!isRecord(parsed)) {
     throw new ConfigError(`invalid config in ${path}: expected a JSON object`);
   }
+  return parsed;
+}
+
+/** Validate parsed config-file JSON into a PartialConfig. Throws on bad shape. */
+export function parseConfigFile(text: string, path: string): PartialConfig {
+  const parsed = parseConfigObject(text, path);
   const out: PartialConfig = {};
   const strField = (key: "token" | "server" | "host"): void => {
     const value = parsed[key];
@@ -348,24 +355,9 @@ export function writeConfigValues(
 ): { path: string; keys: string[] } {
   const path = configFilePath(env);
 
-  let current: Record<string, unknown> = {};
-  if (existsSync(path)) {
-    const text = readFileSync(path, "utf8");
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch (err) {
-      throw new ConfigError(
-        `invalid JSON in ${path}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-    if (!isRecord(parsed)) {
-      throw new ConfigError(
-        `invalid config in ${path}: expected a JSON object`,
-      );
-    }
-    current = parsed;
-  }
+  const current = existsSync(path)
+    ? parseConfigObject(readFileSync(path, "utf8"), path)
+    : {};
 
   const merged = { ...current, ...updates };
   const dir = dirname(path);

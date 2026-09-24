@@ -16,6 +16,8 @@ import {
   createStyle,
   Dashboard,
   type DashboardDeps,
+  FALLBACK_COLUMNS,
+  FALLBACK_ROWS,
   formatEvent,
   formatPlainBanner,
   type Metrics,
@@ -30,10 +32,6 @@ const LEVEL_RANK: Record<LogLevel, number> = {
   error: 40,
   silent: 100,
 };
-
-/** Default terminal size when stdout does not report it. */
-const DEFAULT_COLUMNS = 80;
-const DEFAULT_ROWS = 24;
 
 export interface Logger {
   debug(message: string, ...rest: unknown[]): void;
@@ -158,8 +156,8 @@ function createPlainLogger(level: LogLevel): Logger {
 function dashboardDeps(): DashboardDeps {
   return {
     write: (chunk) => process.stdout.write(chunk),
-    columns: () => process.stdout.columns ?? DEFAULT_COLUMNS,
-    rows: () => process.stdout.rows ?? DEFAULT_ROWS,
+    columns: () => process.stdout.columns ?? FALLBACK_COLUMNS,
+    rows: () => process.stdout.rows ?? FALLBACK_ROWS,
     style: createStyle(true),
     now: () => Date.now(),
     setInterval: (fn, ms) => {

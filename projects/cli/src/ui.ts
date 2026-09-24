@@ -158,8 +158,7 @@ export function truncateVisible(s: string, max: number): string {
     count++;
     i++;
   }
-  const hadColor = ANSI_SGR.test(s);
-  ANSI_SGR.lastIndex = 0; // `test` on a /g regex is stateful; reset it
+  const hadColor = stripAnsi(s) !== s;
   return `${out}…${hadColor ? SGR.reset : ""}`;
 }
 
@@ -502,8 +501,9 @@ const setScrollRegion = (top: number, bottom: number): string =>
 
 /** Spinner cadence; signature-gated header repaints keep idle states near 1 Hz. */
 const TICK_INTERVAL_MS = 120;
-/** Terminal height to assume when stdout does not report one. */
-const FALLBACK_ROWS = 24;
+/** Terminal size to assume when stdout does not report one. */
+export const FALLBACK_COLUMNS = 80;
+export const FALLBACK_ROWS = 24;
 
 /** Injected environment for the Dashboard, so it is TTY- and clock-agnostic. */
 export interface DashboardDeps {
@@ -554,7 +554,7 @@ export class Dashboard {
 
   /** Clear the screen, pin the header, and start scrolling the log below it. */
   start(): void {
-    this.termRows = Math.max(1, this.deps.rows() || FALLBACK_ROWS);
+    this.termRows = this.reportedRows();
     // A terminal too short for the header plus a line of log cannot host the
     // fixed layout; degrade to a one-shot banner and plain logs.
     if (this.termRows <= PANEL_HEIGHT + 1) {
@@ -639,6 +639,11 @@ export class Dashboard {
     this.deps.offExit(this.exitHandler);
   }
 
+  /** The terminal height, falling back when it reports none (0). */
+  private reportedRows(): number {
+    return Math.max(1, this.deps.rows() || FALLBACK_ROWS);
+  }
+
   private headerWidth(): number {
     return clampWidth(this.deps.columns());
   }
@@ -665,7 +670,7 @@ export class Dashboard {
       return;
     }
     const width = this.headerWidth();
-    const rows = Math.max(1, this.deps.rows() || FALLBACK_ROWS);
+    const rows = this.reportedRows();
     const state = this.snapshot();
     const sig = `${signatureOf(state, width)}|${rows}`;
     if (!force && sig === this.lastSignature) {
@@ -692,8 +697,8 @@ export class Dashboard {
 // frame is excluded for steady states (online/offline) so an idle tunnel does
 // not repaint on every 120 ms tick — only when uptime seconds or metrics move.
 function signatureOf(state: PanelState, width: number): string {
-  const animated = state.status === "online" || state.status === "offline";
-  const spin = animated ? "" : state.spinnerFrame;
+  const steady = state.status === "online" || state.status === "offline";
+  const spin = steady ? "" : state.spinnerFrame;
   const metrics =
     state.metrics !== null
       ? `${state.metrics.total}/${state.metrics.open}`

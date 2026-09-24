@@ -16,7 +16,6 @@ import {
   ENV,
   EXIT,
   LOG_LEVELS,
-  type LogLevel,
   SUPPORTED_PROTOCOLS,
   type SupportedProtocol,
   VERSION,
@@ -487,6 +486,3 @@ export const CLI_SPEC: CliSpec = {
   seeAlso:
     "Project documentation and the wire-protocol contract ship with the source tree (README.md, docs/PROTOCOL.md).",
 };
-
-/** All log levels, exported for renderers that offer value completion. */
-export const SPEC_LOG_LEVELS: readonly LogLevel[] = LOG_LEVELS;

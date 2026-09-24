@@ -48,9 +48,6 @@ export const FrameType = {
   RESET: 0x30,
 } as const;
 
-export type FrameTypeName = keyof typeof FrameType;
-export type FrameTypeValue = (typeof FrameType)[FrameTypeName];
-
 /** Every frame type this protocol version understands. */
 export const KNOWN_FRAME_TYPES: ReadonlySet<number> = new Set<number>(
   Object.values(FrameType),
@@ -87,9 +84,6 @@ export const ShutdownReason = {
   HEARTBEAT_TIMEOUT: "heartbeat_timeout",
   REPLACED: "replaced",
 } as const;
-
-export type ShutdownReasonValue =
-  (typeof ShutdownReason)[keyof typeof ShutdownReason];
 
 /** Stream abort reasons (tunnelproto ResetCode). */
 export const ResetCode = {

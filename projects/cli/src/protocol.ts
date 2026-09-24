@@ -136,13 +136,29 @@ export function decodeFrame(buf: Uint8Array): Frame {
 export type HeaderMap = Record<string, string[]>;
 
 /**
- * An empty header map with no prototype. Header names come from the network,
- * and indexing a plain `{}` with "constructor" or "__proto__" yields an Object
- * builtin rather than undefined (and assigning "__proto__" rewires the
- * prototype), which breaks the append-or-create pattern every builder uses.
+ * A header map with no prototype, holding a copy of `init`'s own entries.
+ * Header names come from the network, and indexing a plain `{}` with
+ * "constructor" or "__proto__" yields an Object builtin rather than undefined
+ * (and assigning "__proto__" rewires the prototype), which breaks the
+ * append-or-create pattern every builder uses.
  */
-export function newHeaderMap(): HeaderMap {
-  return Object.create(null) as HeaderMap;
+export function newHeaderMap(init?: Readonly<HeaderMap>): HeaderMap {
+  const map = Object.create(null) as HeaderMap;
+  return init === undefined ? map : Object.assign(map, init);
+}
+
+/** Append one value under `name`, keeping any values already there. */
+export function appendHeader(
+  headers: HeaderMap,
+  name: string,
+  value: string,
+): void {
+  const existing = headers[name];
+  if (existing === undefined) {
+    headers[name] = [value];
+  } else {
+    existing.push(value);
+  }
 }
 
 export interface Hello {
@@ -273,7 +289,7 @@ function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === "string");
 }
 
-export function isHeaderMap(v: unknown): v is HeaderMap {
+function isHeaderMap(v: unknown): v is HeaderMap {
   if (!isRecord(v)) {
     return false;
   }
@@ -318,13 +334,6 @@ export function asHelloError(v: unknown): HelloError | null {
       code: v.code,
       message: typeof v.message === "string" ? v.message : "",
     };
-  }
-  return null;
-}
-
-export function asHeartbeat(v: unknown): Heartbeat | null {
-  if (isRecord(v) && typeof v.ts === "number") {
-    return { ts: v.ts };
   }
   return null;
 }
@@ -440,7 +449,7 @@ export function asRequestHead(v: unknown): RequestHead | null {
     } else if (isHeaderMap(v.headers)) {
       // Copy onto a prototype-less map so a lookup of a name the peer did not
       // send ("constructor", "__proto__") is undefined, not an Object builtin.
-      headers = Object.assign(newHeaderMap(), v.headers);
+      headers = newHeaderMap(v.headers);
     } else {
       return null;
     }

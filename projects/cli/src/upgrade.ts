@@ -30,6 +30,7 @@ import {
 } from "./constants.ts";
 import { errorMessage } from "./logger.ts";
 import {
+  appendHeader,
   type HeaderMap,
   headerMapProblem,
   newHeaderMap,
@@ -700,14 +701,11 @@ function parseResponseHead(headerBytes: Uint8Array): ResponseHead | string {
     if (colon < 0) {
       continue;
     }
-    const name = line.slice(0, colon).trim().toLowerCase();
-    const value = line.slice(colon + 1).trim();
-    const bucket = headers[name];
-    if (bucket === undefined) {
-      headers[name] = [value];
-    } else {
-      bucket.push(value);
-    }
+    appendHeader(
+      headers,
+      line.slice(0, colon).trim().toLowerCase(),
+      line.slice(colon + 1).trim(),
+    );
   }
   return { status, headers };
 }

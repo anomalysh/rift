@@ -13,6 +13,7 @@ import {
 } from "./constants.ts";
 import { errorMessage } from "./logger.ts";
 import {
+  appendHeader,
   type HeaderMap,
   newHeaderMap,
   type RequestHead,
@@ -128,14 +129,8 @@ function responseHeaderMap(headers: Headers): HeaderMap {
   headers.forEach((value, name) => {
     const lower = name.toLowerCase();
     // set-cookie must not be comma-joined; collected separately below.
-    if (lower === "set-cookie" || isHopByHop(lower)) {
-      return;
-    }
-    const existing = out[lower];
-    if (existing) {
-      existing.push(value);
-    } else {
-      out[lower] = [value];
+    if (lower !== "set-cookie" && !isHopByHop(lower)) {
+      appendHeader(out, lower, value);
     }
   });
   const cookies = headers.getAll("set-cookie");
