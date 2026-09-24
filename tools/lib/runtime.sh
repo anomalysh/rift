@@ -11,24 +11,49 @@
 # once here so scripts stop each re-deriving `REPO_ROOT` by hand.
 RIFT_REPO_ROOT="$(cd "$RIFT_TOOLS_DIR/.." && pwd)"
 
+# rift_env_keys FILE — the variable names FILE assigns (a leading `export ` is
+# allowed), sorted and unique, one per line. Names only: no value is printed.
+rift_env_keys() {
+	sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}\([A-Za-z_][A-Za-z0-9_]*\)=.*/\2/p' "$1" 2>/dev/null |
+		sort -u
+}
+
 # load_env [FILE] — source the operator's untracked .env into the environment,
 # EXPORTED so child processes (docker compose, ssh, the providers) inherit it.
 #
 # The file to read is FILE, else RIFT_ENV_FILE, else <repo>/.env. A missing file
-# is not an error. This is the single loader: before it, four scripts inlined
-# their own copy that ignored RIFT_ENV_FILE, so `RIFT_ENV_FILE=... make verify`
-# silently read the wrong file. Values in the file overwrite the current
-# environment; a caller that must let an explicit env var win should snapshot it
-# before calling and re-apply after (see provision.sh).
+# is not an error. This is the single loader: before it, scripts inlined their
+# own copy that ignored RIFT_ENV_FILE, and the Makefile pre-sourced ./.env for
+# some targets only, so `rift-ops deploy deploy` never read .env at all.
+#
+# A variable already set to a non-empty value wins over the file, as it does for
+# compose's own interpolation: `RIFT_VPS_HOST=1.2.3.4 rift-ops deploy status`
+# targets that host, and ship.sh/teardown.sh can hand a sub-script the host from
+# the state file without the sub-script's own load_env clobbering it. A file
+# already loaded by a parent script is not re-read, so the many ssh.sh calls of
+# one deploy stay quiet.
 load_env() {
-	local file="${1:-${RIFT_ENV_FILE:-$RIFT_REPO_ROOT/.env}}"
-	[ -f "$file" ] || return 0
-	log_info "reading $file"
+	local _le_file="${1:-${RIFT_ENV_FILE:-$RIFT_REPO_ROOT/.env}}" _le_name _le_i _le_names _le_vals
+	[ -f "$_le_file" ] || return 0
+	[ "${_RIFT_ENV_LOADED:-}" != "$_le_file" ] || return 0
+	log_info "reading $_le_file"
+	_le_names=()
+	_le_vals=()
+	for _le_name in $(rift_env_keys "$_le_file"); do
+		if [ -n "${!_le_name:-}" ]; then
+			_le_names+=("$_le_name")
+			_le_vals+=("${!_le_name}")
+		fi
+	done
 	set -a
 	# operator-supplied, not tracked in the repo
 	# shellcheck disable=SC1090
-	. "$file"
+	. "$_le_file"
 	set +a
+	for ((_le_i = 0; _le_i < ${#_le_names[@]}; _le_i++)); do
+		export "${_le_names[_le_i]}=${_le_vals[_le_i]}"
+	done
+	export _RIFT_ENV_LOADED="$_le_file"
 }
 
 # --- composable cleanup trap ------------------------------------------------

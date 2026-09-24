@@ -50,6 +50,7 @@ case "${1:-}" in
 esac
 
 require_cmd ssh tar
+load_env
 require_env RIFT_VPS_HOST
 
 # --plan: a read-only preview (terraform-plan style) -- what a deploy WOULD do,

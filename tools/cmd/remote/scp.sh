@@ -16,7 +16,7 @@ Copy files to/from the rift VPS using the same auth logic as `rift-ops ssh ssh`.
 SRC and DST are plain paths; the VPS user@host is supplied from the environment,
 so do NOT prefix them with user@host:.
 
-Environment:
+Environment (each read from the untracked .env when not already set):
   RIFT_VPS_HOST      (required) VPS hostname or IP
   RIFT_VPS_USER      SSH user            (default: root)
   RIFT_VPS_PORT      SSH port            (default: 22)
@@ -56,6 +56,7 @@ src="${positionals[0]}"
 dst="${positionals[1]}"
 
 require_cmd scp
+load_env
 require_env RIFT_VPS_HOST
 
 # Same auth and options as ssh.sh, shared via rift_ssh_cmd in lib/common.sh.

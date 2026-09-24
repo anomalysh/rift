@@ -20,7 +20,7 @@ address, on the VPS itself or through an SSH tunnel, e.g.:
     tools/rift-ops ssh ssh -L "8082:$ip:8082"
     RIFT_ADMIN_URL=http://127.0.0.1:8082 rift-ops secret mint-token my-laptop
 
-Environment:
+Environment (each read from the untracked .env when not already set):
   RIFT_ADMIN_URL    Admin API base URL   (default: http://127.0.0.1:8082)
   RIFT_ADMIN_TOKEN  (required) bearer token authenticating the admin caller
 EOF
@@ -38,6 +38,7 @@ esac
 name="$1"
 
 require_cmd curl
+load_env
 require_env RIFT_ADMIN_TOKEN
 
 base="${RIFT_ADMIN_URL:-http://127.0.0.1:8082}"

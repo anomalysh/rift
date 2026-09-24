@@ -68,7 +68,10 @@ scripts, VPS access) are read by Caddy and the scripts, not by riftd.
 ## Deploy
 
 The `tools/` scripts drive an idempotent deploy over SSH. They read your VPS
-coordinates (`RIFT_VPS_HOST`, `RIFT_VPS_USER`, `RIFT_VPS_PORT`) from `.env`.
+coordinates (`RIFT_VPS_HOST`, `RIFT_VPS_USER`, `RIFT_VPS_PORT`) from `.env`
+(or the file `RIFT_ENV_FILE` names); a variable already set in your shell wins
+over the file, so `RIFT_VPS_HOST=203.0.113.7 rift-ops deploy status` targets
+that host for one run.
 
 <Steps>
 

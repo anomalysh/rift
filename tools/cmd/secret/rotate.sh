@@ -61,6 +61,7 @@ done
 	usage
 	die "name a secret to rotate: admin or peer"
 }
+load_env
 require_env RIFT_VPS_HOST
 
 case "$which" in

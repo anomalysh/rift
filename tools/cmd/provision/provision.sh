@@ -122,38 +122,27 @@ while [ "$#" -gt 0 ]; do
 	shift
 done
 
-# --- defaults from .env, without clobbering the caller's environment --------
-# Capture any RIFT_* the caller already exported BEFORE sourcing .env, then give
-# those precedence: a blank or stale value in .env must never wipe a token (or
-# api-base) the operator -- or the e2e -- put in the environment on purpose.
-_env_provider="${RIFT_PROVIDER:-}"
-_env_token="${RIFT_LINODE_TOKEN:-}"
-_env_api_base="${RIFT_PROVIDER_API_BASE:-}"
-_env_region="${RIFT_REGION:-}"
-_env_type="${RIFT_TYPE:-}"
-_env_image="${RIFT_IMAGE:-}"
-_env_name="${RIFT_INSTANCE_NAME:-}"
-_env_state="${RIFT_STATE_FILE:-}"
-
-# The snapshots above let the caller's env win; load_env then fills in the rest
-# from the file (honoring RIFT_ENV_FILE, as this script's --help documents).
+# --- defaults from .env ------------------------------------------------------
+# load_env honors RIFT_ENV_FILE (as --help documents) and never clobbers a RIFT_*
+# the caller already set: a blank or stale value in .env must never wipe a token
+# (or api-base) the operator -- or the e2e -- put in the environment on purpose.
 load_env
 
 # Precedence for every value: CLI flag > caller env > .env > built-in default.
-provider="${opt_provider:-${_env_provider:-${RIFT_PROVIDER:-$DEFAULT_PROVIDER}}}"
-region="${opt_region:-${_env_region:-${RIFT_REGION:-$DEFAULT_REGION}}}"
-type="${opt_type:-${_env_type:-${RIFT_TYPE:-$DEFAULT_TYPE}}}"
-image="${opt_image:-${_env_image:-${RIFT_IMAGE:-$DEFAULT_IMAGE}}}"
-api_base="${opt_api_base:-${_env_api_base:-${RIFT_PROVIDER_API_BASE:-}}}"
-state_file="${opt_state_file:-${_env_state:-${RIFT_STATE_FILE:-$RIFT_REPO_ROOT/.rift/state.json}}}"
-name="${opt_name:-${_env_name:-${RIFT_INSTANCE_NAME:-rift-$(date +%Y%m%d-%H%M%S)}}}"
+provider="${opt_provider:-${RIFT_PROVIDER:-$DEFAULT_PROVIDER}}"
+region="${opt_region:-${RIFT_REGION:-$DEFAULT_REGION}}"
+type="${opt_type:-${RIFT_TYPE:-$DEFAULT_TYPE}}"
+image="${opt_image:-${RIFT_IMAGE:-$DEFAULT_IMAGE}}"
+api_base="${opt_api_base:-${RIFT_PROVIDER_API_BASE:-}}"
+state_file="${opt_state_file:-${RIFT_STATE_FILE:-$RIFT_REPO_ROOT/.rift/state.json}}"
+name="${opt_name:-${RIFT_INSTANCE_NAME:-rift-$(date +%Y%m%d-%H%M%S)}}"
 status_timeout="${opt_status_timeout:-$DEFAULT_STATUS_TIMEOUT}"
 ssh_timeout="${opt_ssh_timeout:-$DEFAULT_SSH_TIMEOUT}"
 poll_interval="${opt_poll_interval:-$DEFAULT_POLL_INTERVAL}"
 ssh_port="${opt_ssh_port:-$DEFAULT_SSH_PORT}"
 
 # Hand the resolved values the providers read to the environment.
-export RIFT_LINODE_TOKEN="${_env_token:-${RIFT_LINODE_TOKEN:-}}"
+export RIFT_LINODE_TOKEN="${RIFT_LINODE_TOKEN:-}"
 [ -n "$api_base" ] && export RIFT_PROVIDER_API_BASE="$api_base"
 [ "$dry_run" = true ] && export RIFT_PROVIDER_DRY_RUN=1
 

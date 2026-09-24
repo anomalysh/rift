@@ -17,7 +17,7 @@ Authentication:
   - Otherwise it falls back to password auth via sshpass, reading the password
     from RIFT_VPS_PASSWORD.
 
-Environment:
+Environment (each read from the untracked .env when not already set):
   RIFT_VPS_HOST      (required) VPS hostname or IP
   RIFT_VPS_USER      SSH user            (default: root)
   RIFT_VPS_PORT      SSH port            (default: 22)
@@ -33,6 +33,7 @@ case "${1:-}" in
 esac
 
 require_cmd ssh
+load_env
 require_env RIFT_VPS_HOST
 
 # Key auth if the managed key exists, else `sshpass -e` (never `-p`, which would
