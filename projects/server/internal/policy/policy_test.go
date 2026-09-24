@@ -178,10 +178,17 @@ func TestCheckBasicAuthUnknownUserPaysBcrypt(t *testing.T) {
 	}
 	_ = c.CheckBasicAuth("warmup", "x") // generate the dummy hash outside the timing
 
+	// The fastest of several runs is the cost of the work itself: a single
+	// run can absorb a GC pause or a descheduling, and one inflated "known"
+	// sample would make the comparison below fail for no real reason.
 	timed := func(user string) time.Duration {
-		start := time.Now()
-		_ = c.CheckBasicAuth(user, "wrong")
-		return time.Since(start)
+		best := time.Duration(1<<63 - 1)
+		for range 5 {
+			start := time.Now()
+			_ = c.CheckBasicAuth(user, "wrong")
+			best = min(best, time.Since(start))
+		}
+		return best
 	}
 	known := timed("alice")
 	unknown := timed("mallory")

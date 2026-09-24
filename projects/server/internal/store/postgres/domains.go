@@ -41,7 +41,7 @@ func (s *domainStore) Upsert(ctx context.Context, d core.CustomDomain) error {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("domain %s: %w", d.Domain, core.ErrDomainOwned)
 		}
-		return fmt.Errorf("upsert custom domain: %w", err)
+		return translate(err, "upsert custom domain")
 	}
 	return nil
 }
@@ -65,7 +65,7 @@ func (s *domainStore) Transfer(ctx context.Context, d core.CustomDomain, fromTok
 		if errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("domain %s: %w", d.Domain, core.ErrDomainOwned)
 		}
-		return fmt.Errorf("transfer custom domain: %w", err)
+		return translate(err, "transfer custom domain")
 	}
 	return nil
 }
@@ -74,38 +74,19 @@ func (s *domainStore) Lookup(ctx context.Context, domain string) (*core.CustomDo
 	row := s.pool.QueryRow(ctx, `SELECT `+domainColumns+` FROM custom_domains WHERE domain = $1`, domain)
 	d, err := scanDomain(row)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("domain %s: %w", domain, core.ErrNotFound)
-		}
-		return nil, fmt.Errorf("get custom domain: %w", err)
+		return nil, translate(err, "domain "+domain)
 	}
 	return d, nil
 }
 
 func (s *domainStore) List(ctx context.Context) ([]core.CustomDomain, error) {
-	rows, err := s.pool.Query(ctx, `SELECT `+domainColumns+` FROM custom_domains ORDER BY domain`)
-	if err != nil {
-		return nil, fmt.Errorf("list custom domains: %w", err)
-	}
-	defer rows.Close()
-
-	var out []core.CustomDomain
-	for rows.Next() {
-		d, err := scanDomain(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan custom domain: %w", err)
-		}
-		out = append(out, *d)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate custom domains: %w", err)
-	}
-	return out, nil
+	return collect(ctx, s.pool, "list custom domains", scanDomain,
+		`SELECT `+domainColumns+` FROM custom_domains ORDER BY domain`)
 }
 
 func (s *domainStore) Delete(ctx context.Context, domain string) error {
 	if _, err := s.pool.Exec(ctx, `DELETE FROM custom_domains WHERE domain = $1`, domain); err != nil {
-		return fmt.Errorf("delete custom domain: %w", err)
+		return translate(err, "delete custom domain")
 	}
 	return nil
 }

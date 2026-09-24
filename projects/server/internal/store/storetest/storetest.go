@@ -302,6 +302,40 @@ var cases = []testCase{
 			t.Fatalf("mappings = %+v, want app.acme.com -> xyz owned by %s", list, owner.ID)
 		}
 	}},
+	{"DomainLookupAndTransfer", func(t *testing.T, ctx context.Context, s Stores) {
+		owner := seedToken(t, ctx, s, 1)
+		heir := seedToken(t, ctx, s, 2)
+		third := seedToken(t, ctx, s, 3)
+
+		_, err := s.Domains.Lookup(ctx, "app.acme.com")
+		mustBe(t, "lookup absent", err, core.ErrNotFound)
+
+		mustNoErr(t, "upsert", s.Domains.Upsert(ctx, core.CustomDomain{Domain: "app.acme.com", Subdomain: "abc", TokenID: owner.ID, CreatedAt: at(4)}))
+		got, err := s.Domains.Lookup(ctx, "app.acme.com")
+		mustNoErr(t, "lookup", err)
+		if got.Subdomain != "abc" || got.TokenID != owner.ID {
+			t.Fatalf("lookup = %+v, want abc owned by %s", got, owner.ID)
+		}
+
+		// A transfer names the holder it expects; it succeeds only while that
+		// token still holds the domain, so two claimants cannot both win.
+		mustNoErr(t, "transfer", s.Domains.Transfer(ctx, core.CustomDomain{Domain: "app.acme.com", Subdomain: "def", TokenID: heir.ID, CreatedAt: at(5)}, owner.ID))
+		got, err = s.Domains.Lookup(ctx, "app.acme.com")
+		mustNoErr(t, "lookup after transfer", err)
+		if got.Subdomain != "def" || got.TokenID != heir.ID {
+			t.Fatalf("after transfer = %+v, want def owned by %s", got, heir.ID)
+		}
+		mustBe(t, "stale transfer", s.Domains.Transfer(ctx, core.CustomDomain{Domain: "app.acme.com", Subdomain: "ghi", TokenID: third.ID, CreatedAt: at(6)}, owner.ID), core.ErrDomainOwned)
+		// The current holder re-transferring to itself is a refresh, not a theft.
+		mustNoErr(t, "self transfer", s.Domains.Transfer(ctx, core.CustomDomain{Domain: "app.acme.com", Subdomain: "jkl", TokenID: heir.ID, CreatedAt: at(7)}, owner.ID))
+		// A transfer of an unmapped domain simply creates it.
+		mustNoErr(t, "transfer absent", s.Domains.Transfer(ctx, core.CustomDomain{Domain: "new.acme.com", Subdomain: "mno", TokenID: third.ID, CreatedAt: at(8)}, owner.ID))
+		got, err = s.Domains.Lookup(ctx, "new.acme.com")
+		mustNoErr(t, "lookup created", err)
+		if got.TokenID != third.ID {
+			t.Fatalf("created mapping owned by %s, want %s", got.TokenID, third.ID)
+		}
+	}},
 	{"DomainListAndDelete", func(t *testing.T, ctx context.Context, s Stores) {
 		list, err := s.Domains.List(ctx)
 		mustNoErr(t, "list empty", err)
