@@ -45,11 +45,6 @@ func (p Protocol) Valid() bool {
 	}
 }
 
-// IsRaw reports whether the protocol is carried as a raw byte stream rather
-// than as HTTP request/response exchanges. UDP is datagram-oriented and framed
-// separately, so it is deliberately excluded here.
-func (p Protocol) IsRaw() bool { return p == ProtocolTCP || p == ProtocolTLS }
-
 // String implements fmt.Stringer.
 func (p Protocol) String() string { return string(p) }
 
@@ -60,9 +55,7 @@ var (
 	ErrSubdomainTaken    = errors.New("core: subdomain already in use")
 	ErrSubdomainReserved = errors.New("core: subdomain is reserved")
 	ErrSubdomainInvalid  = errors.New("core: subdomain is invalid")
-	ErrTunnelLimit       = errors.New("core: tunnel limit reached for token")
 	ErrConflict          = errors.New("core: conflicting write")
-	ErrUnsupportedProto  = errors.New("core: unsupported protocol")
 	// ErrDomainOwned means a custom domain is already registered to a different
 	// token, so this token may not claim it (E1).
 	ErrDomainOwned = errors.New("core: custom domain owned by another token")
@@ -135,11 +128,6 @@ type Tunnel struct {
 	// Policy is the visitor-access policy the agent attached at connect time.
 	// The zero value enforces nothing.
 	Policy Policy
-}
-
-// Stale reports whether the tunnel has missed heartbeats past timeout.
-func (t *Tunnel) Stale(now time.Time, timeout time.Duration) bool {
-	return now.Sub(t.LastSeenAt) > timeout
 }
 
 // TokenStore persists API tokens.

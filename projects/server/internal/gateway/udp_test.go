@@ -24,30 +24,33 @@ func TestDatagramRoundTrip(t *testing.T) {
 	}
 
 	// The three datagrams read back in order with their boundaries intact, even
-	// though they were written into one contiguous buffer.
-	out := make([]byte, maxDatagram)
+	// though they were written into one contiguous buffer, exactly as the
+	// return path (relayDatagram) reads them.
 	for i, want := range payloads {
-		n, err := readDatagram(&buf, out)
+		n, err := readDatagramLen(&buf)
 		if err != nil {
-			t.Fatalf("readDatagram %d: %v", i, err)
+			t.Fatalf("readDatagramLen %d: %v", i, err)
 		}
-		if !bytes.Equal(out[:n], want) {
-			t.Fatalf("datagram %d = %q, want %q", i, out[:n], want)
+		got := make([]byte, n)
+		if _, err := io.ReadFull(&buf, got); err != nil {
+			t.Fatalf("datagram %d body: %v", i, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("datagram %d = %q, want %q", i, got, want)
 		}
 	}
 	// The stream is now drained.
-	if _, err := readDatagram(&buf, out); err != io.EOF {
+	if _, err := readDatagramLen(&buf); err != io.EOF {
 		t.Fatalf("expected EOF after the last datagram, got %v", err)
 	}
 }
 
-func TestReadDatagramRejectsOversizeLength(t *testing.T) {
-	// A length prefix larger than the caller's buffer must fail closed, not read
-	// unbounded.
-	framed := []byte{0xFF, 0xFF} // declares 65535 bytes
-	small := make([]byte, 16)
-	if _, err := readDatagram(bytes.NewReader(framed), small); err == nil {
-		t.Fatal("expected an error for a length exceeding the buffer")
+func TestReadDatagramLenRejectsOversizeLength(t *testing.T) {
+	// A length prefix no UDP payload can have must fail the flow before
+	// anything is allocated for it.
+	framed := []byte{0xFF, 0xFF} // declares 65535 bytes > maxDatagram
+	if _, err := readDatagramLen(bytes.NewReader(framed)); err == nil {
+		t.Fatal("expected an error for a length over maxDatagram")
 	}
 }
 

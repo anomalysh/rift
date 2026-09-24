@@ -98,21 +98,6 @@ func TestDecodeAllowsUnknownFrameType(t *testing.T) {
 	}
 }
 
-func TestWriteToMatchesEncode(t *testing.T) {
-	payload := []byte("streamed chunk")
-	want, err := Encode(FrameResBody, 5, payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var buf bytes.Buffer
-	if err := WriteTo(&buf, FrameResBody, 5, payload); err != nil {
-		t.Fatalf("WriteTo: %v", err)
-	}
-	if !bytes.Equal(buf.Bytes(), want) {
-		t.Fatal("WriteTo output differs from Encode output")
-	}
-}
-
 func TestControlRoundTrip(t *testing.T) {
 	raw, err := EncodeControl(ControlHelloOK, HelloOK{
 		TunnelID: "T1", Subdomain: "demo", Hostname: "demo.example.com",

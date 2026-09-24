@@ -24,6 +24,10 @@ var errNoUDPPorts = errors.New("gateway: no free udp ports in the configured ran
 // corrupt length cannot make either side allocate without bound.
 const maxDatagram = 65507
 
+// datagramLenPrefix is the size of the big-endian length that frames each
+// datagram on a udp flow's tunnel stream.
+const datagramLenPrefix = 2
+
 // Flow caps. UDP source addresses are free to forge and cost an attacker one
 // packet each, while every flow costs the gateway a tunnel stream, a
 // return-path goroutine and a slot until the idle sweep (FlowTimeout, a minute
@@ -318,34 +322,17 @@ func writeDatagram(w io.Writer, p []byte) error {
 	if len(p) > maxDatagram {
 		return errors.New("gateway: udp datagram exceeds maximum size")
 	}
-	frame := make([]byte, 2+len(p))
-	binary.BigEndian.PutUint16(frame[:2], uint16(len(p)))
-	copy(frame[2:], p)
+	frame := make([]byte, datagramLenPrefix+len(p))
+	binary.BigEndian.PutUint16(frame, uint16(len(p)))
+	copy(frame[datagramLenPrefix:], p)
 	_, err := w.Write(frame)
 	return err
-}
-
-// readDatagram reads one length-delimited datagram into buf, returning its
-// length. A length larger than buf is a framing error and fails the flow rather
-// than reading unbounded.
-func readDatagram(r io.Reader, buf []byte) (int, error) {
-	n, err := readDatagramLen(r)
-	if err != nil {
-		return 0, err
-	}
-	if n > len(buf) {
-		return 0, errors.New("gateway: udp datagram length exceeds buffer")
-	}
-	if _, err := io.ReadFull(r, buf[:n]); err != nil {
-		return 0, err
-	}
-	return n, nil
 }
 
 // readDatagramLen reads one datagram's 2-byte length prefix. A length above
 // maxDatagram cannot be a real UDP payload and fails the flow.
 func readDatagramLen(r io.Reader) (int, error) {
-	var hdr [2]byte
+	var hdr [datagramLenPrefix]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
 		return 0, err
 	}

@@ -58,9 +58,3 @@ func (p Policy) IsZero() bool {
 		!p.Once &&
 		p.MaxRequests == 0
 }
-
-// HasLifetimeBound reports whether any A4 bound is set, so the gateway only
-// arms a session timer/counter when one is actually needed.
-func (p Policy) HasLifetimeBound() bool {
-	return p.TTLSeconds > 0 || p.Once || p.MaxRequests > 0
-}
