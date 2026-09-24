@@ -431,3 +431,47 @@ func TestTunnelConnCloseAfterHalfClose(t *testing.T) {
 		t.Fatalf("Close of an unfinished stream sent %s on stream %d, want RESET on %d", f.Type, f.StreamID, id)
 	}
 }
+
+// A request the public client abandons before the response head must stop
+// its body pump: the stream is aborted, not merely forgotten, so bytes the
+// client sends afterwards are dropped rather than following the RESET as
+// REQ_BODY frames, and the body is closed instead of read to the end.
+func TestCanceledRequestStopsBodyPump(t *testing.T) {
+	s, a := newTestSession(t, testConfig(), core.Policy{}, nil)
+
+	body, client := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodPost, "http://app.rift.test/upload", body).WithContext(ctx)
+	req.ContentLength = -1 // streamed, length unknown
+	res := make(chan roundTripResult, 1)
+	go func() {
+		resp, err := s.RoundTrip(req)
+		res <- roundTripResult{resp, err}
+	}()
+	id := a.expect(tunnelproto.FrameReqHead).StreamID
+
+	cancel()
+	if r := awaitResult(t, res); !errors.Is(r.err, context.Canceled) {
+		t.Fatalf("RoundTrip err = %v, want context.Canceled", r.err)
+	}
+	if f := a.nextDataFrame(); f.StreamID != id || f.Type != tunnelproto.FrameReset {
+		t.Fatalf("after cancel the agent got %s on stream %d, want RESET on %d", f.Type, f.StreamID, id)
+	}
+
+	// The pump was blocked reading when the request was abandoned. It takes
+	// this chunk, drops it, and closes the body.
+	if _, err := client.Write([]byte("late")); err != nil {
+		t.Fatalf("write body: %v", err)
+	}
+	if _, err := client.Write([]byte("more")); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("second body write: err = %v, want io.ErrClosedPipe (body still being read)", err)
+	}
+	// A fresh stream's REQ_HEAD is queued behind anything the pump sent.
+	if _, err := s.OpenRaw(context.Background()); err != nil {
+		t.Fatalf("OpenRaw: %v", err)
+	}
+	if f := a.nextDataFrame(); f.StreamID == id {
+		t.Fatalf("the abandoned stream sent %s after its RESET", f.Type)
+	}
+}

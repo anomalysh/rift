@@ -1,14 +1,5 @@
 package gateway
 
-import (
-	"encoding/json"
-	"strings"
-)
-
-func unmarshalFrame(payload []byte, v any) error {
-	return json.Unmarshal(payload, v)
-}
-
 // lowerASCII lowercases an HTTP header name. Header names are ASCII by
 // definition, so strings.ToLower's Unicode machinery is unnecessary here.
 func lowerASCII(s string) string {
@@ -29,15 +20,4 @@ func lowerASCII(s string) string {
 		}
 	}
 	return string(b)
-}
-
-func splitAndTrim(s string, sep byte) []string {
-	parts := strings.Split(s, string(sep))
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }

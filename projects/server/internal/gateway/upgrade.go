@@ -18,12 +18,6 @@ import (
 // post-handshake client->service byte stream, which arrives later as REQ_BODY
 // frames and is terminated by REQ_END only when the public client half-closes.
 func (s *session) Upgrade(req *http.Request) (*http.Response, core.TunnelConn, error) {
-	select {
-	case <-s.closing:
-		return nil, nil, errSessionClosed
-	default:
-	}
-
 	// An upgrade reaches the local service as an HTTP request just like
 	// RoundTrip, so it counts against the same A4 quota.
 	if err := s.admitRequest(); err != nil {
@@ -31,106 +25,38 @@ func (s *session) Upgrade(req *http.Request) (*http.Response, core.TunnelConn, e
 	}
 
 	ctx := req.Context()
-	st, err := s.openStream()
+	head := s.requestHead(req, upgradeHeaders(req.Header))
+	head.Upgrade = true
+	st, err := s.startStream(ctx, head)
 	if err != nil {
 		return nil, nil, err
 	}
-	id := st.id
 
-	head := tunnelproto.RequestHead{
-		Method:     req.Method,
-		Path:       requestTarget(req),
-		Headers:    upgradeHeaders(req.Header),
-		Host:       req.Host,
-		Scheme:     s.cfg.Tunnel.PublicScheme,
-		RemoteAddr: req.RemoteAddr,
-		HasBody:    false,
-		Upgrade:    true,
-	}
-	frame, err := tunnelproto.EncodeJSONFrame(tunnelproto.FrameReqHead, id, head)
+	rh, err := s.awaitHead(ctx, st, "upgrade")
 	if err != nil {
-		s.forgetStream(id)
 		return nil, nil, err
 	}
-	if err := s.enqueue(ctx, frame); err != nil {
-		s.forgetStream(id)
-		return nil, nil, err
+	if rh.Status == http.StatusSwitchingProtocols {
+		return upgradeResponse(req, rh), s.newTunnelConn(ctx, st), nil
 	}
-
-	select {
-	case rh := <-st.head:
-		if rh.Status == http.StatusSwitchingProtocols {
-			pipeCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-			conn := &tunnelConn{
-				sess:   s,
-				id:     id,
-				rd:     &bodyReader{st: st, sess: s},
-				ctx:    pipeCtx,
-				cancel: cancel,
-			}
-			return upgradeResponse(req, rh), conn, nil
-		}
-		// The service answered without switching protocols; relay it normally.
-		if !validResponseStatus(rh.Status) {
-			return nil, nil, s.rejectResponseHead(st, rh)
-		}
-		return s.buildResponse(req, st, rh), nil, nil
-
-	case <-st.done:
-		s.forgetStream(id)
-		if err := st.reason(); err != nil {
-			return nil, nil, err
-		}
-		return nil, nil, errSessionClosed
-	case <-s.closing:
-		s.forgetStream(id)
-		return nil, nil, errSessionClosed
-	case <-ctx.Done():
-		s.forgetStream(id)
-		s.sendReset(id, tunnelproto.StreamReset{
-			Code:    tunnelproto.ResetClientDisconnected,
-			Message: "public client canceled the upgrade",
-		})
-		return nil, nil, ctx.Err()
+	// The service answered without switching protocols; relay it normally.
+	if !validResponseStatus(rh.Status) {
+		return nil, nil, s.rejectResponseHead(st, rh)
 	}
+	return s.buildResponse(req, st, rh), nil, nil
 }
 
 // OpenRaw opens a raw full-duplex byte stream to the agent's local service, for
-// tcp/tls tunnels. It signals the agent with a Raw REQ_HEAD and returns at once:
-// there is no application handshake to await. Bytes written to the returned conn
-// reach the local service; bytes read come from it. A failed local dial arrives
-// later as a RESET, surfacing on the first Read.
+// tcp/tls/grpc tunnels and udp flows. It signals the agent with a Raw REQ_HEAD
+// and returns at once: there is no application handshake to await. Bytes
+// written to the returned conn reach the local service; bytes read come from
+// it. A failed local dial arrives later as a RESET, surfacing on the first Read.
 func (s *session) OpenRaw(ctx context.Context) (core.TunnelConn, error) {
-	select {
-	case <-s.closing:
-		return nil, errSessionClosed
-	default:
-	}
-
-	st, err := s.openStream()
+	st, err := s.startStream(ctx, tunnelproto.RequestHead{Raw: true})
 	if err != nil {
 		return nil, err
 	}
-	id := st.id
-
-	frame, err := tunnelproto.EncodeJSONFrame(tunnelproto.FrameReqHead, id, tunnelproto.RequestHead{Raw: true})
-	if err != nil {
-		s.forgetStream(id)
-		return nil, err
-	}
-	if err := s.enqueue(ctx, frame); err != nil {
-		s.forgetStream(id)
-		return nil, err
-	}
-
-	pipeCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	return &tunnelConn{
-		sess:   s,
-		id:     id,
-		rd:     &bodyReader{st: st, sess: s},
-		ctx:    pipeCtx,
-		cancel: cancel,
-	}, nil
+	return s.newTunnelConn(ctx, st), nil
 }
 
 // upgradeResponse builds the 101 response. Unlike buildResponse it does NOT
@@ -138,35 +64,29 @@ func (s *session) OpenRaw(ctx context.Context) (core.TunnelConn, error) {
 // client needs to complete the switch, and the body is the duplex stream, not
 // an http.Response body.
 func upgradeResponse(req *http.Request, rh tunnelproto.ResponseHead) *http.Response {
-	header := make(http.Header, len(rh.Headers))
-	for k, vs := range rh.Headers {
-		for _, v := range vs {
-			header.Add(k, v)
-		}
-	}
-	return &http.Response{
-		Status:     http.StatusText(rh.Status),
-		StatusCode: rh.Status,
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Header:     header,
-		Body:       http.NoBody,
-		Request:    req,
-	}
+	resp := newResponse(req, rh.Status, responseHeader(rh))
+	resp.Body = http.NoBody
+	return resp
 }
 
 // upgradeHeaders forwards every request header, preserving Connection and
 // Upgrade (which forwardableHeaders would drop as hop-by-hop) because they are
 // the upgrade. The agent replaces Host with the local target's.
 func upgradeHeaders(h http.Header) map[string][]string {
-	out := make(map[string][]string, len(h))
-	for k, vs := range h {
-		cp := make([]string, len(vs))
-		copy(cp, vs)
-		out[lowerASCII(k)] = cp
+	return wireHeaders(h, nil)
+}
+
+// newTunnelConn wraps st as the gateway end of a full-duplex pipe. The pipe
+// outlives ctx (a handshake deadline, typically), keeping only its values.
+func (s *session) newTunnelConn(ctx context.Context, st *stream) *tunnelConn {
+	pipeCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	return &tunnelConn{
+		sess:   s,
+		id:     st.id,
+		rd:     &bodyReader{st: st, sess: s},
+		ctx:    pipeCtx,
+		cancel: cancel,
 	}
-	return out
 }
 
 // tunnelConn is the gateway end of an upgraded, full-duplex stream. It reuses

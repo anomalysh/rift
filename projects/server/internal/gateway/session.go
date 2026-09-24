@@ -2,12 +2,14 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -392,7 +394,7 @@ func (s *session) dispatch(ctx context.Context, f tunnelproto.Frame) bool {
 			return true // the public client went away; the agent will learn via RESET
 		}
 		var head tunnelproto.ResponseHead
-		if err := unmarshalFrame(f.Payload, &head); err != nil {
+		if err := json.Unmarshal(f.Payload, &head); err != nil {
 			st.abort(err)
 			return true
 		}
@@ -433,7 +435,7 @@ func (s *session) dispatch(ctx context.Context, f tunnelproto.Frame) bool {
 			return true
 		}
 		var rs tunnelproto.StreamReset
-		if err := unmarshalFrame(f.Payload, &rs); err != nil {
+		if err := json.Unmarshal(f.Payload, &rs); err != nil {
 			st.abort(err)
 			return true
 		}
@@ -597,78 +599,123 @@ func (s *session) tokenRevoked(ctx context.Context) bool {
 // RoundTrip implements http.RoundTripper: it ships one public request through
 // the tunnel and returns the agent's response.
 func (s *session) RoundTrip(req *http.Request) (*http.Response, error) {
+	if err := s.admitRequest(); err != nil {
+		return nil, err
+	}
+
+	ctx := req.Context()
+	hasBody := req.Body != nil && req.Body != http.NoBody && req.ContentLength != 0
+	head := s.requestHead(req, forwardableHeaders(req.Header))
+	head.HasBody = hasBody
+	st, err := s.startStream(ctx, head)
+	if err != nil {
+		return nil, err
+	}
+
+	if hasBody {
+		go s.pumpRequestBody(ctx, st, req.Body)
+	} else if endFrame, err := tunnelproto.Encode(tunnelproto.FrameReqEnd, st.id, nil); err == nil {
+		// A failed enqueue means the session or the request is over, which
+		// awaitHead reports.
+		_ = s.enqueue(ctx, endFrame)
+	}
+
+	rh, err := s.awaitHead(ctx, st, "request")
+	if err != nil {
+		return nil, err
+	}
+	if !validResponseStatus(rh.Status) {
+		return nil, s.rejectResponseHead(st, rh)
+	}
+	return s.buildResponse(req, st, rh), nil
+}
+
+// requestHead describes req to the agent, carrying headers as given. The
+// caller sets the flags that distinguish its kind of stream.
+func (s *session) requestHead(req *http.Request, headers map[string][]string) tunnelproto.RequestHead {
+	return tunnelproto.RequestHead{
+		Method:     req.Method,
+		Path:       requestTarget(req),
+		Headers:    headers,
+		Host:       req.Host,
+		Scheme:     s.cfg.Tunnel.PublicScheme,
+		RemoteAddr: req.RemoteAddr,
+	}
+}
+
+// startStream opens a stream and sends the agent its REQ_HEAD. It is the one
+// way RoundTrip, Upgrade and OpenRaw begin a stream, so the closed-session
+// check and maxStreamsPerSession apply to all of them. On failure nothing is
+// left registered.
+func (s *session) startStream(ctx context.Context, head tunnelproto.RequestHead) (*stream, error) {
 	select {
 	case <-s.closing:
 		return nil, errSessionClosed
 	default:
 	}
 
-	if err := s.admitRequest(); err != nil {
-		return nil, err
-	}
-
-	ctx := req.Context()
 	st, err := s.openStream()
 	if err != nil {
 		return nil, err
 	}
-	id := st.id
-
-	hasBody := req.Body != nil && req.Body != http.NoBody && req.ContentLength != 0
-
-	head := tunnelproto.RequestHead{
-		Method:     req.Method,
-		Path:       requestTarget(req),
-		Headers:    forwardableHeaders(req.Header),
-		Host:       req.Host,
-		Scheme:     s.cfg.Tunnel.PublicScheme,
-		RemoteAddr: req.RemoteAddr,
-		HasBody:    hasBody,
+	frame, err := tunnelproto.EncodeJSONFrame(tunnelproto.FrameReqHead, st.id, head)
+	if err == nil {
+		err = s.enqueue(ctx, frame)
 	}
-	frame, err := tunnelproto.EncodeJSONFrame(tunnelproto.FrameReqHead, id, head)
 	if err != nil {
-		s.forgetStream(id)
+		s.abandonStream(st, err)
 		return nil, err
 	}
-	if err := s.enqueue(ctx, frame); err != nil {
-		s.forgetStream(id)
-		return nil, err
-	}
+	return st, nil
+}
 
-	if hasBody {
-		go s.pumpRequestBody(ctx, id, st, req.Body)
-	} else {
-		endFrame, err := tunnelproto.Encode(tunnelproto.FrameReqEnd, id, nil)
-		if err == nil {
-			_ = s.enqueue(ctx, endFrame)
-		}
-	}
+// abandonStream ends st on the gateway side: anything still working on it
+// (a request body pump, a reader) sees err, and frames the agent still sends
+// for it are dropped.
+func (s *session) abandonStream(st *stream, err error) {
+	st.abort(err)
+	s.forgetStream(st.id)
+}
 
+// streamOver reports whether st, or the whole session, has ended.
+func (s *session) streamOver(st *stream) bool {
+	select {
+	case <-st.done:
+		return true
+	case <-s.closing:
+		return true
+	default:
+		return false
+	}
+}
+
+// awaitHead waits for the agent's RES_HEAD on st. If anything else comes first
+// the stream is abandoned and the error says why; when that is the public
+// client giving up on the request (what names it, for the agent's log), the
+// agent is told to cancel the local request too.
+func (s *session) awaitHead(ctx context.Context, st *stream, what string) (tunnelproto.ResponseHead, error) {
 	select {
 	case rh := <-st.head:
-		if !validResponseStatus(rh.Status) {
-			return nil, s.rejectResponseHead(st, rh)
-		}
-		return s.buildResponse(req, st, rh), nil
+		return rh, nil
 
 	case <-st.done:
-		s.forgetStream(id)
+		s.forgetStream(st.id)
 		if err := st.reason(); err != nil {
-			return nil, err
+			return tunnelproto.ResponseHead{}, err
 		}
-		return nil, errSessionClosed
+		return tunnelproto.ResponseHead{}, errSessionClosed
 
 	case <-s.closing:
-		s.forgetStream(id)
-		return nil, errSessionClosed
+		s.abandonStream(st, errSessionClosed)
+		return tunnelproto.ResponseHead{}, errSessionClosed
 
 	case <-ctx.Done():
-		s.forgetStream(id)
-		s.sendReset(id, tunnelproto.StreamReset{
+		s.abandonStream(st, ctx.Err())
+		s.sendReset(st.id, tunnelproto.StreamReset{
 			Code:    tunnelproto.ResetClientDisconnected,
-			Message: "public client canceled the request",
+			Message: "public client canceled the " + what,
 		})
-		return nil, ctx.Err()
+		return tunnelproto.ResponseHead{}, ctx.Err()
 	}
 }
 
@@ -679,8 +726,7 @@ func (s *session) rejectResponseHead(st *stream, rh tunnelproto.ResponseHead) er
 	err := fmt.Errorf("%w: %d", errInvalidResponseStatus, rh.Status)
 	s.logger.Debug("rejecting response head",
 		slog.Uint64("stream_id", st.id), slog.Int("status", rh.Status))
-	st.abort(err)
-	s.forgetStream(st.id)
+	s.abandonStream(st, err)
 	s.sendReset(st.id, tunnelproto.StreamReset{
 		Code:    tunnelproto.ResetCanceled,
 		Message: "invalid response status",
@@ -689,12 +735,7 @@ func (s *session) rejectResponseHead(st *stream, rh tunnelproto.ResponseHead) er
 }
 
 func (s *session) buildResponse(req *http.Request, st *stream, rh tunnelproto.ResponseHead) *http.Response {
-	header := make(http.Header, len(rh.Headers))
-	for k, vs := range rh.Headers {
-		for _, v := range vs {
-			header.Add(k, v)
-		}
-	}
+	header := responseHeader(rh)
 	for _, h := range hopByHopHeaders {
 		header.Del(h)
 	}
@@ -708,41 +749,58 @@ func (s *session) buildResponse(req *http.Request, st *stream, rh tunnelproto.Re
 		}
 	}
 
+	resp := newResponse(req, rh.Status, header)
+	resp.Body = &bodyReader{st: st, sess: s}
+	resp.ContentLength = contentLength
+	return resp
+}
+
+// newResponse builds the HTTP/1.1 response shell both RoundTrip and Upgrade
+// hand the ingress. Status is the bare reason phrase, which the ingress also
+// writes on a 101.
+func newResponse(req *http.Request, status int, header http.Header) *http.Response {
 	return &http.Response{
-		Status:        http.StatusText(rh.Status),
-		StatusCode:    rh.Status,
-		Proto:         "HTTP/1.1",
-		ProtoMajor:    1,
-		ProtoMinor:    1,
-		Header:        header,
-		Body:          &bodyReader{st: st, sess: s},
-		ContentLength: contentLength,
-		Request:       req,
+		Status:     http.StatusText(status),
+		StatusCode: status,
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+		Header:     header,
+		Request:    req,
 	}
 }
 
+// responseHeader copies the agent's response headers into an http.Header.
+func responseHeader(rh tunnelproto.ResponseHead) http.Header {
+	header := make(http.Header, len(rh.Headers))
+	for k, vs := range rh.Headers {
+		for _, v := range vs {
+			header.Add(k, v)
+		}
+	}
+	return header
+}
+
 // pumpRequestBody streams the public request body to the agent.
-func (s *session) pumpRequestBody(ctx context.Context, id uint64, st *stream, body io.ReadCloser) {
+func (s *session) pumpRequestBody(ctx context.Context, st *stream, body io.ReadCloser) {
 	defer func() { _ = body.Close() }()
 
 	buf := make([]byte, requestChunkSize)
 	for {
-		select {
-		case <-st.done:
-			return
-		case <-s.closing:
-			return
-		default:
-		}
-
 		n, readErr := body.Read(buf)
+		// Read can block for as long as the client likes. If the stream ended
+		// meanwhile (the response finished, the client gave up, the agent
+		// reset it), what was read belongs to nobody and must not reach the
+		// agent after the stream's RESET.
+		if s.streamOver(st) {
+			return
+		}
 		if n > 0 {
-			frame, err := tunnelproto.Encode(tunnelproto.FrameReqBody, id, buf[:n])
-			if err != nil {
-				st.abort(err)
-				return
+			frame, err := tunnelproto.Encode(tunnelproto.FrameReqBody, st.id, buf[:n])
+			if err == nil {
+				err = s.enqueue(ctx, frame)
 			}
-			if err := s.enqueue(ctx, frame); err != nil {
+			if err != nil {
 				st.abort(err)
 				return
 			}
@@ -753,7 +811,7 @@ func (s *session) pumpRequestBody(ctx context.Context, id uint64, st *stream, bo
 		if readErr != nil {
 			// A body that failed mid-read (client hung up, or exceeded
 			// MaxBytesReader) leaves the agent waiting; reset instead.
-			s.sendReset(id, tunnelproto.StreamReset{
+			s.sendReset(st.id, tunnelproto.StreamReset{
 				Code:    tunnelproto.ResetClientDisconnected,
 				Message: "request body ended early",
 			})
@@ -762,7 +820,7 @@ func (s *session) pumpRequestBody(ctx context.Context, id uint64, st *stream, bo
 		}
 	}
 
-	endFrame, err := tunnelproto.Encode(tunnelproto.FrameReqEnd, id, nil)
+	endFrame, err := tunnelproto.Encode(tunnelproto.FrameReqEnd, st.id, nil)
 	if err != nil {
 		st.abort(err)
 		return
@@ -788,17 +846,22 @@ func requestTarget(req *http.Request) string {
 func forwardableHeaders(h http.Header) map[string][]string {
 	drop := make(map[string]struct{}, len(hopByHopHeaders))
 	for _, name := range hopByHopHeaders {
-		drop[http.CanonicalHeaderKey(name)] = struct{}{}
+		drop[name] = struct{}{}
 	}
 	// Connection lists further headers that are themselves hop-by-hop.
 	for _, v := range h.Values("Connection") {
-		for _, name := range splitAndTrim(v, ',') {
-			if name != "" {
+		for _, name := range strings.Split(v, ",") {
+			if name = strings.TrimSpace(name); name != "" {
 				drop[http.CanonicalHeaderKey(name)] = struct{}{}
 			}
 		}
 	}
+	return wireHeaders(h, drop)
+}
 
+// wireHeaders copies h into a RequestHead's header map: names lower-cased,
+// value slices copied, and any name in drop (canonical form) left out.
+func wireHeaders(h http.Header, drop map[string]struct{}) map[string][]string {
 	out := make(map[string][]string, len(h))
 	for k, vs := range h {
 		if _, skip := drop[http.CanonicalHeaderKey(k)]; skip {
