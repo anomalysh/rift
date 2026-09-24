@@ -21,9 +21,28 @@ import (
 // peeking, so a client cannot make the peek allocate without bound.
 const grpcMaxHeaderList = 1 << 20 // 1 MiB
 
+// grpcPeekMaxFrameSize is the largest frame the routing peek will read. It is
+// HTTP/2's initial SETTINGS_MAX_FRAME_SIZE: a client may not send anything
+// larger until the server advertises a bigger limit, and during the peek the
+// server has advertised nothing. Without it the framer would accept (and
+// allocate for) any declared length up to 16 MiB per connection.
+const grpcPeekMaxFrameSize = 16 << 10
+
+// grpcPeekMaxBytes caps everything the peek reads and buffers for replay
+// (preface, SETTINGS, WINDOW_UPDATE, the request HEADERS). A real client's
+// opening flight is a few hundred bytes; the cap only exists so a client that
+// never sends HEADERS cannot make the gateway buffer its stream in memory.
+const grpcPeekMaxBytes = 64 << 10
+
+// grpcPeekMaxFrames caps how many frames may precede the first HEADERS. A
+// client opens with SETTINGS and perhaps a WINDOW_UPDATE or PRIORITY; dozens of
+// tiny frames is not a client looking for a route.
+const grpcPeekMaxFrames = 16
+
 var (
 	errNotH2CPreface = errors.New("gateway: connection does not begin with the HTTP/2 preface")
 	errNoAuthority   = errors.New("gateway: first HEADERS frame carries no :authority")
+	errPeekTooLarge  = errors.New("gateway: h2c opening flight exceeds the routing peek limit")
 )
 
 // ServeGRPCTunnels accepts cleartext HTTP/2 (h2c) connections, routes each by
@@ -132,7 +151,9 @@ func (g *Gateway) handleGRPCTunnel(ctx context.Context, conn net.Conn) {
 // real HTTP/2 handshake once the pipe is established.
 func peekH2Authority(conn net.Conn) (authority string, buffered []byte, err error) {
 	var captured bytes.Buffer
-	tee := io.TeeReader(conn, &captured)
+	// Limit before the tee, so neither the framer nor the replay buffer can
+	// ever see more than grpcPeekMaxBytes.
+	tee := io.TeeReader(io.LimitReader(conn, grpcPeekMaxBytes), &captured)
 
 	preface := make([]byte, len(http2.ClientPreface))
 	if _, err := io.ReadFull(tee, preface); err != nil {
@@ -145,10 +166,18 @@ func peekH2Authority(conn net.Conn) (authority string, buffered []byte, err erro
 	fr := http2.NewFramer(io.Discard, tee)
 	fr.ReadMetaHeaders = hpack.NewDecoder(4096, nil)
 	fr.MaxHeaderListSize = grpcMaxHeaderList
+	fr.SetMaxReadFrameSize(grpcPeekMaxFrameSize)
 
-	for {
+	for n := 0; ; n++ {
+		if n >= grpcPeekMaxFrames {
+			return "", nil, errPeekTooLarge
+		}
 		frame, err := fr.ReadFrame()
 		if err != nil {
+			// Running into the byte cap surfaces as a short read; name it.
+			if captured.Len() >= grpcPeekMaxBytes {
+				return "", nil, errPeekTooLarge
+			}
 			return "", nil, err
 		}
 		mh, ok := frame.(*http2.MetaHeadersFrame)
