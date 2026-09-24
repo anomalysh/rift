@@ -78,13 +78,11 @@ done
 
 require_cmd git
 
+# A partially written temp file must never survive as a stray secret. Through
+# register_cleanup a Ctrl-C at a prompt also exits: the bare `trap cleanup INT`
+# this replaces ran the handler and then carried on with the wizard.
 TMP_ENV=""
-cleanup() {
-	# A partially written temp file must never survive as a stray secret.
-	[ -n "$TMP_ENV" ] && [ -f "$TMP_ENV" ] && rm -f "$TMP_ENV"
-	return 0
-}
-trap cleanup EXIT INT TERM
+register_cleanup '[ -z "$TMP_ENV" ] || rm -f "$TMP_ENV"'
 
 # ---------------------------------------------------------------------------
 # Small helpers

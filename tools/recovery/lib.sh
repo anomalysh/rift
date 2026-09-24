@@ -18,6 +18,19 @@ rc_compose() {
 	docker compose "${RIFT_COMPOSE_ARGS[@]}" -p "$RIFT_PROJECT" "$@"
 }
 
+# rc_stack_opt FLAG VALUE — apply one of the stack-selection options backup.sh
+# and restore.sh share: --project, --compose-file (repeatable),
+# --postgres-service, --caddy-volume. The caller checks VALUE is present.
+rc_stack_opt() {
+	case "$1" in
+	--project) RIFT_PROJECT="$2" ;;
+	--compose-file) COMPOSE_FILES+=("$2") ;;
+	--postgres-service) RIFT_PG_SERVICE="$2" ;;
+	--caddy-volume) CADDY_VOLUME="$2" ;;
+	*) die "rc_stack_opt: unknown option $1" ;;
+	esac
+}
+
 # rc_resolve_stack DEFAULT_COMPOSE_FILE — turn the caller's COMPOSE_FILES array
 # (possibly empty) into RIFT_COMPOSE_ARGS, defaulting to DEFAULT_COMPOSE_FILE,
 # and default CADDY_VOLUME to "<project>_caddy_data". backup.sh and restore.sh

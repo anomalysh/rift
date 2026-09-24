@@ -72,25 +72,10 @@ while [ "$#" -gt 0 ]; do
 		[ "$#" -gt 0 ] || die "--retain needs a value"
 		RETAIN="$1"
 		;;
-	--project)
+	--project | --compose-file | --postgres-service | --caddy-volume)
+		[ "$#" -gt 1 ] || die "$1 needs a value"
+		rc_stack_opt "$1" "$2"
 		shift
-		[ "$#" -gt 0 ] || die "--project needs a value"
-		RIFT_PROJECT="$1"
-		;;
-	--compose-file)
-		shift
-		[ "$#" -gt 0 ] || die "--compose-file needs a value"
-		COMPOSE_FILES+=("$1")
-		;;
-	--postgres-service)
-		shift
-		[ "$#" -gt 0 ] || die "--postgres-service needs a value"
-		RIFT_PG_SERVICE="$1"
-		;;
-	--caddy-volume)
-		shift
-		[ "$#" -gt 0 ] || die "--caddy-volume needs a value"
-		CADDY_VOLUME="$1"
 		;;
 	*) die "unexpected argument: $1 (see --help)" ;;
 	esac
@@ -132,11 +117,9 @@ cleanup() {
 		log_error "backup FAILED; no files kept, retention not run"
 	}
 }
-# EXIT alone would let a Ctrl-C during staging leave a half-written backup dir;
-# the signal traps mark the run failed and exit, so the EXIT handler removes it.
-trap cleanup EXIT
-trap 'failed=1; exit 130' INT
-trap 'failed=1; exit 143' TERM
+# register_cleanup covers INT/TERM as well as EXIT, so a Ctrl-C during staging
+# (failed is still 1) cannot leave a half-written backup dir behind.
+register_cleanup cleanup
 
 log_info "dumping database '$DB_NAME' as '$DB_USER' from project '$RIFT_PROJECT'"
 rc_pg_dump "$DB_USER" "$DB_NAME" >"$STAGE/$DB_FILE"

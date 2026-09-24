@@ -66,25 +66,10 @@ while [ "$#" -gt 0 ]; do
 	--dry-run) DRY_RUN=true ;;
 	--database-only) DB_ONLY=true ;;
 	--certs-only) CERTS_ONLY=true ;;
-	--project)
+	--project | --compose-file | --postgres-service | --caddy-volume)
+		[ "$#" -gt 1 ] || die "$1 needs a value"
+		rc_stack_opt "$1" "$2"
 		shift
-		[ "$#" -gt 0 ] || die "--project needs a value"
-		RIFT_PROJECT="$1"
-		;;
-	--compose-file)
-		shift
-		[ "$#" -gt 0 ] || die "--compose-file needs a value"
-		COMPOSE_FILES+=("$1")
-		;;
-	--postgres-service)
-		shift
-		[ "$#" -gt 0 ] || die "--postgres-service needs a value"
-		RIFT_PG_SERVICE="$1"
-		;;
-	--caddy-volume)
-		shift
-		[ "$#" -gt 0 ] || die "--caddy-volume needs a value"
-		CADDY_VOLUME="$1"
 		;;
 	*) die "unexpected argument: $1 (see --help)" ;;
 	esac
@@ -160,7 +145,7 @@ if [ "$ASSUME_YES" != true ]; then
 	if [ -t 0 ]; then
 		printf 'This will OVERWRITE the live database and/or caddy volume of project "%s".\n' "$RIFT_PROJECT" >&2
 		printf 'Type "yes" to proceed: ' >&2
-		read -r reply
+		read -r reply || true
 		[ "$reply" = "yes" ] || die "aborted (no confirmation)"
 	else
 		die "refusing to run without --yes (restore is destructive and stdin is not a terminal)"
