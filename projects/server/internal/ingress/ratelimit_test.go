@@ -1,6 +1,7 @@
 package ingress
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -81,5 +82,61 @@ func TestRetryAfterSeconds(t *testing.T) {
 	}
 	if got := retryAfterSeconds(0.5); got != 2 {
 		t.Fatalf("retryAfter(0.5/s) = %d, want 2", got)
+	}
+}
+
+// Overflowing the bucket map must not reset every limit: a client that has
+// exhausted its bucket stays limited however many fresh keys arrive.
+func TestRateLimiterOverflowKeepsActiveBuckets(t *testing.T) {
+	now := time.Unix(0, 0)
+	rl := newRateLimiter()
+	rl.now = func() time.Time { return now }
+
+	// The victim tunnel's limit is exhausted: 1 req/s, burst 1.
+	if !rl.allow("victim", 1, 1) {
+		t.Fatal("first victim request refused")
+	}
+	if rl.allow("victim", 1, 1) {
+		t.Fatal("victim limit not in force before the flood")
+	}
+
+	// An attacker floods distinct keys past the cap, each one spending its
+	// only token so none of them is "full" and losslessly evictable.
+	for n := 0; n < rateLimiterCap+10; n++ {
+		now = now.Add(time.Microsecond)
+		rl.allow(fmt.Sprintf("flood-%d", n), 0.001, 1)
+		if n == rateLimiterCap/2 {
+			// Keep the victim recently used, as a limited client would be.
+			rl.allow("victim", 1, 1)
+		}
+	}
+	if len(rl.buckets) > rateLimiterCap {
+		t.Fatalf("bucket map grew to %d, cap is %d", len(rl.buckets), rateLimiterCap)
+	}
+	if rl.allow("victim", 1, 1) {
+		t.Fatal("the flood reset the victim's exhausted bucket")
+	}
+}
+
+// Buckets that have refilled completely are dropped first, since dropping them
+// changes nothing.
+func TestRateLimiterEvictsFullBucketsFirst(t *testing.T) {
+	now := time.Unix(0, 0)
+	rl := newRateLimiter()
+	rl.now = func() time.Time { return now }
+
+	rl.allow("limited", 0.001, 1) // spends its only token; refills in 1000s
+	// Fill the map exactly to the cap, so the next new key is what evicts.
+	for n := 0; n < rateLimiterCap-1; n++ {
+		rl.allow(fmt.Sprintf("idle-%d", n), 1000, 1) // refills within 1ms
+	}
+	now = now.Add(time.Second)
+	rl.allow("newcomer", 1, 1) // triggers eviction
+
+	if _, ok := rl.buckets["limited"]; !ok {
+		t.Fatal("an unrefilled bucket was evicted while full buckets remained")
+	}
+	if len(rl.buckets) > 2 {
+		t.Fatalf("full buckets were kept: %d remain", len(rl.buckets))
 	}
 }
