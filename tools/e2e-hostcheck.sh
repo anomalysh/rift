@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/common.sh"
 # shellcheck source=tools/lib/e2e-harness.sh
 . "$SCRIPT_DIR/lib/e2e-harness.sh"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$RIFT_REPO_ROOT"
 
 COMPOSE_FILE="$REPO_ROOT/deploy/docker-compose.hostcheck.yml"
 PROJECT="rift-hostcheck"

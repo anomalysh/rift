@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib/preflight.sh"
 # shellcheck source=tools/lib/e2e-harness.sh
 . "$SCRIPT_DIR/lib/e2e-harness.sh"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$RIFT_REPO_ROOT"
 
 COMPOSE_FILE="$REPO_ROOT/deploy/docker-compose.e2e.yml"
 PROJECT="rift-e2e"

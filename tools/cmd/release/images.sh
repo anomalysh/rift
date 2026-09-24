@@ -110,14 +110,8 @@ log_info "tag:      $tag"
 log_info "platform: ${platform:-<native>}"
 log_info "push:     $push"
 
-# run CMD...  — execute, or just print under --dry-run.
-run() {
-	if [ "$dry_run" = true ]; then
-		log_info "[dry-run] $*"
-	else
-		"$@"
-	fi
-}
+# The builds go through rift_run, which only prints them under --dry-run.
+export RIFT_DRY_RUN="$dry_run"
 
 # Warn once if a multi-platform build cannot be loaded locally (no --push).
 multi_platform_note_shown=false
@@ -160,7 +154,7 @@ build_image() {
 	cmd+=("$RIFT_REPO_ROOT")
 
 	log_info "building $ref"
-	run "${cmd[@]}"
+	rift_run "${cmd[@]}"
 }
 
 if [ "$push" != true ]; then
