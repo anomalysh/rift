@@ -198,13 +198,29 @@ re-registers the domain the next time it connects.
 ### `GET /healthz`
 
 Unauthenticated liveness probe. Returns `200 OK` with `{"status":"ok"}`. It is
-served on all three listeners (ingress, gateway, admin).
+served on all three listeners (ingress, gateway, admin). On the ingress listener
+it answers only on internal host names (see below); on a tunnel host `/healthz`
+belongs to the tunnelled app.
 
 ## Internal ingress endpoints
 
 These live on the **ingress** listener (`RIFT_INGRESS_ADDR`, default `:8080`),
 not the admin listener. They are called by Caddy and by peer nodes, never by an
 operator directly, but understanding them helps when debugging.
+
+They answer only when the request's `Host` is an **internal name**: an IP
+literal (`127.0.0.1:8080`), a single-label name (`riftd:8080`, `localhost`), or
+a domain that is not a registered custom domain. That is what Caddy's `ask` URL,
+the container health check, and peer nodes use. A `Host` that is a tunnel name —
+the base domain, anything under it, the gateway hostname, or a registered custom
+domain — always reaches the tunnel instead, so a tunnelled app can serve its own
+`/healthz` or `/readyz`, and nobody can probe `/internal/tls-ask` through Caddy to
+enumerate live subdomains. The one exception is the peer proxy, which keeps the
+visitor's `Host`: `/internal/proxy` carrying `X-Rift-Peer-Token` (with Redis
+enabled) is dispatched to the peer handler on any `Host` and authenticated there.
+
+The readiness probe is `GET /readyz` (`200` when Postgres is reachable, `503`
+otherwise), under the same internal-name rule.
 
 ### TLS-ask authorization
 

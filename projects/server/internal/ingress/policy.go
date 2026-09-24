@@ -50,7 +50,7 @@ func (c *policyCache) get(t core.Tunnel) (*policy.Compiled, error) {
 // basic-auth) before a request is proxied. It returns true to allow; on false it
 // has already written the response and the caller must return. It is invoked at
 // the top of both proxy() and proxyUpgrade(), which are the two paths reached
-// from handlePublic AND from the cross-node handleInternalProxy -- so a policy
+// from servePublic AND from the cross-node handleInternalProxy -- so a policy
 // covers a peer-forwarded request too, checked against the real client IP that
 // the edge resolved and carried across the hop in HeaderRiftClientIP.
 func (i *Ingress) enforce(w http.ResponseWriter, r *http.Request, sess core.Session, sub string) bool {

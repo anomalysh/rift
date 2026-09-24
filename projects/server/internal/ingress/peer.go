@@ -106,7 +106,7 @@ func (i *Ingress) doPeerForward(r *http.Request, nodeURL, sub string) (*http.Res
 	// The forwarding request is addressed to RouteInternalProxy, so the peer
 	// cannot recover the original path from its own URL -- it comes over in a
 	// header instead. The X-Forwarded-* / X-Real-IP headers describing the
-	// public client were already stamped at the edge (handlePublic ->
+	// public client were already stamped at the edge (servePublic ->
 	// annotateForwarded) and ride along in this clone, so the receiving node
 	// must not re-derive them from this internal hop.
 	outbound.Header = r.Header.Clone()

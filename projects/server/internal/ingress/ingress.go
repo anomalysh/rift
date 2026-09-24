@@ -116,14 +116,58 @@ func (i *Ingress) SetReadyCheck(fn ReadyFunc) { i.ready = fn }
 
 // Handler mounts the public routes plus the internal endpoints Caddy and peer
 // nodes use.
+//
+// The internal endpoints (health, readiness, tls-ask, peer proxy) answer only
+// on names that are not tunnel hosts: IP literals, single-label names such as
+// the `riftd` container name or localhost, and domains nobody registered.
+// Those are what Caddy's ask URL, container health checks and peer nodes
+// dial. A Host that resolves to a tunnel -- anything under the base domain,
+// the base domain and gateway hostname themselves, or a registered custom
+// domain -- always goes to the tunnel, for two reasons:
+//
+//   - a tunnelled app must be able to serve its own /healthz or /readyz,
+//     which a Host-blind mux would shadow on every tunnel
+//   - Caddy proxies every path on *.base, so a Host-blind tls-ask would let
+//     anyone on the internet probe which subdomains and custom domains are
+//     live or reserved
+//
+// The one exception is the peer hop, which keeps the visitor's Host on the
+// request: RouteInternalProxy carrying a peer token (with Redis enabled) goes
+// to handleInternalProxy whatever the Host, and is authenticated there.
 func (i *Ingress) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc(config.RouteHealth, i.handleHealth)
-	mux.HandleFunc(config.RouteReady, i.handleReady)
-	mux.HandleFunc(config.RouteTLSAsk, i.handleTLSAsk)
-	mux.HandleFunc(config.RouteInternalProxy, i.handleInternalProxy)
-	mux.HandleFunc("/", i.handlePublic)
-	return mux
+	internal := http.NewServeMux()
+	internal.HandleFunc(config.RouteHealth, i.handleHealth)
+	internal.HandleFunc(config.RouteReady, i.handleReady)
+	internal.HandleFunc(config.RouteTLSAsk, i.handleTLSAsk)
+	internal.HandleFunc(config.RouteInternalProxy, i.handleInternalProxy)
+	internal.HandleFunc("/", i.handleNotATunnel)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if i.isPeerHop(r) {
+			i.handleInternalProxy(w, r)
+			return
+		}
+		if t, public := i.resolveHost(r.Context(), r.Host); public {
+			i.servePublic(w, r, t)
+			return
+		}
+		internal.ServeHTTP(w, r)
+	})
+}
+
+// isPeerHop reports whether r claims to be a node-to-node forward. It is only
+// a routing decision; handleInternalProxy still authenticates the peer token.
+func (i *Ingress) isPeerHop(r *http.Request) bool {
+	return i.cfg.Redis.Enabled &&
+		r.URL.Path == config.RouteInternalProxy &&
+		r.Header.Get(config.HeaderRiftPeerToken) != ""
+}
+
+// handleNotATunnel answers a request to an internal name on a path that is not
+// an internal route.
+func (i *Ingress) handleNotATunnel(w http.ResponseWriter, r *http.Request) {
+	i.writeGatewayError(w, r, http.StatusNotFound, "not_a_tunnel",
+		"This host does not correspond to a tunnel.")
 }
 
 // handleHealth is liveness: the process is running and serving. It must never
@@ -334,9 +378,11 @@ type target struct {
 // the names Caddy's ask URL, health checks and operators use to reach this
 // process directly.
 //
-// A custom-domain lookup that fails is treated as public with no target, so a
-// database blip answers "not a tunnel" rather than exposing internal routes
-// on a name that may belong to a customer.
+// A custom-domain lookup that fails is treated as NOT public: a database blip
+// must not turn a liveness probe addressed to a dotted internal name into a
+// 404 that gets a healthy process restarted. Nothing is lost by it, since a
+// custom domain cannot be routed without that same lookup anyway, and the
+// internal routes reveal nothing while the store is unreachable.
 func (i *Ingress) resolveHost(ctx context.Context, rawHost string) (t target, public bool) {
 	host := normalizeHost(rawHost)
 	if host == "" || net.ParseIP(host) != nil || !strings.Contains(host, ".") {
@@ -360,7 +406,7 @@ func (i *Ingress) resolveHost(ctx context.Context, rawHost string) (t target, pu
 		return target{}, false
 	default:
 		i.logger.Error("custom domain lookup failed", slog.String("domain", host), slog.Any("error", err))
-		return target{}, true
+		return target{}, false
 	}
 }
 
@@ -384,13 +430,8 @@ func (i *Ingress) ownsHostname(domain string) bool {
 	return domain == strings.ToLower(i.cfg.Tunnel.BaseDomain)
 }
 
-// handlePublic routes a request from the public internet into a tunnel.
-func (i *Ingress) handlePublic(w http.ResponseWriter, r *http.Request) {
-	t, _ := i.resolveHost(r.Context(), r.Host)
-	i.servePublic(w, r, t)
-}
-
-// servePublic routes a request whose Host has been resolved to t.
+// servePublic routes a request from the public internet, whose Host has been
+// resolved to t, into a tunnel.
 func (i *Ingress) servePublic(w http.ResponseWriter, r *http.Request, t target) {
 	if t.sub == "" {
 		i.writeGatewayError(w, r, http.StatusNotFound, "not_a_tunnel",
@@ -585,7 +626,7 @@ func (i *Ingress) annotateForwarded(r *http.Request) {
 
 // proxy ships one request through the tunnel and streams the response back.
 func (i *Ingress) proxy(w http.ResponseWriter, r *http.Request, sess core.Session, sub string) {
-	// Visitor-access policy runs here (not only in handlePublic) so a
+	// Visitor-access policy runs here (not only in servePublic) so a
 	// peer-forwarded request, which reaches proxy via handleInternalProxy, is
 	// checked too.
 	if !i.enforce(w, r, sess, sub) {
