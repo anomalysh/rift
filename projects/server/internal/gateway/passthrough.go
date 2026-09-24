@@ -98,27 +98,13 @@ func (g *Gateway) handlePassthrough(ctx context.Context, conn net.Conn, p passth
 	pipeRaw(conn, buffered, tconn)
 }
 
-// pipeRaw streams bytes between a public connection and a tunnel stream until
-// either side closes, then tears both ends down so the other copy unblocks.
-// prefix, when set, is sent to the agent ahead of the client's own bytes: the
-// opening bytes a passthrough listener consumed while routing.
+// pipeRaw is core.Pipe for a raw public connection. prefix, when set, is sent
+// to the agent ahead of the client's own bytes: the opening bytes a
+// passthrough listener consumed while routing.
 func pipeRaw(client net.Conn, prefix []byte, tconn core.TunnelConn) {
 	var fromClient io.Reader = client
 	if len(prefix) > 0 {
 		fromClient = io.MultiReader(bytes.NewReader(prefix), client)
 	}
-	done := make(chan struct{}, 2)
-	go func() {
-		_, _ = io.Copy(tconn, fromClient)
-		_ = tconn.CloseWrite()
-		done <- struct{}{}
-	}()
-	go func() {
-		_, _ = io.Copy(client, tconn)
-		done <- struct{}{}
-	}()
-	<-done
-	_ = tconn.Close()
-	_ = client.Close()
-	<-done
+	core.Pipe(client, fromClient, tconn)
 }

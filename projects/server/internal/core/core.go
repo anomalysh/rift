@@ -130,14 +130,23 @@ type Tunnel struct {
 	Policy Policy
 }
 
+// The store ports below are implemented by the Postgres and in-memory
+// adapters, and internal/store/storetest pins them to the same behaviour: the
+// errors, orderings and edge cases documented here are the contract, not an
+// artifact of either backend.
+
 // TokenStore persists API tokens.
 type TokenStore interface {
 	// FindByHash returns the token whose TokenHash equals hash.
 	// Returns ErrNotFound when no such token exists.
 	FindByHash(ctx context.Context, hash string) (*Token, error)
+	// FindByID returns the token with id, or ErrNotFound.
 	FindByID(ctx context.Context, id string) (*Token, error)
+	// Create inserts t. A duplicate ID or TokenHash is ErrConflict.
 	Create(ctx context.Context, t *Token) error
+	// List returns every token, oldest first (by ID).
 	List(ctx context.Context) ([]Token, error)
+	// Revoke and TouchLastUsed return ErrNotFound for an unknown id.
 	Revoke(ctx context.Context, id string, at time.Time) error
 	TouchLastUsed(ctx context.Context, id string, at time.Time) error
 }
@@ -146,8 +155,12 @@ type TokenStore interface {
 type ReservationStore interface {
 	// Get returns the reservation for subdomain, or ErrNotFound.
 	Get(ctx context.Context, subdomain string) (*Reservation, error)
+	// Create inserts r. An already-reserved subdomain is ErrConflict and an
+	// unknown TokenID is ErrNotFound.
 	Create(ctx context.Context, r *Reservation) error
+	// List returns every reservation, by subdomain.
 	List(ctx context.Context) ([]Reservation, error)
+	// Delete removes the reservation, or returns ErrNotFound.
 	Delete(ctx context.Context, subdomain string) error
 }
 
@@ -167,7 +180,7 @@ type DomainStore interface {
 	// Lookup returns the mapping for a custom domain, or ErrNotFound. Callers
 	// must check that the tunnel on Subdomain belongs to TokenID before routing.
 	Lookup(ctx context.Context, domain string) (*CustomDomain, error)
-	// List returns every custom-domain mapping.
+	// List returns every custom-domain mapping, by domain.
 	List(ctx context.Context) ([]CustomDomain, error)
 	// Delete removes a mapping. Deleting an absent domain is not an error.
 	Delete(ctx context.Context, domain string) error
@@ -177,7 +190,8 @@ type DomainStore interface {
 // subdomains are occupied across all gateway nodes.
 type TunnelStore interface {
 	// Claim atomically inserts the tunnel, failing with ErrSubdomainTaken if
-	// the subdomain is already held by a different tunnel.
+	// the subdomain is already held by a different tunnel, and ErrConflict if
+	// a tunnel with the same ID already exists.
 	Claim(ctx context.Context, t *Tunnel) error
 	// Release removes the tunnel by ID. Releasing an already-released tunnel
 	// is not an error.

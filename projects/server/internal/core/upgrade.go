@@ -19,6 +19,34 @@ type TunnelConn interface {
 	CloseWrite() error
 }
 
+// Pipe relays bytes both ways between a public client connection and a tunnel
+// stream until either side ends, then closes both. fromClient is what is read
+// from the client: normally client itself, or a reader that first replays
+// bytes already consumed while routing (a peeked TLS ClientHello, an h2c
+// preface, a buffered upgrade request).
+//
+// When the client stops sending, the tunnel is only half-closed (CloseWrite),
+// so the local service can still finish its reply. Once either copy ends,
+// closing both ends unblocks the other copy, and Pipe returns after both have
+// stopped. Every raw path (tcp, tls, grpc, and HTTP upgrades) shares this one
+// loop so their shutdown semantics cannot drift apart.
+func Pipe(client io.WriteCloser, fromClient io.Reader, tconn TunnelConn) {
+	done := make(chan struct{}, 2)
+	go func() {
+		_, _ = io.Copy(tconn, fromClient)
+		_ = tconn.CloseWrite()
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(client, tconn)
+		done <- struct{}{}
+	}()
+	<-done
+	_ = tconn.Close()
+	_ = client.Close()
+	<-done
+}
+
 // RawOpener is an optional capability of a Session: opening a raw full-duplex
 // byte stream to the agent's local service, with no application handshake. It
 // backs tcp, tls, grpc and udp tunnels; the shared tls and grpc listeners use

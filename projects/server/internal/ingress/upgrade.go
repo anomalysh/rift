@@ -1,13 +1,11 @@
 package ingress
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"strings"
 
@@ -94,7 +92,7 @@ func (i *Ingress) proxyUpgrade(w http.ResponseWriter, r *http.Request, sess core
 	}
 
 	i.logger.Debug("connection upgraded through tunnel", slog.String("subdomain", sub))
-	pipeUpgrade(clientConn, brw.Reader, tconn)
+	core.Pipe(clientConn, brw.Reader, tconn)
 }
 
 // writeSwitchingProtocols renders the 101 status line and headers onto the
@@ -113,28 +111,4 @@ func writeSwitchingProtocols(w io.Writer, resp *http.Response) error {
 	b.WriteString("\r\n")
 	_, err := w.Write(b.Bytes())
 	return err
-}
-
-// pipeUpgrade streams bytes between the public client and the tunnel until
-// either side closes, then tears both ends down so the other copy unblocks.
-func pipeUpgrade(client net.Conn, clientRd *bufio.Reader, tconn core.TunnelConn) {
-	done := make(chan struct{}, 2)
-
-	// client -> local service
-	go func() {
-		_, _ = io.Copy(tconn, clientRd)
-		_ = tconn.CloseWrite()
-		done <- struct{}{}
-	}()
-	// local service -> client
-	go func() {
-		_, _ = io.Copy(client, tconn)
-		done <- struct{}{}
-	}()
-
-	<-done
-	// One direction ended; closing both ends unblocks the still-running copy.
-	_ = tconn.Close()
-	_ = client.Close()
-	<-done
 }

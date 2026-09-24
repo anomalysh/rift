@@ -1,15 +1,16 @@
 package core
 
 // Policy is the per-tunnel visitor-access policy an agent attaches at connect
-// time (carried in the Hello) and, durably, in the tunnels table. It is the one
+// time, carried in the Hello and held in memory on the live session for the
+// tunnel's lifetime (it is not persisted: a reconnect re-sends it). It is the one
 // object the ingress consults before serving a public request, and the gateway
 // consults over the tunnel's lifetime. Every field is optional; the zero Policy
 // enforces nothing (the historical behaviour), so it is safe on every tunnel.
 //
 // It lives in core, dependency-free, so the wire type (tunnelproto), the
-// enforcement (internal/policy), the gateway session, and the store all share
-// one definition rather than re-encoding the contract. JSON tags are the wire
-// and jsonb form; `omitempty` keeps an unset policy a `{}` on the wire.
+// enforcement (internal/policy) and the gateway session all share one
+// definition rather than re-encoding the contract. JSON tags are the wire
+// form; `omitempty` keeps an unset policy a `{}` on the wire.
 type Policy struct {
 	// BasicAuth: any matching credential admits the request (A2). The password
 	// is stored bcrypt-hashed by the agent; the plaintext never reaches riftd.
