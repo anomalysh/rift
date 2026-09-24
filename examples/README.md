@@ -21,6 +21,12 @@ Then, from another shell, tunnel the port with the rift CLI:
 rift http 3000 demo     # -> https://demo.<your-rift-domain>
 ```
 
+Both servers listen on `127.0.0.1` only, so the public reaches them through the
+tunnel (and any `--basic-auth` / `--allow-ip` policy you put on it) rather than
+directly over your LAN. Set `HOST=0.0.0.0` (and `PORT`) to change that. Request
+bodies are capped (64 KiB for `http-demo`, 1 MiB for `mcp-server`) and larger
+ones get `413`.
+
 The public endpoint is HTTPS even though the local server speaks plain HTTP —
 rift's edge terminates TLS. To tunnel a local server that itself speaks HTTPS,
 use `rift https <port>` instead.
