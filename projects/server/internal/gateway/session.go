@@ -86,11 +86,15 @@ type session struct {
 	// context expires.
 	out chan []byte
 
-	// closing is signalled to request teardown; closed is signalled once the
-	// socket is actually gone. Close returns without waiting for teardown, so
-	// it is safe to call from writeLoop's own error path.
+	// closing is signalled to request teardown. Close returns without waiting
+	// for teardown, so it is safe to call from writeLoop's own error path.
 	closing chan struct{}
-	closed  chan struct{}
+
+	// forced is cancelled when teardown gives up waiting for the close
+	// handshake; readLoop reads under it, so that drops the connection. See
+	// teardown.
+	forced     context.Context
+	forceClose context.CancelFunc
 
 	closeOnce    sync.Once
 	teardownOnce sync.Once
@@ -131,9 +135,9 @@ func newSession(conn *websocket.Conn, t core.Tunnel, cfg *config.Config, tunnels
 		tokens:  tokens,
 		out:     make(chan []byte, cfg.Tunnel.StreamBufferSize),
 		closing: make(chan struct{}),
-		closed:  make(chan struct{}),
 		streams: make(map[uint64]*stream),
 	}
+	s.forced, s.forceClose = context.WithCancel(context.Background())
 	s.lastSeenNanos.Store(time.Now().UnixNano())
 	s.bodyStallBudget = maxBodyStall
 	if q := cfg.Tunnel.HeartbeatTimeout / 4; q > 0 && q < s.bodyStallBudget {
@@ -243,10 +247,11 @@ func (s *session) teardown() {
 		select {
 		case <-closed:
 		case <-time.After(closeHandshakeGrace):
-			_ = s.conn.CloseNow()
+			// CloseNow would be a no-op here: once Close has begun,
+			// coder/websocket only waits for it. Cancelling the read loop's
+			// in-flight Read is what makes it drop the connection.
+			s.forceClose()
 		}
-
-		close(s.closed)
 	})
 }
 
@@ -355,8 +360,14 @@ func (s *session) readLoop(ctx context.Context) {
 		}
 	}()
 
+	// Reads also end when teardown forces the connection shut: cancelling the
+	// context of an in-flight Read makes coder/websocket close the socket.
+	readCtx, cancelRead := context.WithCancel(ctx)
+	defer cancelRead()
+	defer context.AfterFunc(s.forced, cancelRead)()
+
 	for {
-		typ, data, err := s.conn.Read(ctx)
+		typ, data, err := s.conn.Read(readCtx)
 		if err != nil {
 			s.logger.Debug("tunnel read ended", slog.Any("error", err))
 			_ = s.Close(string(tunnelproto.ShutdownServerShutdown))

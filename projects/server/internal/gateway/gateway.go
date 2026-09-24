@@ -44,8 +44,12 @@ type Gateway struct {
 	// are disabled.
 	udp *udpForwarder
 
-	mu       sync.Mutex
-	sessions map[*session]struct{}
+	// sessions maps every session serve is handling, displaced ones included
+	// (the registry holds only the current one per subdomain), to a channel
+	// untrack closes. shuttingDown is set once Shutdown begins.
+	mu           sync.Mutex
+	sessions     map[*session]chan struct{}
+	shuttingDown bool
 }
 
 // New builds a Gateway. It does not listen; mount Handler on a mux.
@@ -68,7 +72,7 @@ func New(
 		registry:     reg,
 		tcp:          newTCPForwarder(cfg, logger),
 		udp:          newUDPForwarder(cfg, logger),
-		sessions:     make(map[*session]struct{}),
+		sessions:     make(map[*session]chan struct{}),
 	}
 }
 
@@ -236,30 +240,55 @@ func (g *Gateway) cleanupSession(ctx context.Context, s *session) {
 	}
 }
 
+// track records a session serve is responsible for until untrack. A session
+// that arrives once Shutdown has begun is closed straight away, so it tells
+// its agent to reconnect elsewhere instead of outliving the shutdown.
 func (g *Gateway) track(s *session) {
 	g.mu.Lock()
-	g.sessions[s] = struct{}{}
+	g.sessions[s] = make(chan struct{})
+	closing := g.shuttingDown
 	g.mu.Unlock()
+	if closing {
+		_ = s.Close(string(tunnelproto.ShutdownServerShutdown))
+	}
 }
 
+// untrack is serve's last word on a session: its routing entry and tunnel row
+// are gone and its loops have exited.
 func (g *Gateway) untrack(s *session) {
 	g.mu.Lock()
-	delete(g.sessions, s)
+	if done, ok := g.sessions[s]; ok {
+		close(done)
+		delete(g.sessions, s)
+	}
 	g.mu.Unlock()
 }
 
 // Shutdown closes every live tunnel, telling agents the server is going away
-// so they reconnect rather than treat it as a fatal error.
-func (g *Gateway) Shutdown(context.Context) error {
+// so they reconnect rather than treat it as a fatal error, and waits until
+// each has been torn down or ctx ends. Waiting is what lets the shutdown
+// frame reach the agent and the tunnel row be released before the process
+// exits; otherwise the subdomain stays claimed until the reaper notices.
+func (g *Gateway) Shutdown(ctx context.Context) error {
 	g.mu.Lock()
+	g.shuttingDown = true
 	sessions := make([]*session, 0, len(g.sessions))
-	for s := range g.sessions {
+	waits := make([]chan struct{}, 0, len(g.sessions))
+	for s, done := range g.sessions {
 		sessions = append(sessions, s)
+		waits = append(waits, done)
 	}
 	g.mu.Unlock()
 
 	for _, s := range sessions {
 		_ = s.Close(string(tunnelproto.ShutdownServerShutdown))
+	}
+	for _, done := range waits {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return nil
 }
