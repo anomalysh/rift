@@ -368,3 +368,66 @@ func TestStreamCapPerSession(t *testing.T) {
 		t.Fatalf("OpenRaw after a stream ended: %v", err)
 	}
 }
+
+// When the agent's half of a raw stream ends first (RES_END) and the public
+// side then closes without half-closing, Close must end the gateway's half
+// with REQ_END: the agent holds its local connection until both halves end.
+// Nothing for the stream may follow Close, not even from a late Write or
+// CloseWrite racing it.
+func TestTunnelConnCloseEndsOpenWriteHalf(t *testing.T) {
+	s, a := newTestSession(t, testConfig(), core.Policy{}, nil)
+
+	tc, err := s.OpenRaw(context.Background())
+	if err != nil {
+		t.Fatalf("OpenRaw: %v", err)
+	}
+	id := a.expect(tunnelproto.FrameReqHead).StreamID
+	a.send(tunnelproto.FrameResBody, id, []byte("bye"))
+	a.send(tunnelproto.FrameResEnd, id, nil)
+	if got, err := io.ReadAll(tc); err != nil || string(got) != "bye" {
+		t.Fatalf("read = %q, %v; want %q", got, err, "bye")
+	}
+
+	if err := tc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if f := a.nextDataFrame(); f.StreamID != id || f.Type != tunnelproto.FrameReqEnd {
+		t.Fatalf("after Close the agent got %s on stream %d, want REQ_END on %d", f.Type, f.StreamID, id)
+	}
+
+	if _, err := tc.Write([]byte("late")); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("Write after Close: err = %v, want io.ErrClosedPipe", err)
+	}
+	if err := tc.CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite after Close: %v", err)
+	}
+	// A fresh stream's REQ_HEAD is queued behind anything the late calls sent.
+	if _, err := s.OpenRaw(context.Background()); err != nil {
+		t.Fatalf("second OpenRaw: %v", err)
+	}
+	if f := a.nextDataFrame(); f.StreamID == id {
+		t.Fatalf("the closed stream sent %s after Close", f.Type)
+	}
+}
+
+// A raw stream the public side already half-closed is not ended twice, and
+// one the agent never finished is reset rather than ended.
+func TestTunnelConnCloseAfterHalfClose(t *testing.T) {
+	s, a := newTestSession(t, testConfig(), core.Policy{}, nil)
+
+	tc, err := s.OpenRaw(context.Background())
+	if err != nil {
+		t.Fatalf("OpenRaw: %v", err)
+	}
+	id := a.expect(tunnelproto.FrameReqHead).StreamID
+	if err := tc.CloseWrite(); err != nil {
+		t.Fatalf("CloseWrite: %v", err)
+	}
+	if f := a.nextDataFrame(); f.StreamID != id || f.Type != tunnelproto.FrameReqEnd {
+		t.Fatalf("CloseWrite sent %s on stream %d, want REQ_END on %d", f.Type, f.StreamID, id)
+	}
+	_ = tc.Close()
+	if f := a.nextDataFrame(); f.StreamID != id || f.Type != tunnelproto.FrameReset {
+		t.Fatalf("Close of an unfinished stream sent %s on stream %d, want RESET on %d", f.Type, f.StreamID, id)
+	}
+}

@@ -233,6 +233,12 @@ func (c *tunnelConn) CloseWrite() error {
 
 // Close tears the stream down in both directions. It aborts the stream, forgets
 // it, and resets the agent if the service->client side was not fully drained.
+//
+// If that side did end cleanly but the client->service side was never
+// half-closed, Close sends the REQ_END itself: the agent holds its local
+// connection open until both halves end, and nothing else will ever end this
+// one. Either way no frame for the stream follows Close; a later Write fails
+// and a later CloseWrite is a no-op.
 func (c *tunnelConn) Close() error {
 	// Cancel before taking writeMu: a Write blocked in enqueue on a full send
 	// queue holds writeMu, and only this cancel can unblock it. Locking first
@@ -246,7 +252,14 @@ func (c *tunnelConn) Close() error {
 		return nil
 	}
 	c.closed = true
+	writeOpen := !c.writeClosed
+	c.writeClosed = true
 	c.writeMu.Unlock()
 
-	return c.rd.Close()
+	if c.rd.release() && writeOpen {
+		if frame, err := tunnelproto.Encode(tunnelproto.FrameReqEnd, c.id, nil); err == nil {
+			c.sess.trySend(frame)
+		}
+	}
+	return nil
 }

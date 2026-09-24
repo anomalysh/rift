@@ -186,6 +186,26 @@ func (a *fakeAgent) expect(typ tunnelproto.FrameType) tunnelproto.Frame {
 	}
 }
 
+// nextDataFrame returns the next frame that is not a CONTROL frame, so a test
+// can assert exactly what the gateway sent next on its streams.
+func (a *fakeAgent) nextDataFrame() tunnelproto.Frame {
+	a.t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case f, ok := <-a.frames:
+			if !ok {
+				a.t.Fatal("agent socket closed waiting for a data frame")
+			}
+			if f.Type != tunnelproto.FrameControl {
+				return f
+			}
+		case <-deadline:
+			a.t.Fatal("timed out waiting for a data frame")
+		}
+	}
+}
+
 // expectReset waits for a RESET on stream id.
 func (a *fakeAgent) expectReset(id uint64) {
 	a.t.Helper()

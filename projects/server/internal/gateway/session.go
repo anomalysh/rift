@@ -289,10 +289,15 @@ func (s *session) enqueue(ctx context.Context, frame []byte) error {
 // sendReset aborts a stream on the agent. Best effort: a dead session has
 // nothing to cancel.
 func (s *session) sendReset(id uint64, rs tunnelproto.StreamReset) {
-	frame, err := tunnelproto.EncodeJSONFrame(tunnelproto.FrameReset, id, rs)
-	if err != nil {
-		return
+	if frame, err := tunnelproto.EncodeJSONFrame(tunnelproto.FrameReset, id, rs); err == nil {
+		s.trySend(frame)
 	}
+}
+
+// trySend queues a frame that tidies up after a stream (a RESET, or a closing
+// REQ_END) without ever blocking: the caller is tearing down and must not wait
+// on a slow agent.
+func (s *session) trySend(frame []byte) {
 	select {
 	case s.out <- frame:
 	case <-s.closing:
