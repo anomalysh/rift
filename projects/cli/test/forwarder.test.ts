@@ -2,12 +2,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { gunzipSync, gzipSync } from "node:zlib";
 
 import { FrameType, MAX_STREAM_BUFFER_BYTES } from "../src/constants.ts";
-import {
-  buildUpstreamUrl,
-  type FrameSink,
-  RequestStream,
-} from "../src/forwarder.ts";
+import { buildUpstreamUrl, RequestStream } from "../src/forwarder.ts";
 import type { RequestHead, ResponseHead } from "../src/protocol.ts";
+import type { FrameSink } from "../src/stream.ts";
 
 /** A body long enough that gzip is meaningfully smaller than the plaintext. */
 const GZIP_PLAINTEXT = "the quick brown fox ".repeat(500);

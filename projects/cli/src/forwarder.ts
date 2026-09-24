@@ -3,69 +3,33 @@
 // response back as RES_HEAD / RES_BODY* / RES_END frames, or a RESET on error.
 
 import {
-  BACKPRESSURE_THRESHOLD_BYTES,
   DRAIN_POLL_INTERVAL_MS,
   FrameType,
   HOP_BY_HOP_HEADERS,
-  MAX_PAYLOAD_BYTES,
   MAX_STREAM_BUFFER_BYTES,
   ResetCode,
   type ResetCodeValue,
 } from "./constants.ts";
-import type { Logger } from "./logger.ts";
+import { errorMessage } from "./logger.ts";
 import {
   type HeaderMap,
   newHeaderMap,
   type RequestHead,
   type ResponseHead,
   requestTargetProblem,
-  type StreamReset,
 } from "./protocol.ts";
+import {
+  EMPTY_BYTES,
+  linkBackedUp,
+  payloadSlices,
+  type Stream,
+  type StreamDeps,
+  sendStreamEnd,
+  sendStreamReset,
+} from "./stream.ts";
 import type { SyntheticResponse, TrafficController } from "./traffic.ts";
 
-const EMPTY = new Uint8Array(0);
-
-/** Sink for outbound frames, implemented by the WebSocket client. */
-export interface FrameSink {
-  send(type: number, streamId: bigint, payload: Uint8Array): void;
-  sendJson(type: number, streamId: bigint, payload: unknown): void;
-  /** Bytes queued in the socket but not yet flushed to the network. */
-  bufferedAmount(): number;
-  isOpen(): boolean;
-}
-
-export interface ForwardTarget {
-  readonly host: string;
-  readonly port: number;
-  /** Dial the local upstream over TLS (an `https` tunnel). */
-  readonly tls?: boolean;
-  /** Skip certificate verification on that TLS dial (self-signed upstream). */
-  readonly insecure?: boolean;
-  /** SNI to present; defaults to the target host. */
-  readonly serverName?: string;
-}
-
-/**
- * The agent-side handler for one gateway stream. Both an ordinary HTTP exchange
- * (RequestStream) and an upgraded connection (UpgradeStream) implement it, so
- * the client demultiplexes REQ_BODY / REQ_END / RESET frames without caring
- * which kind a given stream is.
- */
-export interface Stream {
-  /** REQ_BODY: bytes from the public client. */
-  pushBody(chunk: Uint8Array): void;
-  /** REQ_END: the public client will send no more bytes. */
-  endBody(): void;
-  /** RESET (or local transport loss): abort the exchange with a reason code. */
-  reset(code: string): void;
-}
-
-export interface RequestStreamDeps {
-  readonly target: ForwardTarget;
-  readonly sink: FrameSink;
-  readonly logger: Logger;
-  /** Called exactly once when the stream is fully retired. */
-  readonly onDone: (streamId: bigint) => void;
+export interface RequestStreamDeps extends StreamDeps {
   /** Agent-side traffic policy (headers, CORS, mock, routing, breaker). */
   readonly traffic?: TrafficController;
 }
@@ -323,7 +287,7 @@ export class RequestStream implements Stream {
     } catch (err) {
       // An unforwardable head (see buildUpstreamUrl) or a header value the
       // Headers class rejects: fail this one stream, never the agent.
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       this.deps.logger.warn(
         `cannot forward stream ${this.streamId}: ${message}`,
       );
@@ -382,14 +346,14 @@ export class RequestStream implements Stream {
       this.headSent = true;
 
       await this.streamResponseBody(response);
-      if (!this.aborted && this.deps.sink.isOpen()) {
-        this.deps.sink.send(FrameType.RES_END, this.streamId, EMPTY);
+      if (!this.aborted) {
+        sendStreamEnd(this.deps.sink, this.streamId);
       }
     } catch (err) {
       if (this.aborted) {
         return;
       }
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       // Before RES_HEAD the local service was unreachable (ECONNREFUSED / DNS);
       // after it, the failure is mid-stream and internal to this exchange.
       if (!this.headSent) {
@@ -438,19 +402,12 @@ export class RequestStream implements Stream {
 
   /** Split a body chunk to MAX_PAYLOAD_BYTES frames, honouring backpressure. */
   private async sendChunked(data: Uint8Array): Promise<void> {
-    let offset = 0;
-    while (offset < data.length) {
+    for (const part of payloadSlices(data)) {
+      await this.waitForDrain();
       if (this.aborted || !this.deps.sink.isOpen()) {
         return;
       }
-      await this.waitForDrain();
-      const end = Math.min(offset + MAX_PAYLOAD_BYTES, data.length);
-      this.deps.sink.send(
-        FrameType.RES_BODY,
-        this.streamId,
-        data.subarray(offset, end),
-      );
-      offset = end;
+      this.deps.sink.send(FrameType.RES_BODY, this.streamId, part);
     }
   }
 
@@ -458,7 +415,7 @@ export class RequestStream implements Stream {
     while (
       !this.aborted &&
       this.deps.sink.isOpen() &&
-      this.deps.sink.bufferedAmount() > BACKPRESSURE_THRESHOLD_BYTES
+      linkBackedUp(this.deps.sink)
     ) {
       await sleep(DRAIN_POLL_INTERVAL_MS);
     }
@@ -479,18 +436,11 @@ export class RequestStream implements Stream {
     if (res.body.length > 0) {
       this.deps.sink.send(FrameType.RES_BODY, this.streamId, res.body);
     }
-    this.deps.sink.send(FrameType.RES_END, this.streamId, EMPTY);
+    this.deps.sink.send(FrameType.RES_END, this.streamId, EMPTY_BYTES);
   }
 
   private sendReset(code: ResetCodeValue, message: string): void {
-    if (!this.deps.sink.isOpen()) {
-      return;
-    }
-    const reset: StreamReset = { code };
-    if (message !== "") {
-      reset.message = message;
-    }
-    this.deps.sink.sendJson(FrameType.RESET, this.streamId, reset);
+    sendStreamReset(this.deps.sink, this.streamId, code, message);
   }
 
   /**

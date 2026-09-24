@@ -20,17 +20,14 @@
 
 import type { Socket } from "bun";
 import {
-  BACKPRESSURE_THRESHOLD_BYTES,
   DRAIN_POLL_INTERVAL_MS,
   FrameType,
-  MAX_PAYLOAD_BYTES,
   MAX_STREAM_BUFFER_BYTES,
   MAX_UPGRADE_HEAD_BYTES,
   ResetCode,
   type ResetCodeValue,
 } from "./constants.ts";
-import type { ForwardTarget, FrameSink, Stream } from "./forwarder.ts";
-import type { Logger } from "./logger.ts";
+import { errorMessage } from "./logger.ts";
 import {
   type HeaderMap,
   headerMapProblem,
@@ -38,23 +35,24 @@ import {
   type RequestHead,
   type ResponseHead,
   requestTargetProblem,
-  type StreamReset,
 } from "./protocol.ts";
+import {
+  concatBytes,
+  EMPTY_BYTES,
+  linkBackedUp,
+  payloadSlices,
+  type Stream,
+  type StreamDeps,
+  sendStreamEnd,
+  sendStreamReset,
+} from "./stream.ts";
 
-const EMPTY = new Uint8Array(0);
 const CRLF = "\r\n";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 /** Longest chunk-size or trailer line accepted in a chunked response. */
 const MAX_CHUNK_LINE_BYTES = 4096;
-
-export interface UpgradeStreamDeps {
-  readonly target: ForwardTarget;
-  readonly sink: FrameSink;
-  readonly logger: Logger;
-  readonly onDone: (streamId: bigint) => void;
-}
 
 /**
  * How the service->client bytes after the response head are framed.
@@ -78,7 +76,7 @@ export class UpgradeStream implements Stream {
   private headParsed = false;
   private headSent = false;
   private serviceEnded = false;
-  private headBuf: Uint8Array = EMPTY;
+  private headBuf: Uint8Array = EMPTY_BYTES;
   // Client->service bytes the socket has not accepted yet: everything that
   // arrived before the socket connected, then whatever a short write left over.
   private writeQueue: Uint8Array[] = [];
@@ -98,7 +96,7 @@ export class UpgradeStream implements Stream {
   constructor(
     private readonly streamId: bigint,
     private readonly head: RequestHead,
-    private readonly deps: UpgradeStreamDeps,
+    private readonly deps: StreamDeps,
   ) {
     this.raw = head.raw;
     if (!this.raw) {
@@ -110,12 +108,11 @@ export class UpgradeStream implements Stream {
         requestTargetProblem(head.method, head.path) ??
         headerMapProblem(head.headers);
       if (problem !== null) {
-        this.deps.logger.warn(
+        this.fail(
+          ResetCode.INTERNAL,
+          problem,
           `refusing upgrade stream ${streamId}: ${problem}`,
         );
-        this.sendReset(ResetCode.INTERNAL, problem);
-        this.aborted = true;
-        this.finish();
         return;
       }
     }
@@ -186,9 +183,7 @@ export class UpgradeStream implements Stream {
     if (this.aborted) {
       return;
     }
-    this.aborted = true;
-    this.terminateSocket();
-    this.finish();
+    this.teardown();
   }
 
   private onOpen(sock: Socket): void {
@@ -234,9 +229,11 @@ export class UpgradeStream implements Stream {
     this.writeQueue.push(rest);
     this.queuedBytes += rest.length;
     if (this.queuedBytes > MAX_STREAM_BUFFER_BYTES) {
-      this.abortLocal(
+      const message = `local service write backlog exceeded ${MAX_STREAM_BUFFER_BYTES} bytes`;
+      this.fail(
         ResetCode.PAYLOAD_TOO_LARGE,
-        `local service write backlog exceeded ${MAX_STREAM_BUFFER_BYTES} bytes`,
+        message,
+        `resetting stream ${this.streamId}: ${message}`,
       );
     }
   }
@@ -273,31 +270,29 @@ export class UpgradeStream implements Stream {
       this.onResponseBytes(data);
       return;
     }
-    this.headBuf = concat(this.headBuf, data);
+    this.headBuf = concatBytes(this.headBuf, data);
     for (;;) {
       const idx = indexOfHeaderEnd(this.headBuf);
       if (idx < 0) {
         if (this.headBuf.length > MAX_UPGRADE_HEAD_BYTES) {
-          this.deps.logger.warn(
+          this.fail(
+            ResetCode.INTERNAL,
+            "response header too large",
             `upgrade response header exceeded ${MAX_UPGRADE_HEAD_BYTES} bytes on stream ${this.streamId}`,
           );
-          this.sendReset(ResetCode.INTERNAL, "response header too large");
-          // Mark aborted before tearing the socket down so the terminate's own
-          // close/error callback does not fire a second, misleading RESET.
-          this.aborted = true;
-          this.terminateSocket();
-          this.finish();
         }
         return;
       }
       const headerBytes = this.headBuf.subarray(0, idx);
       const rest = this.headBuf.subarray(idx + 4);
-      this.headBuf = EMPTY;
-      const parsed = this.parseHead(headerBytes);
-      if (parsed === null) {
-        this.aborted = true;
-        this.terminateSocket();
-        this.finish();
+      this.headBuf = EMPTY_BYTES;
+      const parsed = parseResponseHead(headerBytes);
+      if (typeof parsed === "string") {
+        this.fail(
+          ResetCode.INTERNAL,
+          "malformed upstream status line",
+          `malformed upstream status line on stream ${this.streamId}: ${JSON.stringify(parsed)}`,
+        );
         return;
       }
       if (
@@ -349,13 +344,11 @@ export class UpgradeStream implements Stream {
     } else if (headers["content-length"] !== undefined) {
       const declared = headers["content-length"][0] ?? "";
       if (!/^\d+$/.test(declared.trim())) {
-        this.deps.logger.warn(
+        this.fail(
+          ResetCode.UPSTREAM_ERROR,
+          "invalid content-length",
           `invalid upstream Content-Length on stream ${this.streamId}: ${JSON.stringify(declared)}`,
         );
-        this.sendReset(ResetCode.UPSTREAM_ERROR, "invalid content-length");
-        this.aborted = true;
-        this.terminateSocket();
-        this.finish();
         return;
       }
       this.bodyRemaining = Number.parseInt(declared.trim(), 10);
@@ -392,14 +385,11 @@ export class UpgradeStream implements Stream {
         try {
           parts = dechunker.push(data);
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          this.deps.logger.warn(
-            `malformed chunked response on stream ${this.streamId}: ${message}`,
+          this.fail(
+            ResetCode.UPSTREAM_ERROR,
+            "malformed chunked body",
+            `malformed chunked response on stream ${this.streamId}: ${errorMessage(err)}`,
           );
-          this.sendReset(ResetCode.UPSTREAM_ERROR, "malformed chunked body");
-          this.aborted = true;
-          this.terminateSocket();
-          this.finish();
           return;
         }
         for (const part of parts) {
@@ -421,14 +411,9 @@ export class UpgradeStream implements Stream {
    * request on this tunnel opens its own stream and its own socket.
    */
   private completeResponse(): void {
-    if (this.deps.sink.isOpen()) {
-      this.deps.sink.send(FrameType.RES_END, this.streamId, EMPTY);
-    }
+    sendStreamEnd(this.deps.sink, this.streamId);
     this.serviceEnded = true;
-    // Nothing further is relayed; ignore the socket's own closing callbacks.
-    this.aborted = true;
-    this.terminateSocket();
-    this.finish();
+    this.teardown();
   }
 
   /** A delimited body (length/chunked) that has not been fully received yet. */
@@ -436,79 +421,69 @@ export class UpgradeStream implements Stream {
     return this.bodyMode === "length" || this.bodyMode === "chunked";
   }
 
-  /** The service sent FIN: no more service->client bytes, but we may still write. */
+  /**
+   * The service sent FIN, or the socket closed: no more service->client bytes
+   * (after a FIN we may still write). A response that is complete ends the
+   * stream; one cut short resets it.
+   */
   private onServiceEnd(): void {
     if (this.aborted || this.serviceEnded) {
       return;
     }
     this.serviceEnded = true;
     if (this.headSent && !this.bodyIncomplete()) {
-      if (this.deps.sink.isOpen()) {
-        this.deps.sink.send(FrameType.RES_END, this.streamId, EMPTY);
-      }
-    } else {
-      this.sendReset(
-        ResetCode.UPSTREAM_ERROR,
-        this.headSent
-          ? "upstream closed mid-response"
-          : "upstream closed before responding",
-      );
-      this.aborted = true;
-      this.terminateSocket();
-      this.finish();
+      sendStreamEnd(this.deps.sink, this.streamId);
+      return;
     }
+    const message = this.headSent
+      ? "upstream closed mid-response"
+      : "upstream closed before responding";
+    this.fail(
+      ResetCode.UPSTREAM_ERROR,
+      message,
+      `upgrade stream ${this.streamId}: ${message}`,
+    );
   }
 
   private onServiceClose(): void {
-    if (this.finished) {
-      return;
-    }
-    if (!this.serviceEnded && !this.aborted) {
-      // A close without an observed FIN still ends the response.
-      if (this.headSent && !this.bodyIncomplete()) {
-        if (this.deps.sink.isOpen()) {
-          this.deps.sink.send(FrameType.RES_END, this.streamId, EMPTY);
-        }
-      } else {
-        this.sendReset(
-          ResetCode.UPSTREAM_ERROR,
-          this.headSent
-            ? "upstream closed mid-response"
-            : "upstream closed before responding",
-        );
-      }
-    }
+    // A close without an observed FIN still ends the response.
+    this.onServiceEnd();
     this.finish();
   }
 
   private onError(err: unknown): void {
+    const message = errorMessage(err);
+    if (!this.headSent) {
+      this.fail(
+        ResetCode.UPSTREAM_ERROR,
+        message,
+        `upstream unreachable for upgrade stream ${this.streamId}: ${message}`,
+      );
+    } else {
+      this.fail(
+        ResetCode.INTERNAL,
+        message,
+        `upgrade stream ${this.streamId} failed mid-pipe: ${message}`,
+      );
+    }
+  }
+
+  /**
+   * Abort from this side: log why, tell the gateway, and drop the socket. A
+   * no-op once the stream is aborted, so the socket's own close/error callbacks
+   * after a teardown never send a second, misleading RESET.
+   */
+  private fail(code: ResetCodeValue, message: string, log: string): void {
     if (this.aborted || this.finished) {
       return;
     }
-    const message = err instanceof Error ? err.message : String(err);
-    if (!this.headSent) {
-      this.deps.logger.warn(
-        `upstream unreachable for upgrade stream ${this.streamId}: ${message}`,
-      );
-      this.sendReset(ResetCode.UPSTREAM_ERROR, message);
-    } else {
-      this.deps.logger.warn(
-        `upgrade stream ${this.streamId} failed mid-pipe: ${message}`,
-      );
-      this.sendReset(ResetCode.INTERNAL, message);
-    }
-    this.aborted = true;
-    this.terminateSocket();
-    this.finish();
+    this.deps.logger.warn(log);
+    this.sendReset(code, message);
+    this.teardown();
   }
 
-  /** Abort from this side, telling the gateway why. */
-  private abortLocal(code: ResetCodeValue, message: string): void {
-    if (this.aborted) {
-      return;
-    }
-    this.deps.logger.warn(`resetting stream ${this.streamId}: ${message}`);
-    this.sendReset(code, message);
+  /** Stop relaying, drop the local socket, and retire the stream. */
+  private teardown(): void {
     this.aborted = true;
     this.terminateSocket();
     this.finish();
@@ -538,54 +513,12 @@ export class UpgradeStream implements Stream {
     return encoder.encode(lines.join(CRLF) + CRLF + CRLF);
   }
 
-  /** Parse the status line + headers, or reset the stream and return null. */
-  private parseHead(headerBytes: Uint8Array): ResponseHead | null {
-    const lines = decoder.decode(headerBytes).split(CRLF);
-    const statusLine = lines[0] ?? "";
-    const match = /^HTTP\/\d(?:\.\d)?\s+(\d{3})/.exec(statusLine);
-    if (match === null) {
-      this.deps.logger.warn(
-        `malformed upstream status line on stream ${this.streamId}: ${JSON.stringify(statusLine)}`,
-      );
-      this.sendReset(ResetCode.INTERNAL, "malformed upstream status line");
-      return null;
-    }
-    const status = Number.parseInt(match[1] as string, 10);
-    const headers: HeaderMap = newHeaderMap();
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i];
-      if (line === undefined || line === "") {
-        continue;
-      }
-      const colon = line.indexOf(":");
-      if (colon < 0) {
-        continue;
-      }
-      const name = line.slice(0, colon).trim().toLowerCase();
-      const value = line.slice(colon + 1).trim();
-      const bucket = headers[name];
-      if (bucket === undefined) {
-        headers[name] = [value];
-      } else {
-        bucket.push(value);
-      }
-    }
-    return { status, headers };
-  }
-
   private sendBody(data: Uint8Array): void {
     if (this.aborted || !this.deps.sink.isOpen()) {
       return;
     }
-    let offset = 0;
-    while (offset < data.length) {
-      const end = Math.min(offset + MAX_PAYLOAD_BYTES, data.length);
-      this.deps.sink.send(
-        FrameType.RES_BODY,
-        this.streamId,
-        data.subarray(offset, end),
-      );
-      offset = end;
+    for (const part of payloadSlices(data)) {
+      this.deps.sink.send(FrameType.RES_BODY, this.streamId, part);
     }
     this.applyBackpressure();
   }
@@ -599,11 +532,7 @@ export class UpgradeStream implements Stream {
    */
   private applyBackpressure(): void {
     const sock = this.socket;
-    if (
-      this.readPaused ||
-      sock === null ||
-      this.deps.sink.bufferedAmount() <= BACKPRESSURE_THRESHOLD_BYTES
-    ) {
+    if (this.readPaused || sock === null || !linkBackedUp(this.deps.sink)) {
       return;
     }
     this.readPaused = true;
@@ -613,7 +542,7 @@ export class UpgradeStream implements Stream {
       if (this.aborted || this.finished || !this.deps.sink.isOpen()) {
         return;
       }
-      if (this.deps.sink.bufferedAmount() > BACKPRESSURE_THRESHOLD_BYTES) {
+      if (linkBackedUp(this.deps.sink)) {
         this.drainTimer = setTimeout(poll, DRAIN_POLL_INTERVAL_MS);
         return;
       }
@@ -654,14 +583,7 @@ export class UpgradeStream implements Stream {
   }
 
   private sendReset(code: ResetCodeValue, message: string): void {
-    if (!this.deps.sink.isOpen()) {
-      return;
-    }
-    const reset: StreamReset = { code };
-    if (message !== "") {
-      reset.message = message;
-    }
-    this.deps.sink.sendJson(FrameType.RESET, this.streamId, reset);
+    sendStreamReset(this.deps.sink, this.streamId, code, message);
   }
 
   private finish(): void {
@@ -755,18 +677,34 @@ export class ChunkedDecoder {
   }
 }
 
-/** Concatenate two byte buffers, avoiding a copy when one is empty. */
-function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
-  if (a.length === 0) {
-    return b;
+/**
+ * Parse a response status line + header block (without the final CRLFCRLF).
+ * Returns the offending status line as a string when it is malformed.
+ */
+function parseResponseHead(headerBytes: Uint8Array): ResponseHead | string {
+  const lines = decoder.decode(headerBytes).split(CRLF);
+  const statusLine = lines[0] ?? "";
+  const match = /^HTTP\/\d(?:\.\d)?\s+(\d{3})/.exec(statusLine);
+  if (match === null) {
+    return statusLine;
   }
-  if (b.length === 0) {
-    return a;
+  const status = Number.parseInt(match[1] as string, 10);
+  const headers: HeaderMap = newHeaderMap();
+  for (const line of lines.slice(1)) {
+    const colon = line.indexOf(":");
+    if (colon < 0) {
+      continue;
+    }
+    const name = line.slice(0, colon).trim().toLowerCase();
+    const value = line.slice(colon + 1).trim();
+    const bucket = headers[name];
+    if (bucket === undefined) {
+      headers[name] = [value];
+    } else {
+      bucket.push(value);
+    }
   }
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a, 0);
-  out.set(b, a.length);
-  return out;
+  return { status, headers };
 }
 
 /** Index of the CRLFCRLF that ends the HTTP header block, or -1 if not present. */

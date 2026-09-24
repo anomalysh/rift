@@ -24,6 +24,12 @@ export const MAX_PAYLOAD_BYTES = 1 << 20;
 /** Largest legal whole frame on the wire. */
 export const MAX_FRAME_BYTES = HEADER_SIZE + MAX_PAYLOAD_BYTES;
 
+/**
+ * Largest UDP payload carried over a udp tunnel, where each datagram travels as
+ * a 2-byte big-endian length prefix plus payload (matches the gateway's cap).
+ */
+export const MAX_DATAGRAM = 65507;
+
 // stream_id is a wire uint64. A JS `number` only holds integers up to 2^53-1,
 // so a large stream_id (the gateway allocates monotonically and the field is
 // 64-bit) cannot round-trip through `number` without silent loss. It is a

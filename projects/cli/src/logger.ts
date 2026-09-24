@@ -58,6 +58,11 @@ export function isLogLevel(v: string): v is LogLevel {
   return LOG_LEVELS.some((level) => level === v);
 }
 
+/** The one-line description of a caught value, for a log line or an error. */
+export function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function format(level: LogLevel, message: string, rest: unknown[]): string {
   const ts = new Date().toISOString();
   const tag = level.toUpperCase().padEnd(5);

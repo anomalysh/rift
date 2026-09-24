@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
 
 import { FrameType, MAX_STREAM_BUFFER_BYTES } from "../src/constants.ts";
-import type { FrameSink } from "../src/forwarder.ts";
 import type { RequestHead, ResponseHead } from "../src/protocol.ts";
+import type { FrameSink } from "../src/stream.ts";
 import { ChunkedDecoder, UpgradeStream } from "../src/upgrade.ts";
 
 // A minimal raw-TCP upstream: it reads the HTTP upgrade request, answers 101,

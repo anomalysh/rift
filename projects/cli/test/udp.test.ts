@@ -1,13 +1,8 @@
 import { describe, expect, test } from "bun:test";
 
-import { FrameType } from "../src/constants.ts";
-import type { FrameSink } from "../src/forwarder.ts";
-import {
-  Deframer,
-  frameDatagram,
-  MAX_DATAGRAM,
-  UdpStream,
-} from "../src/udp.ts";
+import { FrameType, MAX_DATAGRAM } from "../src/constants.ts";
+import type { FrameSink } from "../src/stream.ts";
+import { Deframer, frameDatagram, UdpStream } from "../src/udp.ts";
 
 function bytes(...v: number[]): Uint8Array {
   return new Uint8Array(v);

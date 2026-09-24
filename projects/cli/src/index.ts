@@ -17,7 +17,12 @@ import {
 } from "./config.ts";
 import { EXIT, type SupportedProtocol, VERSION } from "./constants.ts";
 import { renderCompletion, renderManPage } from "./docgen.ts";
-import { createLogger, createNamedLogger, type Logger } from "./logger.ts";
+import {
+  createLogger,
+  createNamedLogger,
+  errorMessage,
+  type Logger,
+} from "./logger.ts";
 import { buildPolicy } from "./policy.ts";
 import { loadProjectConfig, selectTunnels, tunnelToArgv } from "./project.ts";
 import { buildTrafficPolicy, TrafficController } from "./traffic.ts";
@@ -194,7 +199,7 @@ async function main(): Promise<void> {
     logger.close?.();
     process.exit(signalExit ?? EXIT.OK);
   } catch (err) {
-    logger.error(err instanceof Error ? err.message : String(err));
+    logger.error(errorMessage(err));
     logger.close?.();
     process.exit(EXIT.ERROR);
   }
@@ -255,7 +260,7 @@ async function runStart(names: string[]): Promise<void> {
   const results = await Promise.allSettled(
     clients.map((c) =>
       c.client.run().catch((err: unknown) => {
-        c.logger.error(err instanceof Error ? err.message : String(err));
+        c.logger.error(errorMessage(err));
         throw err;
       }),
     ),

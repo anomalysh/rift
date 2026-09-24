@@ -6,20 +6,22 @@
 
 import type { udp } from "bun";
 import {
-  BACKPRESSURE_THRESHOLD_BYTES,
   FrameType,
+  MAX_DATAGRAM,
   MAX_STREAM_BUFFER_BYTES,
   ResetCode,
   type ResetCodeValue,
 } from "./constants.ts";
-import type { ForwardTarget, FrameSink, Stream } from "./forwarder.ts";
-import type { Logger } from "./logger.ts";
-import type { StreamReset } from "./protocol.ts";
-
-const EMPTY = new Uint8Array(0);
-
-/** Largest UDP payload carried over the tunnel (matches the gateway's cap). */
-export const MAX_DATAGRAM = 65507;
+import { errorMessage } from "./logger.ts";
+import {
+  concatBytes,
+  EMPTY_BYTES,
+  linkBackedUp,
+  type Stream,
+  type StreamDeps,
+  sendStreamEnd,
+  sendStreamReset,
+} from "./stream.ts";
 
 /** Frame one datagram as a 2-byte big-endian length prefix plus the payload. */
 export function frameDatagram(payload: Uint8Array): Uint8Array {
@@ -37,10 +39,10 @@ export function frameDatagram(payload: Uint8Array): Uint8Array {
  * length prefix over MAX_DATAGRAM so a corrupt stream cannot force a huge read.
  */
 export class Deframer {
-  private buf: Uint8Array = new Uint8Array(0);
+  private buf: Uint8Array = EMPTY_BYTES;
 
   push(chunk: Uint8Array): Uint8Array[] {
-    this.buf = concat(this.buf, chunk);
+    this.buf = concatBytes(this.buf, chunk);
     const out: Uint8Array[] = [];
     for (;;) {
       if (this.buf.length < 2) {
@@ -61,13 +63,6 @@ export class Deframer {
   }
 }
 
-export interface UdpStreamDeps {
-  readonly target: ForwardTarget;
-  readonly sink: FrameSink;
-  readonly logger: Logger;
-  readonly onDone: (streamId: bigint) => void;
-}
-
 /**
  * One UDP client flow on a stream_id. Construction opens a connected Bun UDP
  * socket to the local service; length-delimited datagrams are fed in via
@@ -86,7 +81,7 @@ export class UdpStream implements Stream {
 
   constructor(
     private readonly streamId: bigint,
-    private readonly deps: UdpStreamDeps,
+    private readonly deps: StreamDeps,
   ) {
     void this.connect();
   }
@@ -124,7 +119,7 @@ export class UdpStream implements Stream {
     try {
       datagrams = this.deframer.push(chunk);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = errorMessage(err);
       this.deps.logger.warn(
         `udp framing error on stream ${this.streamId}: ${message}`,
       );
@@ -190,7 +185,7 @@ export class UdpStream implements Stream {
     // A UDP socket cannot be paused, so while the gateway link is backed up the
     // reply is dropped -- the loss UDP applications already tolerate -- rather
     // than piling every datagram into the WebSocket send buffer.
-    if (this.deps.sink.bufferedAmount() > BACKPRESSURE_THRESHOLD_BYTES) {
+    if (linkBackedUp(this.deps.sink)) {
       if (this.droppedReplies === 0) {
         this.deps.logger.warn(
           `udp flow ${this.streamId}: gateway link backed up, dropping replies`,
@@ -206,7 +201,7 @@ export class UdpStream implements Stream {
     if (this.aborted || this.finished) {
       return;
     }
-    const message = err instanceof Error ? err.message : String(err);
+    const message = errorMessage(err);
     this.deps.logger.warn(`udp flow ${this.streamId} error: ${message}`);
     this.sendReset(ResetCode.UPSTREAM_ERROR, message);
     this.terminateSocket();
@@ -217,22 +212,13 @@ export class UdpStream implements Stream {
     if (this.finished) {
       return;
     }
-    if (this.deps.sink.isOpen()) {
-      this.deps.sink.send(FrameType.RES_END, this.streamId, EMPTY);
-    }
+    sendStreamEnd(this.deps.sink, this.streamId);
     this.terminateSocket();
     this.finish();
   }
 
   private sendReset(code: ResetCodeValue, message: string): void {
-    if (!this.deps.sink.isOpen()) {
-      return;
-    }
-    const reset: StreamReset = { code };
-    if (message !== "") {
-      reset.message = message;
-    }
-    this.deps.sink.sendJson(FrameType.RESET, this.streamId, reset);
+    sendStreamReset(this.deps.sink, this.streamId, code, message);
   }
 
   private terminateSocket(): void {
@@ -249,14 +235,4 @@ export class UdpStream implements Stream {
     this.finished = true;
     this.deps.onDone(this.streamId);
   }
-}
-
-function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
-  if (a.length === 0) {
-    return b;
-  }
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a, 0);
-  out.set(b, a.length);
-  return out;
 }

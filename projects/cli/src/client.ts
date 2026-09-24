@@ -29,8 +29,8 @@ import {
   type SupportedProtocol,
   VERSION,
 } from "./constants.ts";
-import { type FrameSink, RequestStream, type Stream } from "./forwarder.ts";
-import type { Logger } from "./logger.ts";
+import { RequestStream } from "./forwarder.ts";
+import { errorMessage, type Logger } from "./logger.ts";
 import type { WirePolicy } from "./policy.ts";
 import {
   asHelloError,
@@ -50,6 +50,7 @@ import {
   type Hello,
   isKnownFrameType,
 } from "./protocol.ts";
+import type { FrameSink, Stream } from "./stream.ts";
 import type { TrafficController } from "./traffic.ts";
 import { UdpStream } from "./udp.ts";
 import {
@@ -223,7 +224,7 @@ export class TunnelClient {
       // A malformed server URL fails synchronously; treat as fatal.
       this.fail(
         new ClientError(
-          `cannot connect to ${this.config.server}: ${err instanceof Error ? err.message : String(err)}`,
+          `cannot connect to ${this.config.server}: ${errorMessage(err)}`,
         ),
       );
       return;
@@ -306,9 +307,7 @@ export class TunnelClient {
     try {
       frame = decodeFrame(new Uint8Array(raw));
     } catch (err) {
-      this.logger.warn(
-        `dropping malformed frame: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      this.logger.warn(`dropping malformed frame: ${errorMessage(err)}`);
       return;
     }
     if (!isKnownFrameType(frame.type)) {
@@ -349,7 +348,7 @@ export class TunnelClient {
       envelope = decodeControl(payload);
     } catch (err) {
       this.logger.warn(
-        `dropping malformed control frame: ${err instanceof Error ? err.message : String(err)}`,
+        `dropping malformed control frame: ${errorMessage(err)}`,
       );
       return;
     }
@@ -518,7 +517,7 @@ export class TunnelClient {
       parsed = decodeJson(payload);
     } catch (err) {
       this.logger.warn(
-        `dropping REQ_HEAD with bad JSON on stream ${streamId}: ${err instanceof Error ? err.message : String(err)}`,
+        `dropping REQ_HEAD with bad JSON on stream ${streamId}: ${errorMessage(err)}`,
       );
       return;
     }
@@ -564,12 +563,7 @@ export class TunnelClient {
       // A udp tunnel carries each client flow as a raw stream of length-
       // delimited datagrams, relayed to a local UDP socket (P4).
       this.logger.debug(`REQ_HEAD udp flow ${streamId}`);
-      stream = new UdpStream(streamId, {
-        target: deps.target,
-        sink: deps.sink,
-        logger: deps.logger,
-        onDone: deps.onDone,
-      });
+      stream = new UdpStream(streamId, deps);
     } else if (head.raw) {
       this.logger.debug(`REQ_HEAD raw stream ${streamId}`);
       stream = new UpgradeStream(streamId, head, deps);

@@ -34,7 +34,7 @@ import {
   type LogLevel,
   XDG_CONFIG_FALLBACK,
 } from "./constants.ts";
-import { isLogLevel } from "./logger.ts";
+import { errorMessage, isLogLevel } from "./logger.ts";
 import { isRecord } from "./protocol.ts";
 
 /** Fully resolved, immutable runtime configuration. */
@@ -311,7 +311,7 @@ export function readTokenFile(path: string, warn: WarnFn = stderrWarn): string {
     text = readFileSync(path, "utf8");
   } catch (err) {
     throw new ConfigError(
-      `cannot read --token-file ${path}: ${err instanceof Error ? err.message : String(err)}`,
+      `cannot read --token-file ${path}: ${errorMessage(err)}`,
     );
   }
   const token = text.trim();
