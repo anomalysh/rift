@@ -21,11 +21,11 @@ services:
       # Pinned, not ${RIFT_ENV:-production}: a .env copied from .env.example
       # carries RIFT_ENV=development, which would silently skip every
       # production-only check (admin token strength, known dev defaults, ...).
+      # Pinned, riftd refuses to boot on the base file's publicly known
+      # development admin token, so an .env that forgot RIFT_ADMIN_TOKEN fails
+      # loudly instead of exposing the admin API with a public secret.
       RIFT_ENV: production
       RIFT_PUBLIC_SCHEME: ${RIFT_PUBLIC_SCHEME:-https}
-      # With RIFT_ENV pinned, riftd refuses to boot on the base file's publicly
-      # known development admin token, so an .env that forgot RIFT_ADMIN_TOKEN
-      # fails loudly instead of exposing the admin API with a public secret.
       # Behind Caddy, so trust the X-Forwarded-For it sets. Caddy replaces any
       # client-supplied X-Forwarded-For, so its value is the real visitor. Without
       # this riftd sees every visitor as Caddy's container IP: IP allow/deny rules
