@@ -52,7 +52,8 @@ var errTooManyStreams = fmt.Errorf("gateway: tunnel has too many concurrent stre
 var errInvalidResponseStatus = errors.New("gateway: agent sent an invalid response status")
 
 // hopByHopHeaders are connection-scoped and must not be forwarded through a
-// proxy (RFC 7230 section 6.1). Keys are canonical MIME header form.
+// proxy (RFC 9110 section 7.6.1). Keys are canonical MIME header form. See
+// hopByHopNames for the per-message additions.
 var hopByHopHeaders = []string{
 	"Connection",
 	"Keep-Alive",
@@ -736,8 +737,8 @@ func (s *session) rejectResponseHead(st *stream, rh tunnelproto.ResponseHead) er
 
 func (s *session) buildResponse(req *http.Request, st *stream, rh tunnelproto.ResponseHead) *http.Response {
 	header := responseHeader(rh)
-	for _, h := range hopByHopHeaders {
-		header.Del(h)
+	for name := range hopByHopNames(header) {
+		header.Del(name)
 	}
 
 	// A declared Content-Length lets net/http choose identity framing instead
@@ -844,19 +845,26 @@ func requestTarget(req *http.Request) string {
 // forwardableHeaders lowercases header names and drops hop-by-hop entries,
 // including any header named by the request's own Connection header.
 func forwardableHeaders(h http.Header) map[string][]string {
-	drop := make(map[string]struct{}, len(hopByHopHeaders))
+	return wireHeaders(h, hopByHopNames(h))
+}
+
+// hopByHopNames returns, in canonical form, every header in h that a proxy
+// must not forward: the fixed hop-by-hop set plus whatever h's own Connection
+// header names (RFC 9110 section 7.6.1). Requests and responses both go
+// through it, so neither direction leaks what the other strips.
+func hopByHopNames(h http.Header) map[string]struct{} {
+	names := make(map[string]struct{}, len(hopByHopHeaders))
 	for _, name := range hopByHopHeaders {
-		drop[name] = struct{}{}
+		names[name] = struct{}{}
 	}
-	// Connection lists further headers that are themselves hop-by-hop.
 	for _, v := range h.Values("Connection") {
 		for _, name := range strings.Split(v, ",") {
 			if name = strings.TrimSpace(name); name != "" {
-				drop[http.CanonicalHeaderKey(name)] = struct{}{}
+				names[http.CanonicalHeaderKey(name)] = struct{}{}
 			}
 		}
 	}
-	return wireHeaders(h, drop)
+	return names
 }
 
 // wireHeaders copies h into a RequestHead's header map: names lower-cased,
