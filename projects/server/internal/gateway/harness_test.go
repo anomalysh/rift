@@ -71,6 +71,13 @@ type fakeAgent struct {
 // WebSocket and returns it with the agent end.
 func newTestSession(t *testing.T, cfg *config.Config, pol core.Policy, tunnels core.TunnelStore) (*session, *fakeAgent) {
 	t.Helper()
+	return newTestSessionWithTokens(t, cfg, pol, tunnels, nil)
+}
+
+// newTestSessionWithTokens is newTestSession with a token store, for tests
+// that let the watchdog revalidate the token.
+func newTestSessionWithTokens(t *testing.T, cfg *config.Config, pol core.Policy, tunnels core.TunnelStore, tokens core.TokenStore) (*session, *fakeAgent) {
+	t.Helper()
 	if tunnels == nil {
 		tunnels = &countingTunnels{}
 	}
@@ -81,7 +88,7 @@ func newTestSession(t *testing.T, cfg *config.Config, pol core.Policy, tunnels c
 			return
 		}
 		conn.SetReadLimit(int64(tunnelproto.MaxFrameBytes))
-		s := newSession(conn, core.Tunnel{ID: "tun-1", Subdomain: "app", Policy: pol}, cfg, tunnels, nil, testLogger())
+		s := newSession(conn, core.Tunnel{ID: "tun-1", Subdomain: "app", Policy: pol}, cfg, tunnels, tokens, testLogger())
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		s.wg.Add(3)

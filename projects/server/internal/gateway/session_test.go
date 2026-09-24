@@ -212,10 +212,85 @@ func TestPingFloodIsNotPersistedPerPing(t *testing.T) {
 			t.Fatalf("control frame %d = %+v, %v; want a pong", i, env, err)
 		}
 	}
+	// The write runs off the read loop, so it may land after the pongs. Every
+	// ping has been through the throttle by now, though, so the count can only
+	// grow to 1.
+	deadline := time.Now().Add(5 * time.Second)
+	for tunnels.heartbeats.Load() == 0 && time.Now().Before(deadline) {
+		runtime.Gosched()
+	}
 	if n := tunnels.heartbeats.Load(); n != 1 {
 		t.Fatalf("persisted %d heartbeats for %d pings, want 1", n, pings)
 	}
 	assertOpen(t, s)
+}
+
+// blockingTunnels is a TunnelStore whose Heartbeat hangs until released or
+// its context ends, as a stuck database would.
+type blockingTunnels struct {
+	core.TunnelStore
+	release chan struct{}
+}
+
+func (b *blockingTunnels) Heartbeat(ctx context.Context, _ string, _ time.Time) error {
+	select {
+	case <-b.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// A hung tunnel store must not freeze the tunnel. The heartbeat write used
+// to run on the read loop with no deadline, so one stuck write stopped every
+// stream, and every pong, on the tunnel for as long as the store hung.
+func TestHungHeartbeatWriteDoesNotStallReadLoop(t *testing.T) {
+	tunnels := &blockingTunnels{release: make(chan struct{})}
+	defer close(tunnels.release)
+	s, a := newTestSession(t, testConfig(), core.Policy{}, tunnels)
+
+	a.ping() // persisted: the write hangs
+	a.expect(tunnelproto.FrameControl)
+	a.ping() // throttled: answered straight away
+	a.expect(tunnelproto.FrameControl)
+
+	id, res := startRoundTrip(t, s, a)
+	a.sendHead(id, http.StatusNoContent)
+	a.send(tunnelproto.FrameResEnd, id, nil)
+	r := awaitResult(t, res)
+	if r.err != nil {
+		t.Fatalf("RoundTrip behind a hung heartbeat write: %v", r.err)
+	}
+	_ = r.resp.Body.Close()
+	assertOpen(t, s)
+}
+
+// blockingTokens is a TokenStore whose FindByID hangs until its context ends.
+type blockingTokens struct{ core.TokenStore }
+
+func (blockingTokens) FindByID(ctx context.Context, _ string) (*core.Token, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// The watchdog enforces the heartbeat timeout and revalidates the token on
+// the same goroutine. A token lookup with no deadline against a hung store
+// used to suspend it for good, so a dead agent's tunnel was never closed.
+func TestHungTokenStoreDoesNotSuspendWatchdog(t *testing.T) {
+	cfg := testConfig()
+	cfg.Gateway.WriteTimeout = 100 * time.Millisecond
+	cfg.Tunnel.HeartbeatInterval = 20 * time.Millisecond
+	cfg.Tunnel.HeartbeatTimeout = 300 * time.Millisecond
+	cfg.Tunnel.TokenRevalidateInterval = time.Nanosecond // every tick
+	s, _ := newTestSessionWithTokens(t, cfg, core.Policy{}, nil, blockingTokens{})
+
+	// The agent never sends a frame.
+	select {
+	case <-s.closing:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a silent agent's tunnel was never closed")
+	}
+	assertClosedWith(t, s, tunnelproto.ShutdownHeartbeatTimeout)
 }
 
 // --once must also bound Upgrade requests; otherwise adding an Upgrade header

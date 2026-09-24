@@ -104,8 +104,9 @@ type session struct {
 
 	// lastHeartbeatPersist is when a ping last reached the tunnel store. Only
 	// the read loop touches it. See handleControl for why not every ping is
-	// persisted.
+	// persisted. heartbeatInFlight is set while persistHeartbeat's write runs.
 	lastHeartbeatPersist time.Time
+	heartbeatInFlight    atomic.Bool
 
 	// bodyStallBudget is how long deliverBody may block on one stream. See
 	// maxBodyStall.
@@ -510,17 +511,7 @@ func (s *session) handleControl(ctx context.Context, payload []byte) bool {
 		now := time.Now()
 		if now.Sub(s.lastHeartbeatPersist) >= s.cfg.Tunnel.HeartbeatInterval/2 {
 			s.lastHeartbeatPersist = now
-			// A reaped or taken-over tunnel is gone from the store. Learning
-			// that here is how a node discovers another node claimed its
-			// subdomain.
-			if err := s.tunnels.Heartbeat(ctx, s.tunnel.ID, now); err != nil {
-				if errors.Is(err, core.ErrNotFound) {
-					s.logger.Info("tunnel no longer registered; closing")
-					_ = s.Close(string(tunnelproto.ShutdownReplaced))
-					return false
-				}
-				s.logger.Error("heartbeat persistence failed", slog.Any("error", err))
-			}
+			s.persistHeartbeat(ctx, now)
 		}
 
 		frame, err := tunnelproto.EncodeControl(tunnelproto.ControlPong, tunnelproto.Heartbeat{TS: hb.TS})
@@ -536,6 +527,37 @@ func (s *session) handleControl(ctx context.Context, payload []byte) bool {
 		s.logger.Debug("ignoring unexpected control message", slog.String("type", string(env.Type)))
 	}
 	return true
+}
+
+// persistHeartbeat records the tunnel's liveness in the store, off the read
+// loop: that loop carries every stream on the tunnel, and a store that is
+// slow or hung must not freeze them all behind one write. At most one write
+// is in flight, and each is bounded by the gateway write timeout.
+//
+// A reaped or taken-over tunnel is gone from the store. Learning that here is
+// how a node discovers another node claimed its subdomain.
+func (s *session) persistHeartbeat(ctx context.Context, at time.Time) {
+	if !s.heartbeatInFlight.CompareAndSwap(false, true) {
+		return
+	}
+	// The read loop is still counted in wg, so this Add cannot race a Wait
+	// that has already seen zero.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer s.heartbeatInFlight.Store(false)
+
+		ctx, cancel := context.WithTimeout(ctx, s.cfg.Gateway.WriteTimeout)
+		defer cancel()
+		err := s.tunnels.Heartbeat(ctx, s.tunnel.ID, at)
+		switch {
+		case errors.Is(err, core.ErrNotFound):
+			s.logger.Info("tunnel no longer registered; closing")
+			_ = s.Close(string(tunnelproto.ShutdownReplaced))
+		case err != nil:
+			s.logger.Error("heartbeat persistence failed", slog.Any("error", err))
+		}
+	}()
 }
 
 // watchdog closes the session when heartbeats stop arriving, and periodically
@@ -585,7 +607,12 @@ func (s *session) watchdog(ctx context.Context) {
 // tokenRevoked reports whether the tunnel's token has been revoked, expired,
 // or deleted. A store failure is not treated as revocation: a database blip
 // must not disconnect every live tunnel at once.
+//
+// The lookup is bounded by the gateway write timeout: the watchdog also
+// enforces the heartbeat timeout, and a hung store must not suspend that.
 func (s *session) tokenRevoked(ctx context.Context) bool {
+	ctx, cancel := context.WithTimeout(ctx, s.cfg.Gateway.WriteTimeout)
+	defer cancel()
 	token, err := s.tokens.FindByID(ctx, s.tunnel.TokenID)
 	if errors.Is(err, core.ErrNotFound) {
 		return true
